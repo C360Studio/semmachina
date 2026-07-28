@@ -30,6 +30,7 @@ func roundTripCases() []roundTripCase {
 		// A complete turn must not carry a failure reason; the failed-turn
 		// manifest is covered separately in turnmanifest_test.go.
 		{name: "turn_manifest", payload: validTurnManifest(), exempt: []string{"FailureReason"}},
+		{name: "world_entity", payload: validWorldEntity()},
 	}
 }
 

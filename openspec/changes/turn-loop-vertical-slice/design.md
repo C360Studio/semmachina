@@ -354,6 +354,17 @@ distinct rules — `types.ValidateEntityID` for mapped IDs, `vocabulary.ParsePre
 every predicate in `entities.jsonl` — and must reject bad predicates at import time with a
 reason naming the offending line, rather than letting them fail later at materialization.
 
+### F12 — Verify against the pinned module cache, not the working checkout
+
+The semstreams working checkout at `~/Code/c360/semstreams` runs ahead of the pin — measured
+at 56 commits ahead of `v1.0.0-beta.158`, with uncommitted changes and a branch mid-archive.
+Line numbers already differ between the two for the same mechanism. Findings F1–F9 were read
+from the checkout and later spot-confirmed at the pinned tag in the module cache (predicate
+arity, batch partial-success, rule condition gating all identical), so they stand — but the
+method was wrong and would eventually produce a finding about code we do not compile. Verify
+behavior against `$(go env GOMODCACHE)/github.com/c360studio/semstreams@<pinned tag>`; read
+the checkout for ADRs, design intent, and upstream direction. `CLAUDE.md` corrected.
+
 ### F8 — Environment notes
 
 `input/websocket` and `output/websocket` both exist as separate components — bidirectional
@@ -378,5 +389,6 @@ eviction (`processor/graph-ingest/component.go:1128`), matching the project inva
   `ModifierPosition` lets the adjudicator express positioning a second time as a number —
   a verdict can double-penalize with nothing noticing. Mapping plausibility to a
   deterministic modifier would give the middle values real work and remove the double-count.
-- `world_ns` allocation format (slug rules, collision policy) — trivial single-instance,
-  worth one paragraph in the `world-loading` spec.
+- ~~`world_ns` allocation format~~ **CLOSED:** operator-assigned, validated as an entity-ID
+  segment, no collision detection. Instance-per-world makes collision an operator concern,
+  not an engine one; revisit if hosted multi-world lands.

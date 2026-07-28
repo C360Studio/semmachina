@@ -48,6 +48,11 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 			Description: "Append-only campaign-ledger manifest for one resolved turn",
 			Factory:     func() any { return &TurnManifest{} },
 		},
+		{
+			Domain: Domain, Category: CategoryWorldEntity, Version: SchemaVersion,
+			Description: "Materialized world entity from a template package (Graphable)",
+			Factory:     func() any { return &WorldEntity{} },
+		},
 	}
 
 	var errs []error

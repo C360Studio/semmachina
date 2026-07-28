@@ -120,6 +120,7 @@ func enumerations() map[string][]string {
 		"Status":           sets[vocabulary.KindStatus],
 		"Attribute":        sets[vocabulary.KindAttribute],
 		"Relation":         sets[vocabulary.KindRelation],
+		"EntityKind":       sets[vocabulary.KindEntityKind],
 		"TurnPhase":        sets[vocabulary.KindTurnPhase],
 		"ChannelAdapter":   sets[vocabulary.KindChannelAdapter],
 		"Mechanic":         sets[vocabulary.KindMechanic],

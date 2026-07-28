@@ -43,18 +43,28 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 
 ## 3. World loading
 
-- [ ] 3.1 Implement manifest v0 parse + validation (required fields, `engine_compat`
-      check) — failing tests first per world-loading spec "Manifest validation"; validate
-      every predicate in `entities.jsonl` with `vocabulary.ParsePredicate` at import time
-      (F9 — IDs allow `_`/uppercase, predicates do not; catch it here, not at write)
-- [ ] 3.2 Implement template-local → six-part ID mapping with `local:` reference rewrite,
-      dangling-reference detection, and ID limit validation; tests for deterministic
-      mapping and the two-worlds scenario
-- [ ] 3.3 Implement the importer materializing via Graphable → graph-ingest (never direct
-      writes); integration tests: import visible via graph query, re-import is a no-op
-- [ ] 3.4 Author the `fixtures/worlds/starter/` package: manifest, ~6–10 entities
-      (player character, one scene/location, 2–3 items, 1–2 NPC-shaped set pieces),
-      persona configs, rule pack stub — all vocabulary-valid
+- [x] 3.1 `internal/world`: manifest v0 with strict YAML (`KnownFields(true)`), all five
+      fields required, `engine_compat` as an explicit comparator grammar over semver
+      (no caret/tilde — the engine ships `v1.0.0-beta.N`, which sorts *below* `v1.0.0`, and
+      an author must be able to see that). F9 enforced as two ordered gates: upstream
+      `ParsePredicate` first, then vocabulary membership; every failure a `*LineError`
+      naming file and line
+- [x] 3.2 Two-pass `local_id` → six-part mapping so forward references resolve, `local:`
+      rewriting, dangling and self references rejected by name, every composed ID through
+      `types.ValidateEntityID`. Determinism proven by whole-`Plan` value equality, not
+      spot-checked IDs; two-worlds disjointness covered
+- [x] 3.3 Importer materializes Graphable → graph-ingest with no direct `ENTITY_STATES`
+      write anywhere (verified by review). Six integration tests against a **real** NATS
+      container and a real graph-ingest started through its production lifecycle, reading
+      back over the query surface. Missing Docker **fails** these tests — a skip-by-default
+      was built first and rejected because `go test` hides a passing package's output, so
+      "covered" and "never ran" were indistinguishable; `SEMMACHINA_SKIP_INTEGRATION=1` is
+      the loud opt-out
+- [x] 3.4 `fixtures/worlds/starter/`: 7 entities, 2 persona records, 1 rule stub, embedded
+      so a broken package fails the build rather than booting an empty world. Authoring it
+      exposed the gap it was meant to expose — the vocabulary could describe everything that
+      *happens* to a character and nothing about who they *are*, hence `world.entity.name`,
+      `.description`, `.kind`, `player.character.current`, and the `EntityKind` set
 
 ## 4. Dice component
 
@@ -113,11 +123,17 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 
 - [ ] 8.0 Register every SemMachina predicate upstream via `vocabulary.RegisterPredicate`
       at bootstrap — **rule conditions reject canonical-but-unregistered predicates
-      (F10), so the rule pack cannot load without this**. In the same pass mark the
-      fiction-bearing predicates (narration ref, entity description, verdict rationale)
-      `RuleOpaque`, which makes "no rule branches on prose" a load-time failure instead of
-      a review convention (M1 enforced structurally). Test: a rule branching on a
-      rule-opaque predicate fails validation
+      (F10), so the rule pack cannot load without this**. In the same pass mark `RuleOpaque`
+      exactly those predicates **whose object is fiction** — entity description, verdict
+      rationale, any predicate carrying prose inline. **`*.ref` predicates stay
+      rule-matchable**: a ref is a structural pointer, and turn sequencing requires a rule to
+      match on the narration ref landing to close the turn, so flagging it rule-opaque would
+      fail the pack at load. This makes "no rule branches on prose" a load-time failure
+      instead of a review convention (M1 enforced structurally). Note `RegisterPredicate`
+      writes a process-global map: one exported entry point, called before any rule config
+      loads in every binary and test, and registry-touching tests cannot be `t.Parallel()`.
+      Test: a rule branching on a rule-opaque predicate fails validation, and one matching a
+      `*.ref` predicate loads
 - [ ] 8.1 Author the turn-sequencing rule pack: accepted → adjudicator; roll-requiring
       verdict → dice; roll or no-roll verdict → applier; applied/rejected → narrator;
       narrated → complete + ledger. References only; caps on every LLM-triggering path
@@ -139,8 +155,14 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 ## 10. Composition, mock-LLM E2E, and gates
 
 - [ ] 10.1 Compose `cmd/semmachina`: flow config wiring importer, intake, rules, personas,
-      dice, applier, ledger, adapters; every payload package imported (registration
-      grep-check across `cmd/`)
+      dice, applier, ledger, adapters; `RegisterPayloads` called at every binary's bootstrap
+      (grep-check across `cmd/`). **Guard instantiation: import only when the world instance
+      does not already exist** — a boot-time import into a live campaign resets every
+      template-declared fact and drops play-created relationships, which is the exact
+      inverse of "a restart must not replay the dragon eating you". The campaign entity
+      carries a `{template_id}@{version}` marker the importer checks before publishing
+      (`Plan` already carries both). Boot-readiness must also exclude stubs via
+      `EntityState.IsStub()` (F11), or it reports a world loaded that is half-materialized
 - [ ] 10.2 Implement the mock model endpoint (HTTP stub honoring the model-endpoint
       contract, scripted by persona role + scenario fixture; re-derived, no semdragon
       imports)

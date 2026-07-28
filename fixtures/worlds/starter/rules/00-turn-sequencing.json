@@ -1,0 +1,17 @@
+{
+  "id": "starter_turn_accepted_to_adjudicating",
+  "type": "expression",
+  "name": "Accepted turn enters adjudication",
+  "description": "Rule-pack STUB for the starter world. It matches the one transition the world-loading slice can honestly assert exists: a turn entity written by intake in phase 'accepted'. The adjudicator action is deliberately absent because the persona loop, the dice component, and the effect applier are not built yet; task group 8 authors the real sequencing chain, with an iteration cap on every LLM-triggering path. Structural notes carried forward: the trigger is eq + on_enter rather than the transition operator, because a transition condition cannot fire on an entity's FIRST write and a turn entity is created directly in 'accepted' (design finding F3); the matched field is three-segment lower-kebab because the write gate rejects anything else (F2).",
+  "enabled": false,
+  "entity": {"pattern": "*.semmachina.*.*.turn.*"},
+  "conditions": [
+    {
+      "field": "turn.phase.current",
+      "operator": "eq",
+      "value": "accepted"
+    }
+  ],
+  "logic": "and",
+  "on_enter": []
+}

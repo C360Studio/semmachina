@@ -45,6 +45,24 @@ competing triples).
 - **WHEN** the same package version is imported again into the same world
 - **THEN** the resulting graph state is identical to the state after the first import
 
+### Requirement: Instantiation happens once, never implicitly on restart
+A world instance already materialized from a template SHALL NOT be re-imported implicitly,
+and no startup path SHALL import into an existing world instance. Convergence and
+destruction are the same mechanism: triples replace by (subject, predicate), and a
+multi-valued predicate replaces as a whole set, so re-importing a template into a living
+campaign resets every fact the template declares and drops relationships play has since
+created. Applying a template update to a live world is a separate, explicitly invoked path.
+
+#### Scenario: Restart does not re-import
+- **WHEN** the engine restarts against a world instance that was already materialized
+- **THEN** no import is performed, and every fact created by play since instantiation
+  survives intact
+
+#### Scenario: Re-import would not silently discard play
+- **WHEN** an import is invoked against a world namespace that already carries a
+  materialized template
+- **THEN** the import is refused rather than converging the world back to template state
+
 ### Requirement: Player binding is instance configuration
 The player entity and its played-character binding SHALL come from instance
 configuration, not from the template package. A template SHALL be instantiable into

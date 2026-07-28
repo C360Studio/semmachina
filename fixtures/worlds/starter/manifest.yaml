@@ -1,0 +1,10 @@
+id: starter
+name: The Gatehouse at Dusk
+version: 0.1.0
+# Prerelease precedence is deliberate: every v1.0.0-beta.N sorts BELOW v1.0.0,
+# so a ">=v1.0.0" lower bound would exclude the engine this world runs on.
+engine_compat: ">=v1.0.0-beta.150 <v2.0.0"
+description: >-
+  One scene. A courier with a message, a barred gate, a sentry who wants
+  a reason, and an apprentice who owes a favour. Enough world to prove a
+  turn resolves and nothing more.

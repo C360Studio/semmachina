@@ -33,6 +33,9 @@ const (
 	KindAttribute Kind = "attribute"
 	// KindRelation is the registered relationship predicate list.
 	KindRelation Kind = "relation"
+	// KindEntityKind is the declared type of a world entity, which doubles as
+	// the type segment of its six-part ID.
+	KindEntityKind Kind = "entity_kind"
 	// KindTurnPhase is the durable turn-phase vocabulary.
 	KindTurnPhase Kind = "turn_phase"
 	// KindChannelAdapter is the player-I/O adapter vocabulary.
@@ -115,6 +118,7 @@ var registeredEnums = []enumSet{
 	statusEnum,
 	attributeEnum,
 	relationEnum,
+	entityKindEnum,
 	turnPhaseEnum,
 	channelAdapterEnum,
 	mechanicEnum,

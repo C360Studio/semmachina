@@ -21,8 +21,12 @@ scoping anything non-trivial. **Project boundary:** `openspec/project.md`.
   Stream, 4-test heuristic), orchestration-check (rule vs component vs lifecycle vs persona
   boundary), new-payload (payload-registry checklist), query-pattern (GraphQL vs MCP vs NATS
   Direct). The `.claude/skills/` entries of the same names are thin adapters to them.
-- The framework source of truth is the semstreams checkout at `~/Code/c360/semstreams` — read it to
-  confirm a mechanism rather than asserting from memory.
+- The framework source of truth is semstreams **at the pinned version**, which lives in the module
+  cache (`$(go env GOMODCACHE)/github.com/c360studio/semstreams@$(pinned tag)`). Read it to confirm a
+  mechanism rather than asserting from memory. The working checkout at `~/Code/c360/semstreams` runs
+  *ahead* of the pin — it has been 56 commits ahead with uncommitted changes — so it is the right
+  place to read design intent, ADRs, and upstream direction, but the **wrong** place to verify what
+  the code we compile against actually does. Verify against the cache; cite the checkout for "why".
 
 ## Tech Stack
 

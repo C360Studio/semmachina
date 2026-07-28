@@ -102,6 +102,13 @@ func closedSets() []closedSet {
 			sampleBad: "owns",
 		},
 		{
+			kind:      vocabulary.KindEntityKind,
+			members:   strs(vocabulary.EntityKinds()),
+			parse:     asStringParser(vocabulary.ParseEntityKind),
+			nearMiss:  []string{"Character", "npc", "monster", "location", "place", "creature"},
+			sampleBad: "npc",
+		},
+		{
 			kind:      vocabulary.KindTurnPhase,
 			members:   strs(vocabulary.TurnPhases()),
 			parse:     asStringParser(vocabulary.ParseTurnPhase),

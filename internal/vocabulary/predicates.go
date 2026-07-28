@@ -78,6 +78,41 @@ const (
 	CampaignSeedValue Predicate = "campaign.seed.value"
 )
 
+// Descriptive world predicates. These are what a WORLD PACKAGE authors: they
+// carry starting state, not turn state, and the engine never writes them at
+// runtime.
+//
+// They exist because a world with no names is not a world. Authoring the
+// starter fixture is what surfaced them — the closed effect/turn vocabulary
+// could describe everything that HAPPENS to a character and nothing about who
+// the character IS, so the narrator had nothing to call anyone.
+const (
+	// WorldEntityName is the display name a persona uses in prose. Rule-opaque
+	// by intent: nothing may branch on it.
+	WorldEntityName Predicate = "world.entity.name"
+	// WorldEntityKind is the declared EntityKind. Rule-matchable, and equal by
+	// construction to the type segment of the entity's six-part ID.
+	WorldEntityKind Predicate = "world.entity.kind"
+	// WorldEntityDescription is bounded author-written flavor text the context
+	// assembler feeds personas. Rule-opaque, and bounded at import — bulky
+	// prose belongs in ObjectStore behind a ref, not in the graph's
+	// rule-matching surface.
+	WorldEntityDescription Predicate = "world.entity.description"
+)
+
+// Player-entity predicates. A player is a durable graph entity, never a
+// connection, so the binding between the human and the character they play is
+// a fact in the graph.
+const (
+	// PlayerCharacterCurrent is the single-valued played-character binding.
+	// Its object is a character entity ID.
+	//
+	// It is written from INSTANCE configuration, never from a template: a
+	// template that named its own player could be instantiated exactly once,
+	// which would make "worlds are data" false at the first campaign.
+	PlayerCharacterCurrent Predicate = "player.character.current"
+)
+
 // World predicates written by effect intents.
 const (
 	// CharacterStatusCurrent is the single-valued target of a set_status
@@ -138,6 +173,10 @@ var allPredicates = []Predicate{
 	TurnNarrationRef,
 	TurnFailureReason,
 	CampaignSeedValue,
+	WorldEntityName,
+	WorldEntityKind,
+	WorldEntityDescription,
+	PlayerCharacterCurrent,
 	CharacterStatusCurrent,
 	WorldLocationCurrent,
 	CharacterAttributeHealth,

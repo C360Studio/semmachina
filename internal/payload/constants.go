@@ -26,6 +26,10 @@ const (
 	CategoryEffectBatch = "effect_batch"
 	// CategoryTurnManifest is the append-only ledger record for one turn.
 	CategoryTurnManifest = "turn_manifest"
+	// CategoryWorldEntity is one materialized world entity from a template
+	// package. It is the Graphable the importer publishes so graph-ingest
+	// remains the sole ENTITY_STATES writer.
+	CategoryWorldEntity = "world_entity"
 )
 
 // Bounds on the untrusted identifiers that become entity-ID segments.
