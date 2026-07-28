@@ -56,16 +56,36 @@ already-advanced phase is a no-op.
 - **THEN** exactly one turn entity exists for its `action_id` and the second delivery is
   acknowledged without side effects
 
-#### Scenario: Duplicate stage trigger
-- **WHEN** a stage trigger fires twice for the same turn (redelivery or rule re-match)
-- **THEN** the stage executes at most once and the turn's artifacts are identical to a
-  single-delivery run
+#### Scenario: Duplicate stage trigger past the stage
+- **WHEN** a stage trigger fires for a turn whose phase has already moved past that stage
+- **THEN** the trigger is a no-op: no write occurs and no artifact changes
+
+#### Scenario: Duplicate stage trigger inside the stage
+- **WHEN** a stage trigger fires for a turn still in that stage's own phase, because the
+  previous attempt was interrupted
+- **THEN** the stage resumes and the turn ends carrying exactly one of each artifact, with
+  effects applied exactly once — this comes from idempotency (seeded dice, `turn_id`-derived
+  batch identity, replace-writes), not from suppressing the second execution. A
+  deterministic stage re-executes byte-identically; a **persona** stage re-executes and its
+  interrupted attempt is replaced by a single completed one, at the cost of one re-billed
+  call. Replace-writes converge on *one* value, not on the *same* value, so a resumed
+  persona stage does not promise the output the interrupted attempt would have produced
+
+#### Scenario: A skipped stage is an error, not a decline
+- **WHEN** a trigger would advance a turn past a stage that never ran
+- **THEN** the transition is refused as illegal rather than silently declined, because a
+  stale trigger and a wiring bug are otherwise indistinguishable — while the turn is still
+  running; a terminal turn declines every trigger, including a skipping one
 
 ### Requirement: Crash recovery resumes from recorded phase
 After a process crash at any point in a turn, restart SHALL resume the turn from its
 recorded phase: completed stages SHALL NOT re-run, the in-flight stage SHALL run to
-completion (or the turn SHALL fail explicitly), and the final world state, roll count, and
-ledger content SHALL be identical to an uninterrupted run.
+completion (or the turn SHALL fail explicitly), and the turn SHALL resolve exactly once —
+one roll at most, effects applied exactly once, one ledger manifest. Where the interrupted
+stage was deterministic, the result SHALL be identical to an uninterrupted run; where it was
+a persona, the result SHALL be a single coherent outcome rather than the outcome the
+interrupted attempt would have produced, since a re-executed persona supplies different
+modifiers and can therefore shift the total and the band even on identical dice.
 
 #### Scenario: Crash between roll and effect application
 - **WHEN** the process crashes after the roll-result triple lands but before effects are

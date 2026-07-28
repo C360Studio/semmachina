@@ -137,15 +137,30 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 
 ## 6. Turn intake and phase management
 
-- [ ] 6.1 Implement the intake consumer: durable consumer on the player-action stream,
-      turn entity creation in `accepted`, ack-after-durable-accept; duplicate-delivery
-      test (one turn, second delivery no-op)
-- [ ] 6.2 Implement phase transitions as replace-writes on `turn.phase.current` with stage
-      guards, via the entity merge lane — **the triple-add lanes append (F14)**, so a
-      duplicate trigger through them leaves two phases and no error; tests: single-valued
-      phase proven against the real graph, duplicate stage trigger no-op
-- [ ] 6.3 Implement explicit `failed` transitions (validation rejection, cap exhaustion)
-      with recorded reasons retrievable from the turn entity. The reason on the graph MUST
+- [x] 6.1 `internal/turn`: durable consumer on `PLAYER_ACTIONS`, `Handle`'s return value
+      *is* the ack decision — nil only after the turn entity exists. Accept uses the atomic
+      `entity.create`, so the winning path has no read and therefore no read-then-write race
+      to lose; `ErrEntityExists` reads back the phase and no-ops without resetting a turn
+      already in flight. `MaxDeliver: 0` so a transport blip never drops a player's move,
+      which is safe because a structurally-invalid action is terminated rather than nak'd
+      forever — other deterministic-permanent classes deliberately nak-forever instead,
+      preserving a recoverable action where terminating would destroy it. Proven against
+      real infrastructure, including that a restart **rebinding the same durable consumer**
+      does not redeliver an acknowledged action
+- [x] 6.2 Phase FSM is **data** in `internal/vocabulary/phases.go` (predecessor table +
+      rank) so 8.1's rule pack can author matching `transition` `from` sets from the same
+      source. `Advance` gives three answers rather than two: advanced, resumed (already in
+      the target phase — no write), declined (moved past — no write); a hop that *skips* a
+      stage is an error, since a stale trigger and a wiring bug are otherwise
+      indistinguishable. Merge-lane writes, with a negative control proving the append lane
+      leaves two phases. The shared projection was **extended** with an explicit ref-less
+      mode rather than relaxed — "may have a ref" would make a forgotten ref
+      indistinguishable from a deliberate absence — and now asserts
+      `RequireTurnEntityID` at the shared gate, so all four payloads inherit the pairing
+- [x] 6.3 `Fail` writes phase and closed reason in **one merge** — two writes would leave a
+      failed turn nobody can explain — with detail riding as a ref. `FailureReasonFor`'s
+      unclassified branch is pinned by an integration test asserting a turn-record anomaly
+      does not burn the player's turn. Original requirement: the reason on the graph MUST
       be a **closed reason code** from `internal/vocabulary` plus a ref to any detail — the
       shared triple projection gates object *shape* (scalar, bounded length), not closure,
       so an applier- or persona-authored sentence would pass every gate and land free text
@@ -154,12 +169,33 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 
 ## 7. Personas and context assembly
 
+- [ ] 7.0 Land the ObjectStore seam and `turn.action.ref` — **before the action is acked,
+      not after**. The text is fiction (M1) and exceeds the triple object budget, so it can
+      only reach the graph as a ref, and group 6 had no store. Until this lands, a crash in
+      `accepted` leaves a turn the rule pack can re-trigger and the adjudicator cannot
+      re-prompt: "ack only after the turn durably exists" is true of the paperwork and false
+      of the player's words. Four requirements: (a) store the **whole canonical
+      `PlayerAction`**, not just the text — `Channel.ReplyTo` is what 9.2's egress resolves
+      the delivery target from and `ArrivedAt` is what deadline evaluation must use per
+      project policy, and both currently die at the ack; (b) the ref rides **in the atomic
+      create**, not a follow-up write, or it reopens the exact crash window this task
+      closes; (c) derive the object key from `turn_id` so a redelivery re-puts identically;
+      (d) write the object **before** the create (prose-first-ref-last — a ref to missing
+      prose is a correctness bug, an orphan is only garbage). Same store backs the failure
+      detail ref: until it exists, effect-application's "record the failed target" is not
+      satisfiable
 - [ ] 7.1 Implement the context assembler component: fixed scene-scoped query (scene +
       members + 1-hop) executed at persona run time; test that post-submission state
       changes are reflected (execution-time reads). Filter stub entities via
       `EntityState.IsStub()` (F11) — a referenced-but-undelivered entity is queryable with
       no facts, and handing one to a persona is a silent context hole
-- [ ] 7.2 Configure the adjudicator loop (mid model slot per F5) + terminal tool enforcing
+- [ ] 7.2 Before re-running a persona on a resumed stage, check whether that stage's
+      artifact ref triple is already on the turn — present means the interrupted attempt
+      actually finished, so advance instead of re-executing. The phase is written on stage
+      *entry*, so it cannot distinguish "entered" from "finished"; the artifact ref can.
+      This turns the re-billed call the resume path currently costs into a no-op, with no
+      CAS required. Then: configure the adjudicator loop (mid model slot per F5) + terminal
+      tool enforcing
       the banded verdict schema and closed classes **in the executor**, not via provider
       strict-mode (F4); emit only rule-matchable scalar triples and carry banded intents by
       reference (F6); rejection test for out-of-vocabulary exit; `MaxIterations` cap with

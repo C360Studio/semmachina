@@ -391,6 +391,19 @@ entity's relation set (NPC cognition, stage 9, is the obvious arrival). **This i
 ask, not a local retry loop** (M6): the fix is exposing the read revision on the query
 response so an RMW caller can close the loop with the CAS the mutation side already offers.
 
+The asymmetry is the whole argument for the ask: **`MutationResponse.KVRevision` is
+returned after every write, while the read path discards the revision it already loaded.**
+The write side exposes exactly what the read side withholds, so CAS is unreachable only
+because of where the value stops.
+
+The same gap makes the turn's phase guard **convergent rather than mutually exclusive** —
+`Advance` reads a phase then writes one, and two writers reading the same phase both pass.
+Nothing here works around that either; upstream has the identical shape in
+`processor/gated-dag/claim.go`, which documents "mutual exclusion comes from single-flight
+execution, not from this write" and marks a CAS-UPGRADE POINT. We follow that precedent and
+mark ours the same way. It holds while the slice is single-player and single-flight, and it
+is the second thing that closes when the read revision is exposed.
+
 ### F14 — The triple-add lane APPENDS; only the entity lane replaces (corrects F7)
 
 F7 established that `graph.mutation.triple.add_batch` is atomic per entity and surfaces
