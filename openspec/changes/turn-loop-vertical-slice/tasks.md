@@ -97,7 +97,9 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 
 - [ ] 7.1 Implement the context assembler component: fixed scene-scoped query (scene +
       members + 1-hop) executed at persona run time; test that post-submission state
-      changes are reflected (execution-time reads)
+      changes are reflected (execution-time reads). Filter stub entities via
+      `EntityState.IsStub()` (F11) — a referenced-but-undelivered entity is queryable with
+      no facts, and handing one to a persona is a silent context hole
 - [ ] 7.2 Configure the adjudicator loop (mid model slot per F5) + terminal tool enforcing
       the banded verdict schema and closed classes **in the executor**, not via provider
       strict-mode (F4); emit only rule-matchable scalar triples and carry banded intents by
@@ -109,6 +111,13 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 
 ## 8. Rule pack and ledger
 
+- [ ] 8.0 Register every SemMachina predicate upstream via `vocabulary.RegisterPredicate`
+      at bootstrap — **rule conditions reject canonical-but-unregistered predicates
+      (F10), so the rule pack cannot load without this**. In the same pass mark the
+      fiction-bearing predicates (narration ref, entity description, verdict rationale)
+      `RuleOpaque`, which makes "no rule branches on prose" a load-time failure instead of
+      a review convention (M1 enforced structurally). Test: a rule branching on a
+      rule-opaque predicate fails validation
 - [ ] 8.1 Author the turn-sequencing rule pack: accepted → adjudicator; roll-requiring
       verdict → dice; roll or no-roll verdict → applier; applied/rejected → narrator;
       narrated → complete + ledger. References only; caps on every LLM-triggering path

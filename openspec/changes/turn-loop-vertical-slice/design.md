@@ -305,6 +305,42 @@ sharpest bug magnet in the slice; (b) recovery is idempotent re-application keye
 `turn_id` under replace semantics, which D2 already specifies. Substrate-level multi-entity
 atomicity would be an upstream ask; D5 does not need it and none is filed.
 
+### F10 — Rule conditions need predicate *registration*, not just canonical form (amends F1)
+
+F1 established that rules can match arbitrary triple predicates. It missed a step: rule
+config validation calls `vocabulary.RequireDeclaredPredicate` on every condition field and
+action predicate (`processor/rule/config_validation.go:293,357`), which rejects a predicate
+that is canonical but absent from the upstream vocabulary registry. So `turn.phase.current`
+parses fine and still fails rule load. **The turn-sequencing rule pack will not load until
+every SemMachina predicate is registered via the exported `vocabulary.RegisterPredicate` at
+bootstrap.** This is not an upstream ask — the API is public and registration is ours to do
+— but it is a hard prerequisite for group 8, and it means the predicate constants in
+`internal/vocabulary` need a registration pass alongside them.
+
+The same `PredicateMetadata` carries a `RuleOpaque` flag, and rule validation rejects any
+rule whose condition field is flagged (`config_validation.go:214,298`). That is **M1
+enforced by the substrate rather than by discipline**: registering narration refs, entity
+descriptions, and verdict rationale as rule-opaque makes "no rule branches on fiction" a
+load-time failure instead of a code-review convention. Adopt it in group 8 with the
+registration pass — it is the cheapest structural win available to the fiction boundary.
+
+### F11 — Referenced entities exist as stubs before their own data lands
+
+graph-ingest creates a referenced entity as a **stub** — queryable, carrying only
+`core.identity.*` markers and none of its own facts — as soon as another entity references
+it. Discovered by a real-infrastructure re-import test, not by reasoning; a mocked
+graph-ingest would never have shown it. `EntityState.IsStub()` is the envelope-based
+discriminator (the marker triple persists after birth, so triple-counting is not a valid
+test). Consequence for the slice: **any readiness check that treats "the ID resolves" as
+"the entity is loaded" will read half-entities** — relevant to boot/world-ready checks in
+task 10.1 and to the context assembler in 7.1, which must not hand a persona a stub.
+
+Related, and a genuine sharp edge: re-import convergence and destructiveness are the same
+mechanism. `graph.MergeTriples` replaces by (subject, predicate), so re-importing a template
+into a *living* campaign resets every predicate the template declares — including
+relationships play has since changed. The no-op guarantee holds only for an unchanged world.
+A template-update policy is a separate decision, deliberately out of this slice.
+
 ### F9 — Entity IDs and predicates have different alphabets (trap for D8's importer)
 
 The two identity contracts are not the same shape, and the difference is invisible until a

@@ -62,3 +62,9 @@ condition or non-persona component SHALL parse, branch on, or transform it.
 - **THEN** every downstream trigger and component decision is a function of structured
   triples and payload fields, and the action's free text appears downstream only as an
   opaque stored reference
+
+#### Scenario: The boundary is enforced at rule load, not by convention
+- **WHEN** a rule declares a condition on a fiction-bearing predicate (narration reference,
+  entity description, verdict rationale), all of which are registered rule-opaque
+- **THEN** the rule fails validation and the pack does not load, so a rule that branches on
+  prose cannot reach production regardless of review
