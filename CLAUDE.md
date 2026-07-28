@@ -9,6 +9,21 @@ narration can be diffed against authoritative state.
 **Founding document:** `docs/proposals/fiction-first-rpg.md` — read it before
 scoping anything non-trivial. **Project boundary:** `openspec/project.md`.
 
+## Semantic Agent Routing
+
+- Nontrivial SemMachina implementation uses `semmachina-developer`.
+- Every nontrivial change is reviewed by `semmachina-reviewer` (read-only) before integration.
+- Generic Go agents are only an isolated idiom, concurrency, or runtime second pass; they do not
+  replace either role.
+- Canonical role contracts live in `.agents/contracts/`; the `.claude/agents/` entries are thin
+  adapters to them.
+- Canonical shared decision skills live in `.agents/skills/` — kv-or-stream (KV Watch vs JetStream
+  Stream, 4-test heuristic), orchestration-check (rule vs component vs lifecycle vs persona
+  boundary), new-payload (payload-registry checklist), query-pattern (GraphQL vs MCP vs NATS
+  Direct). The `.claude/skills/` entries of the same names are thin adapters to them.
+- The framework source of truth is the semstreams checkout at `~/Code/c360/semstreams` — read it to
+  confirm a mechanism rather than asserting from memory.
+
 ## Tech Stack
 
 - Go 1.26+ on SemStreams (`github.com/c360studio/semstreams`) — NATS JetStream
