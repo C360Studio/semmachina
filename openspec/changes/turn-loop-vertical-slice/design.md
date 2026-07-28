@@ -354,6 +354,43 @@ distinct rules — `types.ValidateEntityID` for mapped IDs, `vocabulary.ParsePre
 every predicate in `entities.jsonl` — and must reject bad predicates at import time with a
 reason naming the offending line, rather than letting them fail later at materialization.
 
+### F14 — The triple-add lane APPENDS; only the entity lane replaces (corrects F7)
+
+F7 established that `graph.mutation.triple.add_batch` is atomic per entity and surfaces
+`FailedSubjects`. It missed the more dangerous property: **that lane appends.**
+`Component.AddTriples` does `entity.Triples = append(entity.Triples, group...)`
+(`processor/graph-ingest/component.go`), while `graph.MergeTriples` — newer-wins replacement
+by (subject, predicate) — is used only on the entity merge path. Proven against a live
+broker, not inferred: writing the same roll triples twice through the add lane leaves **two
+`turn.roll.band` values on one turn**, with a success response, empty `FailedSubjects`, and
+no error anywhere.
+
+This is a correctness trap for every single-valued predicate in the slice, and two specs
+were written assuming the wrong lane:
+
+- **D1 / turn-sequencing** — "phase writes SHALL replace, never append". Through the add
+  lane a duplicate stage trigger yields a turn holding two phases and no error, which
+  defeats the phase predicate as an idempotency guard.
+- **D5 / effect-application** — "single-valued predicates replacing prior values". Through
+  the add lane a character accumulates health values instead of changing health.
+
+So: **single-valued writes go through the entity merge lane
+(`graph.mutation.entity.update_with_triples`), never `triple.add`/`triple.add_batch`.** The
+add lane remains correct for genuinely multi-valued accumulation, of which this slice has
+none. Note the merge lane replaces a multi-valued predicate as a whole set (gh#466), so a
+writer owning a multi-valued predicate must publish the complete set per write.
+
+**The merge lane is per-entity, and its multi-entity behavior is the same trap wearing a
+different hat.** `UpdateEntityWithTriplesResponse` carries no `FailedSubjects` — that field
+exists only on the batch add response — and graph-ingest splits any triple whose subject is
+not the request's entity off to `appendForeignEdges`, which calls `AddTriples` (**the
+appending lane**) and logs failure as a WARN without returning it. So a single merge request
+spanning two entities replaces on the first and appends on the second, silently. A
+multi-target write is therefore N merge calls, one per target, each with its own classified
+error — which also means a multi-entity effect batch is still not atomic, so F7's
+conclusion survives F14 by a different mechanism. `internal/graphio` refuses a foreign
+subject locally rather than trusting graph-ingest to route it.
+
 ### F13 — The instantiation gate is one atomic create, borrowed from KV config seeding
 
 semstreams already solves "seed declared state without clobbering live state":

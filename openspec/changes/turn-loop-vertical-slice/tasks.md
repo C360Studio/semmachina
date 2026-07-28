@@ -68,20 +68,37 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 
 ## 4. Dice component
 
-- [ ] 4.0 Create the campaign entity holding `campaign_seed`, generated once at world
-      instantiation, via atomic `graph.mutation.entity.create` — the same call is task
-      10.1's instantiation gate, so the seed holder and the boot sentinel are one entity
-- [ ] 4.1 Implement `2d6-pbta/v1` with seed = SHA-256(campaign_seed ‖ turn_id) → PCG;
-      tests: band boundaries (6/7/9/10), byte-identical re-execution, distinct turns roll
-      independently, no wall-clock/global-RNG usage. Key dice count, faces, and band
-      thresholds off the mechanic version (a `MechanicSpec` registry) rather than
-      package-level constants — today it is one member, but a recorded mechanic that
-      validation ignores would re-band a future `v2` record under `v1` rules
-- [ ] 4.2 Emit the roll-result triple with mechanic/RNG versions, dice, modifiers, total,
-      band; at-most-one-roll-per-turn guard test. Reuse `Verdict.Triples()`'s discipline
-      (validate → project only registered predicates → append one ref) rather than
-      hand-rolling it — extract a shared helper so `RollResult` and `EffectBatch` cannot
-      diverge from the one payload whose triple discipline is currently enforced
+- [x] 4.0 `internal/campaign`: fixed-width 32-byte seed from `crypto/rand` (fixed width is
+      load-bearing — it makes `campaign_seed ‖ turn_id` unambiguous, so no two pairs collide
+      by re-partitioning the same bytes), all-zero refused on both generate and parse since
+      that is what a *forgotten* generation leaves behind and rolls deterministically wrong.
+      `Gate.Claim` is F13's gate: one atomic create, `Fresh` on success, stored seed read
+      back on `ErrorCodeEntityExists`. Instance segment is constant so two boots cannot
+      claim different campaign IDs in one namespace. Proven against real infrastructure,
+      including 8 concurrent claims yielding exactly one `Fresh`, and a claim refusing a
+      campaign key occupied by a referential stub rather than reporting "already
+      instantiated" over a factless one (F11)
+- [x] 4.1 `internal/dice`: `MechanicSpec` registry keyed by mechanic version — the
+      package-level `BandForTotal`/thresholds and `DiceCount`/`DieFaces` are gone, and
+      `MechanicSpecFor` returns an error rather than a zero spec, because a zero spec bands
+      every total as a full success. Seed = SHA-256(seed ‖ turn_id) → fresh PCG per roll,
+      pinned against digests computed outside Go so a self-consistent-but-different
+      derivation is caught. **Determinism is proven structurally**: a source-parsing test
+      fails on any import of `time`/`math/rand`/`crypto/rand`/`os`, any package-level
+      `math/rand/v2` call, or a PCG-typed field — a construction-time-seeded generator is
+      caught by rolling a turn, rolling ten others, and rolling the first again
+- [x] 4.2 Shared triple projection extracted (`internal/payload/triples.go`): validate →
+      project only registered predicates → exactly one ref, rejecting unregistered
+      predicates, missing registered ones, duplicates, ref/scalar collisions, write-gate-
+      invalid predicates, and structurally any non-scalar object. `Verdict` and `RollResult`
+      both use it, and `EffectBatch` (5.2) inherits it — but **`turn.phase.current` (6.2)
+      cannot**, since the projection requires exactly one ref predicate and a phase write has
+      none; extend it there rather than hand-rolling a second, weaker path. `WorldEntity` is
+      the other documented exception (authored data with its own closure gates). The
+      projection and merge client are production; the roll *write* is still a test helper —
+      it is wired for real in 6.2 — proven against real infrastructure by a duplicate
+      trigger leaving exactly one band, with a deliberate negative control showing the
+      append lane leaving two
 
 ## 5. Effect applier
 
@@ -91,8 +108,15 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       each failure class per effect-application spec
 - [ ] 5.2 Implement whole-batch commit via `graph.mutation.*` with replace semantics and
       batch identity derived from `turn_id`; validate every intent before issuing any
-      write, and treat a response naming `FailedSubjects` as failure even though the
-      transport returns nil error (F7 — batches are atomic per entity, not per batch);
+      write. Commit through the entity merge lane, **never `triple.add_batch`, which
+      appends (F14)**. The merge lane is per-entity and has no `FailedSubjects` field: a
+      multi-target batch is **N merge calls, one per target entity**, each returning its own
+      classified error. Never send a foreign subject in a merge request — graph-ingest
+      splits it off onto the appending lane and swallows the failure (F14). A multi-entity
+      batch is therefore still not atomic (F7 stands, by a different mechanism), and
+      recovery is idempotent re-application keyed on `turn_id` under replace semantics (D2).
+      `graphio.Store.MergeTriples` already refuses a foreign subject locally — rely on that,
+      never on graph-ingest to route one for you;
       tests: validation rejection leaves world unchanged, failed-subjects response fails
       the turn, idempotent re-application converges, committed effects graph-visible
 
@@ -102,9 +126,16 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       turn entity creation in `accepted`, ack-after-durable-accept; duplicate-delivery
       test (one turn, second delivery no-op)
 - [ ] 6.2 Implement phase transitions as replace-writes on `turn.phase.current` with stage
-      guards; tests: single-valued phase, duplicate stage trigger no-op
+      guards, via the entity merge lane — **the triple-add lanes append (F14)**, so a
+      duplicate trigger through them leaves two phases and no error; tests: single-valued
+      phase proven against the real graph, duplicate stage trigger no-op
 - [ ] 6.3 Implement explicit `failed` transitions (validation rejection, cap exhaustion)
-      with recorded reasons retrievable from the turn entity
+      with recorded reasons retrievable from the turn entity. The reason on the graph MUST
+      be a **closed reason code** from `internal/vocabulary` plus a ref to any detail — the
+      shared triple projection gates object *shape* (scalar, bounded length), not closure,
+      so an applier- or persona-authored sentence would pass every gate and land free text
+      on the rule-matching surface. `RuleOpaque` (8.0) stops a rule branching on it; nothing
+      stops it being written
 
 ## 7. Personas and context assembly
 
@@ -169,7 +200,25 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       means a fresh world, `ErrorCodeEntityExists` means already instantiated, skip the
       import. Do NOT apply create-not-put per template entity: referential stubs occupy
       keys, so a referenced entity's own create would return key-exists and it would stay a
-      permanent stub (F11). Boot-readiness must also exclude stubs via `EntityState.IsStub()`
+      permanent stub (F11). Boot-readiness must also exclude stubs via `EntityState.IsStub()`.
+      **The claim alone is not enough**: it answers "was this campaign created", not "did
+      the import that followed it finish", so a crash mid-import leaves a claimed campaign
+      and a partial world that boot would then skip. Write an import-completion marker after
+      the import and gate on it — absent campaign → import; campaign without marker →
+      interrupted; campaign with marker → skip. Three things the marker must actually
+      promise: (a) it gates **ingress**, not just the importer — no `PLAYER_ACTIONS` message
+      is consumed and no persona runs until it is observed, otherwise a partial-world boot
+      accepts an action and the re-import clobbers play-created state; (b) "import finished"
+      means every planned entity is **queryable and non-stub**, not merely durably queued —
+      the importer acks on publish, and those are different instants; (c) only the claimant
+      that observed `Fresh` imports — a claimant seeing campaign-without-marker waits a
+      bounded time and then fails loudly, since otherwise a late loser could write the
+      marker while the real importer is mid-flight, manufacturing the marked-but-partial
+      world the marker exists to prevent. Write the marker through the merge lane (F14) so
+      it replaces its own predicate and leaves `campaign.seed.value` intact. Serving play
+      from a half-imported world is the failure this prevents — and the context assembler
+      (7.1) is the silent reader: stub-filtering catches referenced-but-unborn entities, but
+      never-published ones just make a scene quietly smaller
 - [ ] 10.2 Implement the mock model endpoint (HTTP stub honoring the model-endpoint
       contract, scripted by persona role + scenario fixture; re-derived, no semdragon
       imports)

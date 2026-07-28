@@ -5,8 +5,15 @@
 ### Requirement: Versioned deterministic mechanic
 The dice component SHALL implement mechanic `2d6-pbta/v1`: two six-sided dice plus the sum
 of the verdict's typed modifiers, banded as ≤6 `miss`, 7–9 `partial`, 10+ `full`. The
-roll-result triple SHALL record mechanic version, RNG version, dice values, modifier list,
-total, and selected band.
+roll-result **record** SHALL carry mechanic version, RNG version, dice values, modifier
+list, total, and selected band; of these only the rule-matched scalars (band, total) land
+as triples, the rest reachable by reference — dice and modifiers are not scalars and cannot
+be triples. Dice count, faces, and band thresholds SHALL be keyed by the mechanic version,
+so a record naming a different mechanic is never validated or re-banded under this one's
+numbers. Rules SHALL route on the band, which the component has already resolved and which
+is therefore mechanic-independent; a threshold rule over the raw total is scoped to a single
+mechanic, since `>= 10` means "full success" only under this one's thresholds. When a second
+mechanic is registered, the mechanic joins the rule-matched scalars.
 
 #### Scenario: Band thresholds
 - **WHEN** dice plus modifiers total 7

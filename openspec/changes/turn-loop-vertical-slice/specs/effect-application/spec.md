@@ -18,8 +18,15 @@ target-entity existence. Validation SHALL be deterministic — no LLM involvemen
 - **THEN** the batch is rejected with a recorded reason identifying the offending intent
 
 ### Requirement: Whole-batch commit through the mutation API
-Valid batches SHALL commit through the `graph.mutation.*` API (never direct bucket
-writes), with single-valued predicates replacing prior values. Validation SHALL complete
+Valid batches SHALL commit through the entity merge lane
+(`graph.mutation.entity.update_with_triples`), never through `graph.mutation.triple.add`
+or `.add_batch`, because those lanes **append**: committing a single-valued effect through
+them accumulates values instead of replacing them, silently and without error. The merge
+lane is **per-entity**, so a batch touching N target entities SHALL issue N merge calls —
+one per target — and SHALL NOT send foreign subjects in a single request: graph-ingest
+splits foreign subjects off and routes them through the appending lane, logging any failure
+without returning it, which would reintroduce exactly the accumulation this requirement
+forbids. Writes SHALL NOT touch buckets directly. Validation SHALL complete
 for every intent before any write is issued, so a batch rejected on validation grounds
 applies nothing at all; a rejected batch SHALL move the turn to phase `failed` with a
 recorded reason.
