@@ -37,7 +37,9 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 ## 3. World loading
 
 - [ ] 3.1 Implement manifest v0 parse + validation (required fields, `engine_compat`
-      check) — failing tests first per world-loading spec "Manifest validation"
+      check) — failing tests first per world-loading spec "Manifest validation"; validate
+      every predicate in `entities.jsonl` with `vocabulary.ParsePredicate` at import time
+      (F9 — IDs allow `_`/uppercase, predicates do not; catch it here, not at write)
 - [ ] 3.2 Implement template-local → six-part ID mapping with `local:` reference rewrite,
       dangling-reference detection, and ID limit validation; tests for deterministic
       mapping and the two-worlds scenario

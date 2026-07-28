@@ -280,6 +280,19 @@ sharpest bug magnet in the slice; (b) recovery is idempotent re-application keye
 `turn_id` under replace semantics, which D2 already specifies. Substrate-level multi-entity
 atomicity would be an upstream ask; D5 does not need it and none is filed.
 
+### F9 — Entity IDs and predicates have different alphabets (trap for D8's importer)
+
+The two identity contracts are not the same shape, and the difference is invisible until a
+write fails. Entity ID segments (`pkg/types/entity_id.go:200`) require an alphanumeric
+first byte and then allow alphanumerics, `_`, and `-` — **uppercase and underscores are
+legal** — bounded at six parts and 256 total bytes. Predicate segments (F2) are strictly
+lower-kebab with **no underscore**. So a world author's `local_id: "rusty_sword"` maps to a
+perfectly valid entity ID, while a predicate `item.condition.rust_level` in the same
+package is rejected at the write gate. The importer's validation therefore applies two
+distinct rules — `types.ValidateEntityID` for mapped IDs, `vocabulary.ParsePredicate` for
+every predicate in `entities.jsonl` — and must reject bad predicates at import time with a
+reason naming the offending line, rather than letting them fail later at materialization.
+
 ### F8 — Environment notes
 
 `input/websocket` and `output/websocket` both exist as separate components — bidirectional
