@@ -8,12 +8,19 @@ import (
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
+// testActionRef is the shape a reference actually has: a pointer, not a
+// sentence. The turn-state contract only requires "present and bounded" — the
+// grammar belongs to the store that mints it — but a test that used a bare word
+// would let a later reader think anything goes here.
+const testActionRef = "obj://SEMMACHINA_CONTENT/turn/" + testTurnID + "/action"
+
 func acceptedState() *payload.TurnState {
 	return &payload.TurnState{
-		TurnID:   testTurnID,
-		Phase:    vocabulary.PhaseAccepted,
-		PlayerID: testPlayerID,
-		SceneID:  testSceneID,
+		TurnID:    testTurnID,
+		Phase:     vocabulary.PhaseAccepted,
+		PlayerID:  testPlayerID,
+		SceneID:   testSceneID,
+		ActionRef: testActionRef,
 	}
 }
 
@@ -25,11 +32,12 @@ func failedState(reason vocabulary.FailureReason) *payload.TurnState {
 	return &payload.TurnState{TurnID: testTurnID, Phase: vocabulary.PhaseFailed, Reason: reason}
 }
 
-// The birth record is the only write that establishes who is playing and where.
-// Every later stage reads the scene off the turn, so a birth record missing it
-// is a turn nothing downstream can assemble context for.
-func TestTurnState_AcceptedRecordCarriesThePhasePlayerAndScene(t *testing.T) {
-	triples, err := acceptedState().Triples(testTurnEntity, "", "turn-recorder", testTime)
+// The birth record is the only write that establishes who is playing, where,
+// and what they said. Every later stage reads the scene off the turn and the
+// action off the reference, so a birth record missing either is a turn nothing
+// downstream can assemble context for or re-prompt.
+func TestTurnState_AcceptedRecordCarriesThePhasePlayerSceneAndActionReference(t *testing.T) {
+	triples, err := acceptedState().Triples(testTurnEntity, "turn-recorder", testTime)
 	if err != nil {
 		t.Fatalf("Triples: %v", err)
 	}
@@ -38,6 +46,7 @@ func TestTurnState_AcceptedRecordCarriesThePhasePlayerAndScene(t *testing.T) {
 		vocabulary.TurnPhaseCurrent.String(): string(vocabulary.PhaseAccepted),
 		vocabulary.TurnActionPlayer.String(): testPlayerID,
 		vocabulary.TurnActionScene.String():  testSceneID,
+		vocabulary.TurnActionRef.String():    testActionRef,
 	}
 	if len(triples) != len(want) {
 		t.Fatalf("emitted %d triples, want %d: %+v", len(triples), len(want), triples)
@@ -59,13 +68,27 @@ func TestTurnState_AcceptedRecordCarriesThePhasePlayerAndScene(t *testing.T) {
 	}
 }
 
+// The reference rides in the SAME projection as the phase, so the caller has
+// one write to issue and no window between them. A projection that emitted the
+// reference separately would look identical at the call site and reopen the
+// crash window the atomic create exists to close.
+func TestTurnState_AnAcceptedRecordWithNoActionReferenceIsRefused(t *testing.T) {
+	state := acceptedState()
+	state.ActionRef = ""
+
+	if _, err := state.Triples(testTurnEntity, "turn-recorder", testTime); err == nil {
+		t.Fatal("a turn was born with no pointer to the player's words; the rule pack can re-trigger it and " +
+			"the adjudicator cannot re-prompt it")
+	}
+}
+
 func TestTurnState_OrdinaryTransitionWritesOnlyThePhase(t *testing.T) {
 	for _, phase := range []vocabulary.TurnPhase{
 		vocabulary.PhaseAdjudicating, vocabulary.PhaseResolving,
 		vocabulary.PhaseApplying, vocabulary.PhaseNarrating, vocabulary.PhaseComplete,
 	} {
 		t.Run(string(phase), func(t *testing.T) {
-			triples, err := phaseState(phase).Triples(testTurnEntity, "", "turn-recorder", testTime)
+			triples, err := phaseState(phase).Triples(testTurnEntity, "turn-recorder", testTime)
 			if err != nil {
 				t.Fatalf("Triples: %v", err)
 			}
@@ -87,7 +110,7 @@ func TestTurnState_OrdinaryTransitionWritesOnlyThePhase(t *testing.T) {
 // still reporting itself as running.
 func TestTurnState_FailureWritesThePhaseAndTheReasonTogether(t *testing.T) {
 	triples, err := failedState(vocabulary.FailureEffectInvalid).
-		Triples(testTurnEntity, "", "turn-recorder", testTime)
+		Triples(testTurnEntity, "turn-recorder", testTime)
 	if err != nil {
 		t.Fatalf("Triples: %v", err)
 	}
@@ -108,10 +131,12 @@ func TestTurnState_FailureWritesThePhaseAndTheReasonTogether(t *testing.T) {
 }
 
 func TestTurnState_FailureDetailRidesAsAReference(t *testing.T) {
-	const detail = "obj://batches/turn-act-1"
+	const detail = "obj://SEMMACHINA_CONTENT/turn/" + testTurnID + "/failure"
 
-	triples, err := failedState(vocabulary.FailureEffectInvalid).
-		Triples(testTurnEntity, detail, "turn-recorder", testTime)
+	state := failedState(vocabulary.FailureEffectInvalid)
+	state.DetailRef = detail
+
+	triples, err := state.Triples(testTurnEntity, "turn-recorder", testTime)
 	if err != nil {
 		t.Fatalf("Triples: %v", err)
 	}
@@ -131,7 +156,7 @@ func TestTurnState_FailureDetailRidesAsAReference(t *testing.T) {
 func TestTurnState_RejectsAReasonOutsideTheClosedSet(t *testing.T) {
 	state := failedState("intent 3 exceeded the health bound")
 
-	if _, err := state.Triples(testTurnEntity, "", "turn-recorder", testTime); err == nil {
+	if _, err := state.Triples(testTurnEntity, "turn-recorder", testTime); err == nil {
 		t.Fatal("a hand-written failure sentence was projected onto the turn entity")
 	}
 
@@ -144,20 +169,33 @@ func TestTurnState_RejectsAReasonOutsideTheClosedSet(t *testing.T) {
 
 func TestTurnState_RejectsEveryMisshapedRecord(t *testing.T) {
 	cases := []struct {
-		name      string
-		state     *payload.TurnState
-		detailRef string
-		wantErr   string
+		name    string
+		state   *payload.TurnState
+		wantErr string
 	}{
 		{
-			name:    "an accepted record with no player",
-			state:   &payload.TurnState{TurnID: testTurnID, Phase: vocabulary.PhaseAccepted, SceneID: testSceneID},
+			name: "an accepted record with no player",
+			state: &payload.TurnState{
+				TurnID: testTurnID, Phase: vocabulary.PhaseAccepted,
+				SceneID: testSceneID, ActionRef: testActionRef,
+			},
 			wantErr: "player_id",
 		},
 		{
-			name:    "an accepted record with no scene",
-			state:   &payload.TurnState{TurnID: testTurnID, Phase: vocabulary.PhaseAccepted, PlayerID: testPlayerID},
+			name: "an accepted record with no scene",
+			state: &payload.TurnState{
+				TurnID: testTurnID, Phase: vocabulary.PhaseAccepted,
+				PlayerID: testPlayerID, ActionRef: testActionRef,
+			},
 			wantErr: "scene_id",
+		},
+		{
+			name: "an accepted record with no action reference",
+			state: &payload.TurnState{
+				TurnID: testTurnID, Phase: vocabulary.PhaseAccepted,
+				PlayerID: testPlayerID, SceneID: testSceneID,
+			},
+			wantErr: "action_ref",
 		},
 		{
 			name: "a transition that resends the player",
@@ -165,6 +203,13 @@ func TestTurnState_RejectsEveryMisshapedRecord(t *testing.T) {
 				TurnID: testTurnID, Phase: vocabulary.PhaseApplying, PlayerID: testPlayerID,
 			},
 			wantErr: "rewrite who is playing",
+		},
+		{
+			name: "a transition that resends the action reference",
+			state: &payload.TurnState{
+				TurnID: testTurnID, Phase: vocabulary.PhaseApplying, ActionRef: testActionRef,
+			},
+			wantErr: "another turn's words",
 		},
 		{
 			name:    "a failed record with no reason",
@@ -182,14 +227,16 @@ func TestTurnState_RejectsEveryMisshapedRecord(t *testing.T) {
 			wantErr: "turn_phase",
 		},
 		{
-			name:      "a detail reference on a turn that did not fail",
-			state:     phaseState(vocabulary.PhaseComplete),
-			detailRef: "obj://batches/turn-act-1",
-			wantErr:   "a turn that did not fail has none",
+			name: "a detail reference on a turn that did not fail",
+			state: &payload.TurnState{
+				TurnID: testTurnID, Phase: vocabulary.PhaseComplete,
+				DetailRef: "obj://SEMMACHINA_CONTENT/turn/" + testTurnID + "/failure",
+			},
+			wantErr: "a turn that did not fail has none",
 		},
 		{
 			name:    "a player id that is not a canonical entity id",
-			state:   &payload.TurnState{TurnID: testTurnID, Phase: vocabulary.PhaseAccepted, PlayerID: "p1", SceneID: testSceneID},
+			state:   &payload.TurnState{TurnID: testTurnID, Phase: vocabulary.PhaseAccepted, PlayerID: "p1", SceneID: testSceneID, ActionRef: testActionRef},
 			wantErr: "canonical six-part entity ID",
 		},
 		{
@@ -201,7 +248,7 @@ func TestTurnState_RejectsEveryMisshapedRecord(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			triples, err := tc.state.Triples(testTurnEntity, tc.detailRef, "turn-recorder", testTime)
+			triples, err := tc.state.Triples(testTurnEntity, "turn-recorder", testTime)
 			if err == nil {
 				t.Fatalf("the record was accepted and emitted %d triples", len(triples))
 			}
@@ -218,7 +265,7 @@ func TestTurnState_RejectsEveryMisshapedRecord(t *testing.T) {
 // is.
 func TestTurnState_RefusesATurnEntityAddressingADifferentTurn(t *testing.T) {
 	_, err := phaseState(vocabulary.PhaseApplying).
-		Triples("c360.semmachina.world1.starter.turn.turn-act-9", "", "turn-recorder", testTime)
+		Triples("c360.semmachina.world1.starter.turn.turn-act-9", "turn-recorder", testTime)
 	if err == nil {
 		t.Fatal("a phase was projected onto a turn entity addressing a different turn")
 	}

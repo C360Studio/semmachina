@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
 
+	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/turn"
@@ -54,6 +56,19 @@ func testAction() *payload.PlayerAction {
 	}
 }
 
+// journal records the ORDER of writes across the two stores a turn's birth
+// touches.
+//
+// It exists because "the action object is written before the turn entity is
+// created" is the entire crash-safety argument of this seam, and neither store
+// can observe it alone: each sees only its own call. The failure it guards
+// against — a reference committed to a turn whose object is not there yet — is
+// invisible in every end-state assertion, because the end state after a
+// successful run is identical either way.
+type journal struct{ entries []string }
+
+func (j *journal) add(entry string) { j.entries = append(j.entries, entry) }
+
 // fakeStore is an in-memory graph with the two lanes that matter kept honest:
 // create is atomic create-or-fail, and merge REPLACES by (subject, predicate).
 // It exists for the failure paths a real broker will not produce on demand — a
@@ -62,6 +77,7 @@ func testAction() *payload.PlayerAction {
 // graph-ingest in turn_integration_test.go instead.
 type fakeStore struct {
 	entities map[string]*graph.EntityState
+	journal  *journal
 
 	createErr error
 	getErr    error
@@ -73,11 +89,12 @@ type fakeStore struct {
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{entities: map[string]*graph.EntityState{}}
+	return &fakeStore{entities: map[string]*graph.EntityState{}, journal: &journal{}}
 }
 
 func (s *fakeStore) CreateEntity(_ context.Context, entity *graph.EntityState) (graphio.CreateResult, error) {
 	s.creates++
+	s.journal.add("create " + entity.ID)
 	if s.createErr != nil {
 		return graphio.CreateResult{}, s.createErr
 	}
@@ -161,13 +178,69 @@ func (s *appendingStore) MergeTriples(
 	return clone(stored), nil
 }
 
+// fakeActions is an in-memory ActionStore that keeps the one property the
+// production store's key derivation buys: a redelivery re-puts onto the same
+// reference rather than producing a second one.
+type fakeActions struct {
+	journal *journal
+	stored  map[string]*payload.PlayerAction
+	puts    int
+	err     error
+}
+
+func newFakeActions(j *journal) *fakeActions {
+	return &fakeActions{journal: j, stored: map[string]*payload.PlayerAction{}}
+}
+
+func (a *fakeActions) PutAction(
+	_ context.Context,
+	turnEntityID string,
+	action *payload.PlayerAction,
+) (content.Ref, error) {
+	a.puts++
+	if a.err != nil {
+		return content.Ref{}, a.err
+	}
+	turnID := payload.TurnIDForAction(action.ActionID)
+	if err := payload.RequireTurnEntityID(turnID, turnEntityID); err != nil {
+		return content.Ref{}, err
+	}
+	key, err := content.KeyFor(vocabulary.TurnActionRef, turnID)
+	if err != nil {
+		return content.Ref{}, err
+	}
+	a.journal.add("put " + key)
+	stored := *action
+	a.stored[key] = &stored
+	return content.Ref{Instance: "TEST_CONTENT", Key: key}, nil
+}
+
 func newRecorder(t *testing.T, store turn.Store) *turn.Recorder {
 	t.Helper()
-	recorder, err := turn.NewRecorder(store, testIdentity(), turn.WithClock(func() time.Time { return testTime }))
+	return newRecorderWithActions(t, store, newFakeActions(journalOf(store)))
+}
+
+func newRecorderWithActions(t *testing.T, store turn.Store, actions turn.ActionStore) *turn.Recorder {
+	t.Helper()
+	recorder, err := turn.NewRecorder(
+		store, actions, testIdentity(), turn.WithClock(func() time.Time { return testTime }))
 	if err != nil {
 		t.Fatalf("NewRecorder: %v", err)
 	}
 	return recorder
+}
+
+// journalOf reaches the shared write log through whichever store wrapper a test
+// is using, so both stores record into one sequence.
+func journalOf(store turn.Store) *journal {
+	switch s := store.(type) {
+	case *fakeStore:
+		return s.journal
+	case *appendingStore:
+		return s.journal
+	default:
+		return &journal{}
+	}
 }
 
 func objectsFor(state *graph.EntityState, predicate vocabulary.Predicate) []any {
@@ -242,6 +315,128 @@ func TestAccept_CreatesTheTurnInAcceptedBeforeReturning(t *testing.T) {
 	}
 	if stored.IsStub() {
 		t.Fatal("the created turn reads as a referential stub; every guard that asks about it would refuse")
+	}
+}
+
+// The player's words reach the graph as a pointer, and the pointer is part of
+// the turn's BIRTH. A turn that exists without one is a turn the rule pack can
+// re-trigger and the adjudicator cannot re-prompt.
+func TestAccept_TheActionReferenceRidesInsideTheAtomicCreate(t *testing.T) {
+	store := newFakeStore()
+	actions := newFakeActions(store.journal)
+	recorder := newRecorderWithActions(t, store, actions)
+
+	acceptance, err := recorder.Accept(t.Context(), testAction())
+	if err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+
+	// One create and no follow-up write: a create-then-add-the-reference
+	// sequence would leave a window in which the turn exists carrying no
+	// pointer, and every guard would read that turn as complete.
+	if store.creates != 1 || store.merges != 0 {
+		t.Fatalf("the turn's birth took %d create(s) and %d merge(s); the reference must ride inside the "+
+			"create, or the crash window the atomic create closes is reopened", store.creates, store.merges)
+	}
+
+	stored, err := store.GetEntity(t.Context(), acceptance.TurnEntityID)
+	if err != nil {
+		t.Fatalf("GetEntity: %v", err)
+	}
+	refs := objectsFor(stored, vocabulary.TurnActionRef)
+	if len(refs) != 1 {
+		t.Fatalf("the created turn holds %d action references: %v", len(refs), refs)
+	}
+	text, _ := refs[0].(string)
+	ref, err := content.ParseRef(text)
+	if err != nil {
+		t.Fatalf("the reference on the turn entity is not a storage reference: %v", err)
+	}
+	if actions.stored[ref.Key] == nil {
+		t.Fatalf("the turn references %s, and no action was stored there; a reference to a missing object is "+
+			"a turn nothing can re-prompt", ref)
+	}
+}
+
+// Prose first, reference last — the ordering the whole seam rests on. The two
+// failure modes are not symmetric: an object nobody references is garbage a
+// redelivery overwrites, while a reference to a missing object is a correctness
+// bug nothing can repair.
+func TestAccept_StoresTheActionBeforeCreatingTheTurn(t *testing.T) {
+	store := newFakeStore()
+	recorder := newRecorderWithActions(t, store, newFakeActions(store.journal))
+
+	if _, err := recorder.Accept(t.Context(), testAction()); err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+
+	if len(store.journal.entries) != 2 {
+		t.Fatalf("the turn's birth issued %d writes: %v", len(store.journal.entries), store.journal.entries)
+	}
+	if !strings.HasPrefix(store.journal.entries[0], "put ") {
+		t.Fatalf("the first write was %q, want the action object; a turn created first can be re-triggered "+
+			"by the rule pack while the words it points at do not exist yet", store.journal.entries[0])
+	}
+	if !strings.HasPrefix(store.journal.entries[1], "create ") {
+		t.Fatalf("the second write was %q, want the turn create", store.journal.entries[1])
+	}
+}
+
+// The store is written unconditionally, including on the duplicate path. A
+// crash may have happened before the first put landed, so the second delivery
+// has to write rather than assume — and because the key is derived, writing
+// again is free of consequence.
+func TestAccept_ARedeliveryRePutsTheActionAndStillCreatesNoSecondTurn(t *testing.T) {
+	store := newFakeStore()
+	actions := newFakeActions(store.journal)
+	recorder := newRecorderWithActions(t, store, actions)
+
+	if _, err := recorder.Accept(t.Context(), testAction()); err != nil {
+		t.Fatalf("first Accept: %v", err)
+	}
+	if _, err := recorder.Accept(t.Context(), testAction()); err != nil {
+		t.Fatalf("second Accept: %v", err)
+	}
+
+	if actions.puts != 2 {
+		t.Fatalf("two deliveries issued %d put(s); the second must re-put, since the crash it recovers from "+
+			"may have happened before the first one landed", actions.puts)
+	}
+	if len(actions.stored) != 1 {
+		t.Fatalf("two deliveries left %d stored actions: %v", len(actions.stored), actions.stored)
+	}
+	if len(store.entities) != 1 {
+		t.Fatalf("two deliveries left %d turn entities", len(store.entities))
+	}
+}
+
+// An unreachable store is a TRANSIENT failure, not a rejected action. Rejecting
+// it would terminate the delivery and throw away a move the player can never
+// resubmit, to spare a redelivery.
+func TestAccept_AFailingActionStoreIsNotARejectionAndCreatesNoTurn(t *testing.T) {
+	store := newFakeStore()
+	actions := newFakeActions(store.journal)
+	actions.err = errors.New("nats: no responders available")
+
+	_, err := newRecorderWithActions(t, store, actions).Accept(t.Context(), testAction())
+	if err == nil {
+		t.Fatal("a turn was accepted while the player's words could not be stored")
+	}
+	var rejected *turn.RejectedActionError
+	if errors.As(err, &rejected) {
+		t.Fatal("an unreachable action store was classified as a permanent rejection; the player's move " +
+			"would be terminated for a broken connection")
+	}
+	if store.creates != 0 {
+		t.Fatal("a turn was created pointing at an action that was never stored")
+	}
+}
+
+// The dependency is required, not optional. A recorder that could be built
+// without one would accept turns whose action reference nothing wrote.
+func TestNewRecorder_RefusesToBuildWithoutAnActionStore(t *testing.T) {
+	if _, err := turn.NewRecorder(newFakeStore(), nil, testIdentity()); err == nil {
+		t.Fatal("a recorder was built with no action store; every turn it accepted would lose the move")
 	}
 }
 
@@ -598,7 +793,7 @@ func TestAdvance_ATerminalTurnDeclinesEverything(t *testing.T) {
 			if ending == vocabulary.PhaseComplete {
 				advanceTo(t, recorder, acceptance, vocabulary.PhaseComplete)
 			} else if _, err := recorder.Fail(t.Context(), acceptance.TurnID, acceptance.TurnEntityID,
-				vocabulary.FailurePersonaCapExhausted, ""); err != nil {
+				vocabulary.FailurePersonaCapExhausted, content.Ref{}); err != nil {
 				t.Fatalf("Fail: %v", err)
 			}
 
@@ -749,7 +944,7 @@ func TestFail_RecordsThePhaseAndTheClosedReasonTogether(t *testing.T) {
 	advanceTo(t, recorder, acceptance, vocabulary.PhaseAdjudicating, vocabulary.PhaseApplying)
 
 	transition, err := recorder.Fail(t.Context(), acceptance.TurnID, acceptance.TurnEntityID,
-		vocabulary.FailureEffectInvalid, "")
+		vocabulary.FailureEffectInvalid, content.Ref{})
 	if err != nil {
 		t.Fatalf("Fail: %v", err)
 	}
@@ -784,7 +979,7 @@ func TestFail_RefusesAReasonOutsideTheClosedSet(t *testing.T) {
 		"intent 3 (set_attribute on rook) exceeded the health bound",
 	} {
 		if _, err := recorder.Fail(
-			t.Context(), acceptance.TurnID, acceptance.TurnEntityID, reason, ""); err == nil {
+			t.Context(), acceptance.TurnID, acceptance.TurnEntityID, reason, content.Ref{}); err == nil {
 			t.Fatalf("reason %q was recorded on the turn entity", reason)
 		}
 	}
@@ -794,10 +989,14 @@ func TestFail_RefusesAReasonOutsideTheClosedSet(t *testing.T) {
 }
 
 func TestFail_DetailRidesAsAReference(t *testing.T) {
-	const detail = "obj://batches/turn-act-1"
-
 	store, recorder, acceptance := acceptedTurn(t)
 	advanceTo(t, recorder, acceptance, vocabulary.PhaseAdjudicating, vocabulary.PhaseApplying)
+
+	key, err := content.KeyFor(vocabulary.TurnFailureRef, acceptance.TurnID)
+	if err != nil {
+		t.Fatalf("KeyFor: %v", err)
+	}
+	detail := content.Ref{Instance: "TEST_CONTENT", Key: key}
 
 	if _, err := recorder.Fail(t.Context(), acceptance.TurnID, acceptance.TurnEntityID,
 		vocabulary.FailureEffectInvalid, detail); err != nil {
@@ -805,8 +1004,26 @@ func TestFail_DetailRidesAsAReference(t *testing.T) {
 	}
 
 	stored, _ := store.GetEntity(t.Context(), acceptance.TurnEntityID)
-	if got := objectsFor(stored, vocabulary.TurnFailureRef); len(got) != 1 || got[0] != detail {
-		t.Fatalf("the failed turn records detail %v, want the reference", got)
+	if got := objectsFor(stored, vocabulary.TurnFailureRef); len(got) != 1 || got[0] != detail.String() {
+		t.Fatalf("the failed turn records detail %v, want %s", got, detail)
+	}
+}
+
+// The detail parameter is a REFERENCE, and the type is what enforces it. A
+// caller holding an explanation has nothing to pass — it has to store the
+// explanation first — which is the whole reason the closed reason code survives
+// contact with an applier that has plenty to say.
+func TestFail_RefusesADetailThatIsNotAResolvableReference(t *testing.T) {
+	store, recorder, acceptance := acceptedTurn(t)
+	advanceTo(t, recorder, acceptance, vocabulary.PhaseAdjudicating, vocabulary.PhaseApplying)
+
+	notAReference := content.Ref{Instance: "TEST_CONTENT"}
+	if _, err := recorder.Fail(t.Context(), acceptance.TurnID, acceptance.TurnEntityID,
+		vocabulary.FailureEffectInvalid, notAReference); err == nil {
+		t.Fatal("a reference with no key was recorded on the turn entity")
+	}
+	if store.merges != 2 {
+		t.Fatalf("the refused failure wrote to the turn (%d merges, want the 2 advances)", store.merges)
 	}
 }
 
@@ -817,13 +1034,13 @@ func TestFail_ATerminalTurnKeepsItsFirstOutcome(t *testing.T) {
 	advanceTo(t, recorder, acceptance, vocabulary.PhaseAdjudicating)
 
 	if _, err := recorder.Fail(t.Context(), acceptance.TurnID, acceptance.TurnEntityID,
-		vocabulary.FailurePersonaCapExhausted, ""); err != nil {
+		vocabulary.FailurePersonaCapExhausted, content.Ref{}); err != nil {
 		t.Fatalf("first Fail: %v", err)
 	}
 
 	before := store.merges
 	transition, err := recorder.Fail(t.Context(), acceptance.TurnID, acceptance.TurnEntityID,
-		vocabulary.FailureEffectInvalid, "")
+		vocabulary.FailureEffectInvalid, content.Ref{})
 	if err != nil {
 		t.Fatalf("second Fail: %v", err)
 	}
@@ -853,7 +1070,7 @@ func TestFail_IsReachableFromEveryNonTerminalPhase(t *testing.T) {
 		advanceTo(t, recorder, acceptance, walk[:idx]...)
 
 		transition, err := recorder.Fail(t.Context(), acceptance.TurnID, acceptance.TurnEntityID,
-			vocabulary.FailurePersonaCapExhausted, "")
+			vocabulary.FailurePersonaCapExhausted, content.Ref{})
 		if err != nil {
 			t.Fatalf("Fail after %d advances: %v", idx, err)
 		}

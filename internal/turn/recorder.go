@@ -9,6 +9,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 
+	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/vocabulary"
@@ -19,12 +20,18 @@ const Source = "turn-recorder"
 
 // EntityMessageType is the provenance envelope stamped on a turn entity.
 //
-// It is stamped explicitly because an entity with a zero envelope is
-// indistinguishable from a referential stub to graph.EntityState.IsStub, and the
-// turn entity is precisely the thing every stage guard asks about. No message of
-// this type is ever published — the turn is created through the atomic mutation
-// lane and advanced through the merge lane — so it is deliberately absent from
-// the payload registry.
+// It is stamped explicitly because upstream treats a zero or invalid envelope as
+// NOT-YET-REALLY-BORN. graph.EntityState.IsStub keys on the stub envelope
+// specifically, so a typeless entity does not read as a stub — but every
+// re-stamping lane refuses to treat one as a real birth
+// (restampStubOnCreate: "!IsValid() rejects a zero/partial type"), which is how
+// a typeless entity ends up in the dispatchable-non-real class upstream named in
+// gh#429. The turn entity is precisely the thing every stage guard asks about,
+// so it is born with its own type or not at all.
+//
+// No message of this type is ever published — the turn is created through the
+// atomic mutation lane and advanced through the merge lane — so it is
+// deliberately absent from the payload registry.
 var EntityMessageType = message.Type{
 	Domain:   payload.Domain,
 	Category: payload.CategoryTurnState,
@@ -57,10 +64,30 @@ type Store interface {
 // The claim above, enforced by the compiler rather than by a doc comment.
 var _ Store = (*graphio.Store)(nil)
 
+// ActionStore is the durable home of the player's own words.
+//
+// It is a REQUIRED dependency rather than an option, and that is the whole
+// content of this seam. Intake acknowledges an action once the turn entity
+// exists; without a store, that guarantee covers the paperwork — the phase, the
+// player, the scene — and not the sentence the player actually wrote, which
+// exceeds the triple-object budget and is fiction besides (M1), so it can only
+// reach the graph as a pointer. A recorder that could be built without one
+// would be a recorder that silently loses the move.
+type ActionStore interface {
+	// PutAction stores the canonical action and returns the reference the turn
+	// entity carries. It is called BEFORE the create, so a redelivery re-puts
+	// identically rather than storing a second copy.
+	PutAction(ctx context.Context, turnEntityID string, action *payload.PlayerAction) (content.Ref, error)
+}
+
+// The claim above, enforced by the compiler rather than by a doc comment.
+var _ ActionStore = (*content.Store)(nil)
+
 // Recorder owns the turn entity: its creation, its phase, and its explicit
 // failure.
 type Recorder struct {
 	store    Store
+	actions  ActionStore
 	identity Identity
 	now      func() time.Time
 }
@@ -77,14 +104,20 @@ func WithClock(now func() time.Time) Option {
 }
 
 // NewRecorder builds a recorder for one world instance.
-func NewRecorder(store Store, identity Identity, opts ...Option) (*Recorder, error) {
+func NewRecorder(store Store, actions ActionStore, identity Identity, opts ...Option) (*Recorder, error) {
 	if store == nil {
 		return nil, errors.New("turn recorder requires a graph store")
+	}
+	if actions == nil {
+		return nil, errors.New(
+			"turn recorder requires an action store; without one an accepted turn carries no pointer to the " +
+				"player's words, and 'acknowledged only after the turn durably exists' is true of the " +
+				"paperwork and false of the move")
 	}
 	if err := identity.Validate(); err != nil {
 		return nil, err
 	}
-	recorder := &Recorder{store: store, identity: identity, now: time.Now}
+	recorder := &Recorder{store: store, actions: actions, identity: identity, now: time.Now}
 	for _, opt := range opts {
 		opt(recorder)
 	}
@@ -124,6 +157,24 @@ type Acceptance struct {
 // after it redelivers the action into an existing turn, and neither loses the
 // player's move.
 //
+// The ACTION IS STORED FIRST, and the reference it produces rides inside the
+// create rather than following it. Both halves of that are load-bearing:
+//
+//   - Object before reference, always. A reference to a missing object is a
+//     correctness bug — a turn the rule pack re-triggers and the adjudicator
+//     cannot re-prompt — while an object no turn references is garbage a
+//     redelivery overwrites and a sweeper can collect. The two failures are not
+//     symmetric, so the order is not a preference.
+//   - Reference inside the create. A create followed by a second write to add
+//     the reference would reopen precisely the crash window the atomic create
+//     closes, and the turn left in the gap would look complete to every guard.
+//
+// The store is written unconditionally, including on the duplicate path,
+// because the key is derived from the turn: a redelivery re-puts the identical
+// bytes at the identical key. That is deliberately cheaper than reading first —
+// a crash may have happened before the first put landed, so the second delivery
+// has to write rather than assume.
+//
 // A create that reports Degraded is a COMMITTED write whose read-back failed. It
 // is a success, and must not be retried — a retry would come back as
 // entity_already_exists and a caller reading that as "somebody else got here
@@ -140,7 +191,16 @@ func (r *Recorder) Accept(ctx context.Context, action *payload.PlayerAction) (Ac
 		return Acceptance{}, &RejectedActionError{ActionID: action.ActionID, Err: err}
 	}
 
-	entity, err := r.acceptedEntity(turnID, turnEntityID, action)
+	// A store failure is TRANSIENT, not a rejected action: the action is
+	// perfectly well formed and the store is unreachable. Rejecting it here
+	// would terminate the delivery and throw away a move the player can never
+	// resubmit, to spare a redelivery.
+	actionRef, err := r.actions.PutAction(ctx, turnEntityID, action)
+	if err != nil {
+		return Acceptance{}, fmt.Errorf("store action for turn %s: %w", turnEntityID, err)
+	}
+
+	entity, err := r.acceptedEntity(turnID, turnEntityID, actionRef, action)
 	if err != nil {
 		return Acceptance{}, &RejectedActionError{ActionID: action.ActionID, Err: err}
 	}
@@ -182,16 +242,18 @@ func (r *Recorder) Accept(ctx context.Context, action *payload.PlayerAction) (Ac
 // acceptedEntity builds the turn's birth record.
 func (r *Recorder) acceptedEntity(
 	turnID, turnEntityID string,
+	actionRef content.Ref,
 	action *payload.PlayerAction,
 ) (*graph.EntityState, error) {
 	at := r.now().UTC()
 	state := &payload.TurnState{
-		TurnID:   turnID,
-		Phase:    vocabulary.PhaseAccepted,
-		PlayerID: action.PlayerID,
-		SceneID:  action.SceneID,
+		TurnID:    turnID,
+		Phase:     vocabulary.PhaseAccepted,
+		PlayerID:  action.PlayerID,
+		SceneID:   action.SceneID,
+		ActionRef: actionRef.String(),
 	}
-	triples, err := state.Triples(turnEntityID, "", Source, at)
+	triples, err := state.Triples(turnEntityID, Source, at)
 	if err != nil {
 		return nil, err
 	}
@@ -346,7 +408,7 @@ func (r *Recorder) Advance(
 		return Transition{}, &IllegalTransitionError{
 			TurnEntityID: turnEntityID, To: to, Fault: FaultFailureNeedsReason}
 	}
-	return r.transition(ctx, turnID, turnEntityID, to, "", "")
+	return r.transition(ctx, turnID, turnEntityID, to, "", content.Ref{})
 }
 
 // Fail ends the turn explicitly, recording a closed reason.
@@ -357,8 +419,11 @@ func (r *Recorder) Advance(
 // gates an object's SHAPE but not its CLOSURE — so a sentence composed at the
 // call site would pass every gate on the way to the graph.
 //
-// detailRef is an optional reference to stored detail (the refused batch, the
-// exhausted loop). Detail reaches the graph as a reference or not at all.
+// detail is an optional reference to stored detail (the refused batch, the
+// exhausted loop). It is a content.Ref rather than a string so that "detail
+// reaches the graph as a reference or not at all" is enforced by the type
+// rather than by this comment: a caller holding an explanation has nothing to
+// pass, and has to store it first.
 //
 // A turn that has already ended DECLINES rather than being overwritten, so the
 // first recorded reason is the one that actually happened. A second failure
@@ -368,14 +433,19 @@ func (r *Recorder) Fail(
 	ctx context.Context,
 	turnID, turnEntityID string,
 	reason vocabulary.FailureReason,
-	detailRef string,
+	detail content.Ref,
 ) (Transition, error) {
 	if _, err := vocabulary.ParseFailureReason(string(reason)); err != nil {
 		return Transition{}, fmt.Errorf(
 			"refusing to record a turn failure: %w; the reason lands on rule-matching surface, so it is a "+
 				"code and never a sentence", err)
 	}
-	return r.transition(ctx, turnID, turnEntityID, vocabulary.PhaseFailed, reason, detailRef)
+	if !detail.IsZero() {
+		if err := detail.Validate(); err != nil {
+			return Transition{}, err
+		}
+	}
+	return r.transition(ctx, turnID, turnEntityID, vocabulary.PhaseFailed, reason, detail)
 }
 
 // transition is the one guarded write both Advance and Fail run through.
@@ -384,7 +454,7 @@ func (r *Recorder) transition(
 	turnID, turnEntityID string,
 	to vocabulary.TurnPhase,
 	reason vocabulary.FailureReason,
-	detailRef string,
+	detail content.Ref,
 ) (Transition, error) {
 	// The entity and the turn id are one turn wearing two shapes, and this is
 	// the pairing seam: a stage handed turn A's entity with turn B's id would
@@ -409,8 +479,10 @@ func (r *Recorder) transition(
 		return Transition{Previous: previous, Phase: previous, Outcome: outcome}, nil
 	}
 
-	state := &payload.TurnState{TurnID: turnID, Phase: to, Reason: reason}
-	triples, err := state.Triples(turnEntityID, detailRef, Source, r.now().UTC())
+	state := &payload.TurnState{
+		TurnID: turnID, Phase: to, Reason: reason, DetailRef: detail.String(),
+	}
+	triples, err := state.Triples(turnEntityID, Source, r.now().UTC())
 	if err != nil {
 		return Transition{}, err
 	}

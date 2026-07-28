@@ -14,6 +14,7 @@ import (
 	graphingest "github.com/c360studio/semstreams/processor/graph-ingest"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/effect"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
@@ -63,11 +64,13 @@ func (s *countingStore) CreateEntity(
 	return s.Store.CreateEntity(ctx, entity)
 }
 
-// liveTurns is one world namespace with a recorder over the real graph.
+// liveTurns is one world namespace with a recorder over the real graph and the
+// real content store.
 type liveTurns struct {
 	harness  *testinfra.Harness
 	store    *graphio.Store
 	counted  *countingStore
+	content  *content.Store
 	recorder *turn.Recorder
 
 	identity  turn.Identity
@@ -83,14 +86,29 @@ func startTurns(t *testing.T) *liveTurns {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
+
+	// A bucket per namespace, because artifact keys are derived from turn_id
+	// and instance-per-world is what makes that unique in production. Tests
+	// share one broker, so they take the isolation the deployment gives them.
+	backend, err := content.NewObjectStore(t.Context(), harness.Client,
+		content.WithBucket("TURN_CONTENT_"+namespace))
+	if err != nil {
+		t.Fatalf("NewObjectStore: %v", err)
+	}
+	t.Cleanup(func() { backend.Close() }) //nolint:errcheck // best effort in teardown
+	contentStore, err := content.NewStore(backend)
+	if err != nil {
+		t.Fatalf("content.NewStore: %v", err)
+	}
+
 	identity := turn.Identity{Org: testOrg, WorldNS: namespace, Template: testTemplate}
 	counted := &countingStore{Store: store}
-	recorder, err := turn.NewRecorder(counted, identity)
+	recorder, err := turn.NewRecorder(counted, contentStore, identity)
 	if err != nil {
 		t.Fatalf("NewRecorder: %v", err)
 	}
 	return &liveTurns{
-		harness: harness, store: store, counted: counted, recorder: recorder,
+		harness: harness, store: store, counted: counted, content: contentStore, recorder: recorder,
 		identity: identity, namespace: namespace,
 	}
 }
@@ -481,7 +499,7 @@ func TestIntegration_ADuplicateStageTriggerLeavesExactlyOnePhase(t *testing.T) {
 
 	// And a caller that wrote regardless must still converge.
 	state := &payload.TurnState{TurnID: acceptance.TurnID, Phase: vocabulary.PhaseResolving}
-	triples, err := state.Triples(acceptance.TurnEntityID, "", turn.Source, time.Now().UTC())
+	triples, err := state.Triples(acceptance.TurnEntityID, turn.Source, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("Triples: %v", err)
 	}
@@ -510,7 +528,7 @@ func TestIntegration_TheAppendLaneLeavesTwoPhasesWhichIsWhyTheMergeLaneIsUsed(t 
 	acceptance := live.accept(t, "act-append")
 
 	state := &payload.TurnState{TurnID: acceptance.TurnID, Phase: vocabulary.PhaseAdjudicating}
-	triples, err := state.Triples(acceptance.TurnEntityID, "", turn.Source, time.Now().UTC())
+	triples, err := state.Triples(acceptance.TurnEntityID, turn.Source, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("Triples: %v", err)
 	}
@@ -560,7 +578,7 @@ func TestIntegration_ACrashResumesFromTheRecordedPhaseWithoutRerunningAStage(t *
 
 	// The crash. Everything in memory is gone; the turn's phase is a KV fact, so
 	// it is what the new process re-delivers and reads.
-	restarted, err := turn.NewRecorder(live.store, live.identity)
+	restarted, err := turn.NewRecorder(live.store, live.content, live.identity)
 	if err != nil {
 		t.Fatalf("NewRecorder after restart: %v", err)
 	}
@@ -614,17 +632,26 @@ func TestIntegration_ACrashResumesFromTheRecordedPhaseWithoutRerunningAStage(t *
 // ---------------------------------------------------------------- failure
 
 // The reason has to be retrievable from the turn entity, and it has to be a
-// code. This reads it back off the real graph the way a rule, the ledger, or an
-// operator would.
-func TestIntegration_AFailedTurnRecordsAClosedReasonAndADetailReference(t *testing.T) {
-	const detail = "obj://batches/turn-act-fail"
-
+// code, with the explanation reachable THROUGH the reference rather than in it.
+// The detail is stored for real, because a placeholder string would prove the
+// recorder can write a string and nothing about whether anything is behind it.
+func TestIntegration_AFailedTurnRecordsAClosedReasonAndAResolvableDetailReference(t *testing.T) {
 	live := startTurns(t)
 	acceptance := live.accept(t, "act-fail")
 	live.advance(t, acceptance, vocabulary.PhaseAdjudicating, vocabulary.PhaseApplying)
 
+	detail := &content.FailureDetail{
+		TurnID:  acceptance.TurnID,
+		Reason:  vocabulary.FailureEffectInvalid,
+		Message: "intent 0 (set_attribute health=43 on the courier) exceeds the registered bound",
+	}
+	ref, err := live.content.PutFailureDetail(t.Context(), acceptance.TurnEntityID, detail)
+	if err != nil {
+		t.Fatalf("PutFailureDetail: %v", err)
+	}
+
 	if _, err := live.recorder.Fail(t.Context(), acceptance.TurnID, acceptance.TurnEntityID,
-		vocabulary.FailureEffectInvalid, detail); err != nil {
+		vocabulary.FailureEffectInvalid, ref); err != nil {
 		t.Fatalf("Fail: %v", err)
 	}
 
@@ -632,7 +659,7 @@ func TestIntegration_AFailedTurnRecordsAClosedReasonAndADetailReference(t *testi
 	want := map[vocabulary.Predicate]string{
 		vocabulary.TurnPhaseCurrent:  string(vocabulary.PhaseFailed),
 		vocabulary.TurnFailureReason: string(vocabulary.FailureEffectInvalid),
-		vocabulary.TurnFailureRef:    detail,
+		vocabulary.TurnFailureRef:    ref.String(),
 	}
 	for predicate, expected := range want {
 		got := testinfra.ObjectsFor(state, predicate.String())
@@ -649,6 +676,75 @@ func TestIntegration_AFailedTurnRecordsAClosedReasonAndADetailReference(t *testi
 	stored, _ := testinfra.FirstObject(state, vocabulary.TurnFailureReason.String()).(string)
 	if _, err := vocabulary.ParseFailureReason(stored); err != nil {
 		t.Fatalf("the graph carries a failure reason outside the closed set: %v", err)
+	}
+
+	// And the explanation is reachable from the graph alone, which is what makes
+	// the closed code survivable: an operator follows the reference the turn
+	// carries and reads the sentence that never touched a triple.
+	recorded, _ := testinfra.FirstObject(state, vocabulary.TurnFailureRef.String()).(string)
+	parsed, err := content.ParseRef(recorded)
+	if err != nil {
+		t.Fatalf("the reference on the turn entity is not a storage reference: %v", err)
+	}
+	resolved, err := live.content.GetFailureDetail(t.Context(), parsed)
+	if err != nil {
+		t.Fatalf("resolving the failure detail the turn points at: %v", err)
+	}
+	if resolved.Message != detail.Message {
+		t.Fatalf("the resolved detail reads %q, want %q", resolved.Message, detail.Message)
+	}
+}
+
+// The player's words have to be reachable from the graph alone after the turn
+// exists — that is the entire content of "acknowledged only after the turn
+// durably exists", applied to the move rather than to the paperwork.
+func TestIntegration_AnAcceptedTurnCarriesAResolvableReferenceToThePlayersWords(t *testing.T) {
+	live := startTurns(t)
+	action := live.action("act-words")
+
+	acceptance, err := live.recorder.Accept(t.Context(), action)
+	if err != nil {
+		t.Fatalf("Accept: %v", err)
+	}
+	state := live.harness.AwaitEntity(t, acceptance.TurnEntityID)
+
+	refs := testinfra.ObjectsFor(state, vocabulary.TurnActionRef.String())
+	if len(refs) != 1 {
+		t.Fatalf("the accepted turn holds %d action references: %v", len(refs), refs)
+	}
+	recorded, _ := refs[0].(string)
+	ref, err := content.ParseRef(recorded)
+	if err != nil {
+		t.Fatalf("the reference on the turn entity is not a storage reference: %v", err)
+	}
+
+	// Read through a store this test builds fresh, the way a restarted process
+	// would: only the reference on the graph survives a crash.
+	backend, err := content.NewObjectStore(t.Context(), live.harness.Client,
+		content.WithBucket("TURN_CONTENT_"+live.namespace))
+	if err != nil {
+		t.Fatalf("NewObjectStore: %v", err)
+	}
+	t.Cleanup(func() { backend.Close() }) //nolint:errcheck // best effort in teardown
+	reader, err := content.NewStore(backend)
+	if err != nil {
+		t.Fatalf("content.NewStore: %v", err)
+	}
+
+	got, err := reader.GetAction(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("resolving %s from the turn entity: %v", ref, err)
+	}
+	if got.Text != action.Text {
+		t.Fatalf("the recovered action reads %q, want %q", got.Text, action.Text)
+	}
+	if got.Channel.ReplyTo != action.Channel.ReplyTo {
+		t.Fatalf("the recovered action's reply address is %q, want %q; the egress adapter resolves the "+
+			"player's delivery target from it", got.Channel.ReplyTo, action.Channel.ReplyTo)
+	}
+	if !got.ArrivedAt.Equal(action.ArrivedAt) {
+		t.Fatalf("the recovered action arrived at %v, want %v; deadline evaluation uses arrival time and "+
+			"never processing time", got.ArrivedAt, action.ArrivedAt)
 	}
 }
 
@@ -687,7 +783,7 @@ func TestIntegration_AnApplierRejectionFailsTheTurnWithTheCodeTheApplierClassifi
 		t.Fatalf("the applier's rejection carries no closed failure code: %v", applyErr)
 	}
 	if _, err := live.recorder.Fail(
-		t.Context(), acceptance.TurnID, acceptance.TurnEntityID, reason, ""); err != nil {
+		t.Context(), acceptance.TurnID, acceptance.TurnEntityID, reason, content.Ref{}); err != nil {
 		t.Fatalf("Fail: %v", err)
 	}
 

@@ -442,3 +442,121 @@ func TestMergeTriples_StillRejectsAWriteThatChangesNothing(t *testing.T) {
 		t.Fatal("the store issued an empty request")
 	}
 }
+
+// ------------------------------------------------------- the read fan-in
+
+// A batch that came back short is a NORMAL outcome with a per-id explanation,
+// and the failure it replaces was invisible: before ADR-084 a not-found id was
+// simply absent from the list, so a caller could not tell an entity that does
+// not exist from one the read did not reach. Passing the accounting on is the
+// point.
+func TestGetEntities_ReportsEveryRequestedIDItDidNotReturn(t *testing.T) {
+	body, err := json.Marshal(graph.EntityBatchResponse{
+		Entities: []graph.EntityState{*validEntity()},
+		Missing:  []graph.MissingEntity{{ID: otherEntity, Reason: graph.MissingNotFound}},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	requester := &fakeRequester{reply: body}
+
+	const unaccounted = "c360.semmachina.world1.starter.character.wren"
+	result, err := newStore(t, requester).GetEntities(
+		t.Context(), []string{testEntityID, otherEntity, unaccounted})
+	if err != nil {
+		t.Fatalf("GetEntities: %v", err)
+	}
+	if requester.subject != graphio.SubjectQueryBatch {
+		t.Fatalf("the batch read went to %q", requester.subject)
+	}
+	if len(result.Entities) != 1 || result.Entities[0].ID != testEntityID {
+		t.Fatalf("hydrated %d entities: %+v", len(result.Entities), result.Entities)
+	}
+
+	reasons := map[string]graph.MissingReason{}
+	for _, missing := range result.Missing {
+		reasons[missing.ID] = missing.Reason
+	}
+	if reasons[otherEntity] != graph.MissingNotFound {
+		t.Fatalf("%s was reported as %q, want the handler's own reason", otherEntity, reasons[otherEntity])
+	}
+	// The id the response mentioned in NEITHER list is the one a caller cannot
+	// see for itself, so the accounting has to be total over the request.
+	if reasons[unaccounted] != graph.MissingUnknown {
+		t.Fatalf("an id the response never mentioned was reported as %q, want %q; without it a dropped id "+
+			"disappears from the accounting entirely", reasons[unaccounted], graph.MissingUnknown)
+	}
+}
+
+func TestGetEntities_SendsNothingForAnEmptyRequest(t *testing.T) {
+	requester := &fakeRequester{}
+
+	result, err := newStore(t, requester).GetEntities(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("GetEntities: %v", err)
+	}
+	if len(result.Entities) != 0 || len(result.Missing) != 0 {
+		t.Fatalf("an empty request produced %+v", result)
+	}
+	if requester.requests != 0 {
+		t.Fatal("the store issued a round trip for an empty id list")
+	}
+}
+
+// The authoritative-state contract applies to every decoded entity, exactly as
+// it does on the single read: poisoned stored bytes become a typed refusal here
+// rather than half-usable state in a persona's context.
+func TestGetEntities_RefusesAPoisonedEntityInTheBatch(t *testing.T) {
+	poisoned := validEntity()
+	poisoned.ID = ""
+	body, err := json.Marshal(graph.EntityBatchResponse{Entities: []graph.EntityState{*poisoned}})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	if _, err := newStore(t, &fakeRequester{reply: body}).GetEntities(
+		t.Context(), []string{testEntityID}); err == nil {
+		t.Fatal("a batch carrying an entity that fails the decoded-state contract was accepted")
+	}
+}
+
+// An index still building is the one wrong answer that would be SILENT: a
+// partial keyset reads as a smaller scene rather than as an error. Upstream
+// refuses to serve one, and the refusal has to arrive as something a caller can
+// tell from "that scene is empty".
+func TestIncomingRelationships_MapsTheNotReadyCodeToAMatchableSentinel(t *testing.T) {
+	requester := &fakeRequester{err: classified(graph.ErrorCodeIndexNotReady)}
+
+	_, err := newStore(t, requester).IncomingRelationships(t.Context(), testEntityID)
+	if !errors.Is(err, graphio.ErrIndexNotReady) {
+		t.Fatalf("IncomingRelationships returned %v, want ErrIndexNotReady", err)
+	}
+	var ce *errs.ClassifiedError
+	if !errors.As(err, &ce) {
+		t.Fatal("the classified error was swallowed by the sentinel")
+	}
+}
+
+func TestIncomingRelationships_DecodesTheQueryEnvelope(t *testing.T) {
+	body, err := json.Marshal(graph.NewQueryResponse(graph.IncomingRelationshipsData{
+		Relationships: []graph.IncomingEntry{
+			{FromEntityID: otherEntity, Predicate: "world.location.current"},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	requester := &fakeRequester{reply: body}
+
+	edges, err := newStore(t, requester).IncomingRelationships(t.Context(), testEntityID)
+	if err != nil {
+		t.Fatalf("IncomingRelationships: %v", err)
+	}
+	if requester.subject != graphio.SubjectIndexQueryIncoming {
+		t.Fatalf("the reverse-edge read went to %q", requester.subject)
+	}
+	if len(edges) != 1 || edges[0].FromEntityID != otherEntity {
+		t.Fatalf("decoded %+v, want the one incoming edge; a reader that unwrapped the envelope wrong sees "+
+			"an empty room and reports no error", edges)
+	}
+}

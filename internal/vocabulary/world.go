@@ -123,6 +123,31 @@ var referenceObjectKinds = map[Predicate][]EntityKind{
 	WorldRelationOwesDebt:   {EntityKindCharacter},
 }
 
+// sceneMembershipPredicates is the closed set of edges that put an entity IN a
+// scene.
+//
+// Membership is asserted BY the member — a character carries
+// world.location.current pointing at the scene, and the scene says nothing about
+// who is in it — so "who is here" is answered by reading the edges pointing at
+// the scene. Those edges are not all membership: the engine's own turn entities
+// point at the scene too (turn.action.scene), one per turn ever taken there, and
+// a reader that took every incoming edge as a member would hand a persona every
+// turn in the campaign's history and call it the room.
+//
+// So the set is CLOSED and stated here, next to the ontology it belongs to,
+// rather than inferred at the reader. When place becomes first-class (roadmap
+// stage 2) this is the line that grows a second member, not the context
+// assembler.
+var sceneMembershipPredicates = []Predicate{WorldLocationCurrent}
+
+// SceneMembershipPredicates returns the closed set of edges that put an entity
+// in a scene.
+func SceneMembershipPredicates() []Predicate { return slices.Clone(sceneMembershipPredicates) }
+
+// IsSceneMembership reports whether an edge pointing at a scene means its source
+// is IN that scene.
+func IsSceneMembership(p Predicate) bool { return slices.Contains(sceneMembershipPredicates, p) }
+
 // SubjectKindsFor returns the entity kinds that may carry p as a fact. The
 // bool is false for any predicate that is not a world fact.
 func SubjectKindsFor(p Predicate) ([]EntityKind, bool) {

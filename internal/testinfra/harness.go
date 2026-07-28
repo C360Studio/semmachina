@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/payloadregistry"
+	graphindex "github.com/c360studio/semstreams/processor/graph-index"
 	graphingest "github.com/c360studio/semstreams/processor/graph-ingest"
 	"github.com/testcontainers/testcontainers-go"
 
@@ -70,6 +72,10 @@ type Harness struct {
 	// Registry is the payload registry graph-ingest decodes with, populated by
 	// the same RegisterPayloads a binary bootstrap calls.
 	Registry *payloadregistry.Registry
+
+	indexOnce sync.Once
+	index     component.LifecycleComponent
+	indexErr  error
 
 	stop func()
 }
@@ -163,14 +169,67 @@ func start() (*Harness, error) {
 		return nil, err
 	}
 
-	return &Harness{
-		Client:   client.Client,
-		Registry: registry,
-		stop: func() {
-			_ = ingest.Stop(5 * time.Second)
-			_ = client.Terminate()
-		},
-	}, nil
+	harness := &Harness{Client: client.Client, Registry: registry}
+	harness.stop = func() {
+		if harness.index != nil {
+			_ = harness.index.Stop(5 * time.Second)
+		}
+		_ = ingest.Stop(5 * time.Second)
+		_ = client.Terminate()
+	}
+	return harness, nil
+}
+
+// RequireIndex starts the real graph-index component and returns once it is
+// running.
+//
+// It is LAZY rather than part of the shared startup because most packages never
+// ask a reverse-edge question, and a component that watches ENTITY_STATES and
+// maintains six KV buckets is not free to run beside tests that do not need it.
+// The packages that do need it — anything answering "who is in this scene",
+// which the graph cannot answer from the scene's own triples — call this.
+//
+// It is the REAL component through its production factory and lifecycle, for the
+// same reason graph-ingest is: the index is eventually consistent off a KV
+// watch, and a fake that answered instantly would hide the one property a caller
+// has to design around.
+func (h *Harness) RequireIndex(t *testing.T) {
+	t.Helper()
+	h.indexOnce.Do(func() {
+		h.index, h.indexErr = startGraphIndex(context.Background(), h.Client, h.Registry)
+	})
+	if h.indexErr != nil {
+		t.Fatalf("real graph-index is required and did not start: %v", h.indexErr)
+	}
+}
+
+// startGraphIndex boots the real graph-index component against the real broker.
+func startGraphIndex(
+	ctx context.Context,
+	client *natsclient.Client,
+	registry *payloadregistry.Registry,
+) (component.LifecycleComponent, error) {
+	deps := component.Dependencies{
+		NATSClient:      client,
+		PayloadRegistry: registry,
+		Logger:          slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})),
+	}
+
+	created, err := graphindex.CreateGraphIndex(nil, deps)
+	if err != nil {
+		return nil, fmt.Errorf("create graph-index: %w", err)
+	}
+	index, ok := created.(component.LifecycleComponent)
+	if !ok {
+		return nil, fmt.Errorf("graph-index is a %T, not a LifecycleComponent", created)
+	}
+	if err := index.Initialize(); err != nil {
+		return nil, fmt.Errorf("initialize graph-index: %w", err)
+	}
+	if err := index.Start(ctx); err != nil {
+		return nil, fmt.Errorf("start graph-index: %w", err)
+	}
+	return index, nil
 }
 
 // startGraphIngest boots the real graph-ingest component against the real

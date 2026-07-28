@@ -169,7 +169,19 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 
 ## 7. Personas and context assembly
 
-- [ ] 7.0 Land the ObjectStore seam and `turn.action.ref` — **before the action is acked,
+- [x] 7.0 `internal/content` wraps upstream `storage/objectstore` (no hand-rolled store).
+      The whole canonical `PlayerAction` is stored, with `ReplyTo` and `ArrivedAt` asserted
+      by name; the ref rides **inside** the atomic create, so the birth record is one
+      `entity.create` carrying phase, player, scene and `turn.action.ref`; the key is
+      `turn/<turn_id>/<slot>` where slot is the ref predicate's own category segment, so
+      predicate and object location cannot disagree; and the object is written before the
+      create, proven by a shared write journal because ordering is invisible in any
+      end-state assertion. Stored bytes are canonical payload JSON rather than a
+      `BaseMessage` envelope — `NewBaseMessage` mints a UUID with no override, so an
+      envelope-wrapped re-put writes different bytes to the same key and "identical re-put"
+      would be true of the location and false of the content. `Fail` now takes a typed ref,
+      so "detail reaches the graph as a reference or not at all" is a type rather than a
+      comment. Original: land the ObjectStore seam and `turn.action.ref` — **before the ack,
       not after**. The text is fiction (M1) and exceeds the triple object budget, so it can
       only reach the graph as a ref, and group 6 had no store. Until this lands, a crash in
       `accepted` leaves a turn the rule pack can re-trigger and the adjudicator cannot
@@ -184,18 +196,27 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       prose is a correctness bug, an orphan is only garbage). Same store backs the failure
       detail ref: until it exists, effect-application's "record the failed target" is not
       satisfiable
-- [ ] 7.1 Implement the context assembler component: fixed scene-scoped query (scene +
-      members + 1-hop) executed at persona run time; test that post-submission state
-      changes are reflected (execution-time reads). Filter stub entities via
-      `EntityState.IsStub()` (F11) — a referenced-but-undelivered entity is queryable with
-      no facts, and handing one to a persona is a silent context hole
+- [x] 7.1 `internal/scene`: fixed shape, **five reads always** — turn → scene (read off the
+      turn, never supplied) → scene's incoming edges → one batch for members → one batch for
+      their 1-hop neighbours. No recursion, so depth-1 is structural rather than a
+      parameter. The bound is enforced *before* each batch is issued and **refuses rather
+      than truncates**, because a persona handed part of a room narrates a room that is not
+      there; every view carries its own size, tested to move with the context. Stubs are
+      excluded with a reported reason, via the envelope discriminator — a test builds a
+      fully-born entity still carrying the stub marker triple and asserts it is *included*,
+      which a marker-based check would fail. The turn's own 1-hop is included too: without
+      `turn.action.player` the adjudicator sees three people in a room and cannot tell which
+      one is acting
 - [ ] 7.2 Before re-running a persona on a resumed stage, check whether that stage's
       artifact ref triple is already on the turn — present means the interrupted attempt
       actually finished, so advance instead of re-executing. The phase is written on stage
       *entry*, so it cannot distinguish "entered" from "finished"; the artifact ref can.
       This turns the re-billed call the resume path currently costs into a no-op, with no
-      CAS required. Then: configure the adjudicator loop (mid model slot per F5) + terminal
-      tool enforcing
+      CAS required. **The assembler deliberately does not resolve `turn.action.ref`** — it
+      is a graph query, and coupling it to the content store would put fiction-fetching in a
+      component with no business reading fiction — so the prompt builder here must follow
+      that reference itself, or the adjudicator receives a scene and no action. Then:
+      configure the adjudicator loop (mid model slot per F5) + terminal tool enforcing
       the banded verdict schema and closed classes **in the executor**, not via provider
       strict-mode (F4); emit only rule-matchable scalar triples and carry banded intents by
       reference (F6); rejection test for out-of-vocabulary exit; `MaxIterations` cap with
@@ -240,7 +261,12 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 ## 10. Composition, mock-LLM E2E, and gates
 
 - [ ] 10.1 Compose `cmd/semmachina`: flow config wiring importer, intake, rules, personas,
-      dice, applier, ledger, adapters; `RegisterPayloads` called at every binary's bootstrap
+      dice, applier, ledger, adapters, **plus `graph-index`** — scene membership is asserted
+      by the member (`world.location.current` → scene), so "who is here" is a reverse lookup
+      the assembler answers via the incoming index rather than by scanning the world. Its
+      readiness gate matters: a mid-build index returns a partial keyset, which reads as a
+      smaller scene rather than an error, so boot must wait on it the same way it waits on
+      the import-completion marker; `RegisterPayloads` called at every binary's bootstrap
       (grep-check across `cmd/`). **Guard instantiation: import only when the world instance
       does not already exist** — a boot-time import into a live campaign resets every
       template-declared fact and drops play-created relationships, which is the exact

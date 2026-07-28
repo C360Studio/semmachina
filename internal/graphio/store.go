@@ -53,6 +53,21 @@ const (
 	SubjectEntityUpdateWithTriples = "graph.mutation.entity.update_with_triples"
 	// SubjectQueryEntity is the single-entity read.
 	SubjectQueryEntity = "graph.ingest.query.entity"
+	// SubjectQueryBatch is the many-entities read. One round trip for a set of
+	// known ids, with per-id omissions reported rather than silently shortening
+	// the list (ADR-084).
+	SubjectQueryBatch = "graph.ingest.query.batch"
+	// SubjectIndexQueryIncoming is graph-index's reverse-edge read: every
+	// (source, predicate) pointing AT an entity.
+	//
+	// It is served by graph-index rather than graph-ingest, which is why it is
+	// the one subject here in a different namespace. The engine needs it because
+	// membership in a scene is asserted by the MEMBER — a character carries
+	// world.location.current pointing at the scene, and the scene says nothing
+	// about who is in it — so "who is here" is a reverse lookup, and reverse
+	// lookups are what that index exists for. Scanning the world and filtering
+	// would be a hand-rolled index over data the substrate already indexes (M6).
+	SubjectIndexQueryIncoming = "graph.index.query.incoming"
 )
 
 // DefaultTimeout bounds one request/reply round trip.
@@ -70,6 +85,15 @@ var (
 	// ErrEntityNotFound reports a read or must-exist write against an absent
 	// entity.
 	ErrEntityNotFound = errors.New("graph entity not found")
+	// ErrIndexNotReady reports a reverse-edge read that arrived while the index
+	// was still building.
+	//
+	// It is named rather than folded into a generic failure because the WRONG
+	// answer here is silent: an index mid-build would otherwise return a short
+	// list, and a short list of scene members reads as a smaller scene rather
+	// than as an error. Upstream refuses to serve a partial keyset; this sentinel
+	// is what lets a caller tell "wait and retry" from "that scene is empty".
+	ErrIndexNotReady = errors.New("graph index is not ready")
 )
 
 // Requester is the classified request surface the store needs.
@@ -220,6 +244,115 @@ func (s *Store) GetEntity(ctx context.Context, id string) (*graph.EntityState, e
 		return nil, fmt.Errorf("entity %s: %w", id, err)
 	}
 	return &state, nil
+}
+
+// BatchResult is a many-entity read.
+//
+// Missing is part of the result rather than an error because a batch that came
+// back short is a NORMAL outcome with a per-id explanation, and the failure it
+// replaces was invisible: before ADR-084 a not-found id was simply absent from
+// the list, so a caller could not tell an entity that does not exist from one
+// the read did not reach — and nothing checked. A reader that ignores this field
+// is a reader that will one day assemble a smaller world and not know it.
+type BatchResult struct {
+	// Entities are the entities that hydrated, in the order the graph returned
+	// them.
+	Entities []graph.EntityState
+	// Missing names every requested id that is not in Entities, with a reason.
+	// It is total over the request: an id the response accounted for in neither
+	// list is reported as graph.MissingUnknown rather than dropped.
+	Missing []graph.MissingEntity
+}
+
+// GetEntities reads many entities in one round trip.
+//
+// It exists so a scene-scoped read is ONE request whose size is the scene's,
+// rather than N requests whose count is the scene's — the difference between a
+// bounded retrieval and a fan-out that grows with the world.
+func (s *Store) GetEntities(ctx context.Context, ids []string) (BatchResult, error) {
+	if len(ids) == 0 {
+		return BatchResult{}, nil
+	}
+	request, err := json.Marshal(struct {
+		IDs []string `json:"ids"`
+	}{IDs: ids})
+	if err != nil {
+		return BatchResult{}, fmt.Errorf("encode batch query for %d ids: %w", len(ids), err)
+	}
+
+	reply, err := s.requester.RequestClassified(ctx, SubjectQueryBatch, request, s.timeout)
+	if err != nil {
+		return BatchResult{}, fmt.Errorf("batch query for %d ids: %w", len(ids), err)
+	}
+	var response graph.EntityBatchResponse
+	if err := json.Unmarshal(reply, &response); err != nil {
+		return BatchResult{}, fmt.Errorf("decode batch query response: %w", err)
+	}
+
+	// The authoritative-state contract applies to every decoded entity, exactly
+	// as it does on the single read: poisoned stored bytes become a typed
+	// refusal here rather than half-usable state in a persona's context.
+	for idx := range response.Entities {
+		if err := graph.ValidateDecodedEntityState(&response.Entities[idx]); err != nil {
+			return BatchResult{}, fmt.Errorf("entity %s: %w", response.Entities[idx].ID, err)
+		}
+	}
+
+	// Reconcile CLIENT-side so the answer is total over the request. Upstream
+	// documents this as the caller's job (graph.MissingUnknown exists for it),
+	// and without it a response that mentioned an id in neither list would
+	// disappear from the accounting entirely.
+	accounted := make(map[string]bool, len(response.Entities)+len(response.Missing))
+	for idx := range response.Entities {
+		accounted[response.Entities[idx].ID] = true
+	}
+	for _, missing := range response.Missing {
+		accounted[missing.ID] = true
+	}
+	result := BatchResult{Entities: response.Entities, Missing: response.Missing}
+	for _, id := range ids {
+		if !accounted[id] {
+			result.Missing = append(result.Missing, graph.MissingEntity{ID: id, Reason: graph.MissingUnknown})
+			accounted[id] = true
+		}
+	}
+	return result, nil
+}
+
+// IncomingRelationships returns every edge pointing AT an entity.
+//
+// This is the reverse lookup the graph itself cannot answer: a triple lives on
+// its subject, so "who points at this scene" is not readable from the scene.
+// graph-index maintains that direction, and asking it is the alternative to
+// scanning the world — which would be a hand-rolled index over data the
+// substrate already indexes.
+//
+// The result is EVERY incoming edge, not only the ones a caller cares about:
+// filtering by predicate is the caller's, because which predicates constitute
+// membership is game vocabulary and this client is deliberately vocabulary-blind.
+func (s *Store) IncomingRelationships(ctx context.Context, entityID string) ([]graph.IncomingEntry, error) {
+	if entityID == "" {
+		return nil, errors.New("incoming query requires an entity id")
+	}
+	request, err := json.Marshal(struct {
+		EntityID string `json:"entity_id"`
+	}{EntityID: entityID})
+	if err != nil {
+		return nil, fmt.Errorf("encode incoming query for %s: %w", entityID, err)
+	}
+
+	reply, err := s.requester.RequestClassified(ctx, SubjectIndexQueryIncoming, request, s.timeout)
+	if err != nil {
+		if codeOf(err) == graph.ErrorCodeIndexNotReady {
+			return nil, fmt.Errorf("incoming edges of %s: %w: %w", entityID, ErrIndexNotReady, err)
+		}
+		return nil, fmt.Errorf("incoming edges of %s: %w", entityID, err)
+	}
+	var response graph.IncomingQueryResponse
+	if err := json.Unmarshal(reply, &response); err != nil {
+		return nil, fmt.Errorf("decode incoming edges of %s: %w", entityID, err)
+	}
+	return response.Data.Relationships, nil
 }
 
 // MergeOption adjusts one merge request.

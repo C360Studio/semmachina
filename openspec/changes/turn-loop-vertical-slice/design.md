@@ -335,6 +335,17 @@ test). Consequence for the slice: **any readiness check that treats "the ID reso
 "the entity is loaded" will read half-entities** — relevant to boot/world-ready checks in
 task 10.1 and to the context assembler in 7.1, which must not hand a persona a stub.
 
+**Two refinements found while building the context assembler.** First, **only the create and
+fact-arrival lanes mint referential stubs** — `ensureRelationshipTargetsExist` runs on
+`entity.create`/`create_with_triples` and the fact path, and upstream states explicitly that
+the merge lane does not. So merging a *new* reference onto an existing entity leaves the
+target **genuinely absent**, not stubbed: anything reasoning about "referenced but unborn"
+must know which lane created the reference. Second, `IsStub()` is
+`MessageType.Equal(StubMessageType)` — it keys on the stub envelope, not on a zero or
+missing one, so an entity with a malformed envelope is *not* a stub (upstream pins this with
+`TestEntityState_IsStub_KeysOnEnvelopeNotTriple`). The envelope check is still the right
+discriminator; the reason it works is narrower than "any invalid envelope".
+
 Related, and a genuine sharp edge: re-import convergence and destructiveness are the same
 mechanism. `graph.MergeTriples` replaces by (subject, predicate), so re-importing a template
 into a *living* campaign resets every predicate the template declares — including
@@ -353,6 +364,22 @@ package is rejected at the write gate. The importer's validation therefore appli
 distinct rules — `types.ValidateEntityID` for mapped IDs, `vocabulary.ParsePredicate` for
 every predicate in `entities.jsonl` — and must reject bad predicates at import time with a
 reason naming the offending line, rather than letting them fail later at materialization.
+
+### F17 — Flat per-turn cost is true of tokens and not yet of bytes on the wire
+
+Context assembly is where the flat-per-turn-cost claim is actually enforced: a fixed
+scene-scoped query, capped before each batch read, refusing rather than truncating (a
+persona handed part of a room narrates a room that is not there). That bound holds — the
+assembled context is scene-bounded regardless of world size.
+
+But `turn.action.scene` accumulates on the scene's incoming index: one edge per turn ever
+taken there. The assembler filters them out, so *context* stays bounded, while the incoming
+*query* returns O(campaign history) edges every turn. Per-turn token cost is flat; per-turn
+retrieval transport is not. It scales with campaign length rather than world size, so it is
+not urgent — but it is exactly the kind of asymmetry the cost pins should be honest about,
+and it is a reminder that "bounded context" and "bounded retrieval" are different claims.
+Stage 2's place ontology dissolves it: turns point at the scene, members point at the
+location, and the two indexes stop sharing a key.
 
 ### F16 — A runtime gate over proposals is not an authoring gate over data
 
