@@ -68,6 +68,12 @@ SemStreams repo review; read it before scoping anything).
 - **Cost is a policy, not a forecast:** per-session budget enforced by admission
   gate + spend ledger; per-turn cost is flat because context is
   graph-retrieval-bounded, never append-everything.
+- **Worlds are data; the engine is world-agnostic.** Starting state, rule packs,
+  and persona configs ship as package-shaped data (template-local logical IDs,
+  versioned manifest) loaded through an importer. A **template** is an immutable
+  versioned product; a **world instance** is a mutable campaign materialized from
+  it into a world namespace — an update never silently rewrites a living
+  campaign. Engine code never hardcodes a world.
 
 ## MVP Scope
 
@@ -82,24 +88,39 @@ Ordered; each stage is one or more OpenSpec changes. Later stages stay in the
 vision but are NOT on the active MVP path.
 
 1. **Turn-loop engine spike** (active: `turn-loop-vertical-slice`) — durable turn
-   state, idempotent effects, validated closed-vocabulary mutations, crash tests.
-2. **Creator surface** — minimal Svelte client: action in, narration out, and a
+   state, idempotent effects, validated closed-vocabulary mutations, crash tests;
+   loads the starter world from a package-shaped fixture via an importer.
+2. **Template proof** — instantiate the same starter world twice; swap the
+   narrator/tone pack; swap fiction-heavy vs mechanics-heavy rule packs; two
+   materially different experiences on identical engine code. The first
+   falsifiable test of the tunability claim ("the dial is rule-pack selection,
+   not architecture").
+3. **Creator surface** — minimal Svelte client: action in, narration out, and a
    **resolution card** (plausibility, risk, modifiers, roll, consequence) so
    outcomes are legible, never arbitrary; typed progress/error/reconnect.
-3. **Scene completion + chronicler** — salience marking, vignette emission,
+4. **Scene completion + chronicler** — salience marking, vignette emission,
    Markdown preview/export (play-to-draft becomes demonstrable).
-4. **Continuity checking + retrieval evaluation** — the ops-role diff persona and
+5. **Continuity checking + retrieval evaluation** — the ops-role diff persona and
    an RPG-shaped retrieval-eval corpus (theme-spanning ground-truth queries).
-5. **Campaign/scene lifecycle** — `Participant` workflows, resume, curated
+6. **Campaign/scene lifecycle** — `Participant` workflows, resume, curated
    tone/crunch rule-pack presets.
-6. **Epistemic model** — canonical truth vs character belief vs player knowledge
+7. **Epistemic model** — canonical truth vs character belief vs player knowledge
    vs narration-revealed; required BEFORE NPC cognition, else retrieval produces
    spoilers and omniscient NPCs.
-7. **NPC cognition + cost governance** — tiered NPCs, decision/voice split,
+8. **NPC cognition + cost governance** — tiered NPCs, decision/voice split,
    admission-gate LOD (needs the upstream governance engine ask).
-8. **Deferred**: human-GM editing surface, sandboxed user-authored rules, hosting,
-   federation, multi-tenancy, detailed inventory/economy. The hosted cost model in
-   the founding doc is an assumptions register, not validated economics.
+9. **Deferred**: human-GM editing surface, sandboxed user-authored rules, hosting,
+   federation, multi-tenancy, detailed inventory/economy, and the **world-template
+   marketplace**. Marketplace principles, recorded now so the package shape stays
+   compatible: templates are immutable/content-addressed and composable from typed
+   packs (world, mechanics, persona, media — components stay first-party);
+   community packages are hostile input with capability *requests* resolved as
+   engine ∩ host ∩ user policy (a package never grants itself authority); rollout
+   ladder is first-party worlds → import/export/fork + private sharing → curated
+   free gallery → verified publishers → paid packages; template purchase stays
+   separate from runtime inference cost. Foundry VTT manifests are the precedent.
+   The hosted cost model in the founding doc is an assumptions register, not
+   validated economics.
 
 ## Standing Technical Conventions
 

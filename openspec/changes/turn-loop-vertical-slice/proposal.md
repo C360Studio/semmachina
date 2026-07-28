@@ -50,9 +50,15 @@ canonical narration, and a retrievable response after reconnect.
   verdict, roll, effects, narration) — `ENTITY_STATES` is current truth, the ledger is the
   archive the writer loop replays. Replay honesty: deterministic parts re-execute exactly;
   LLM output replays by preservation — re-running a narrator is a new rendition.
-- **Seeded scene**: a hardcoded starting world (character, location, a few items) written
-  as entities with 6-part IDs. Context for both personas is a fixed scene-scoped graph
-  query — deliberately NOT thematic retrieval (see Non-goals).
+- **Package-shaped starter world + importer**: the starting world (character, location, a
+  few items) lives in `fixtures/worlds/starter/` — `manifest.yaml` (v0: id, name, version,
+  engine-compat, nothing else), `entities.jsonl`, `rules/`, `personas/` — loaded by an
+  importer component that deterministically maps template-local logical IDs into the world
+  namespace and materializes entities through the standard Graphable → graph-ingest path.
+  A loader, not a package manager: engine code never hardcodes a world. (The template
+  proof — instantiate twice, swap packs — is Sequencing stage 2, not this slice.) Context
+  for both personas is a fixed scene-scoped graph query — deliberately NOT thematic
+  retrieval (see Non-goals).
 - **Token-free E2E harness**: mock-LLM pattern (re-derived from semdragon, not imported)
   so the full loop runs deterministically in CI without inference.
 
@@ -80,6 +86,9 @@ Nothing breaking — greenfield.
   prose-to-ObjectStore with ref-triples, closed exit vocabulary, no direct mutation.
 - `campaign-ledger`: the append-only completed-turn manifest — record shape, immutability,
   what replay may re-execute vs must preserve.
+- `world-loading`: the template→instance boundary — package layout, manifest v0,
+  template-local logical IDs with deterministic world-namespace mapping, materialization
+  through graph-ingest only.
 
 ### Modified Capabilities
 
@@ -104,6 +113,10 @@ Boundary discipline for the slice; each of these is a future change, not scope c
   upstream engine ask, never built here.
 - **No tunability dials** (fiction↔crunch rule-pack selection, tone packs, model tiers) —
   one rule pack, one configuration.
+- **No marketplace machinery** — no lock files, digests, signing, dependency resolution,
+  conflict declarations, forking lineage, or update/migration of living campaigns. The
+  slice bakes in exactly the un-retrofittable parts (package layout, template-local IDs,
+  manifest v0) so all of that can layer on later.
 - **No multi-tenancy or federation** — instance-per-world at the process boundary.
 
 ## Classification
@@ -120,8 +133,9 @@ here.
 - `go.mod` gains `github.com/c360studio/semstreams` pinned to the latest `v1.0.0-beta.*`
   tag (retarget v1 on release). Beta API drift until v1 is the main schedule risk; the
   mitigation is the pin plus filing upstream issues instead of workarounds.
-- New: `cmd/semmachina`, flow/persona/rule-pack configs, dice component package, effect
-  applier component, campaign-ledger stream + manifest writer, seed data, mock-LLM E2E
+- New: `cmd/semmachina`, flow configs, the `fixtures/worlds/starter/` world package
+  (manifest, entities, rules, personas), world importer component, dice component package,
+  effect applier component, campaign-ledger stream + manifest writer, mock-LLM E2E
   harness. All greenfield — no existing code or consumers affected.
 - Requires a local NATS JetStream (and, for live play, an LLM endpoint via
   `model_registry`); CI uses the mock-LLM path only.

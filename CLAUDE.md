@@ -76,6 +76,10 @@ parsing prose.
   because context is graph-retrieval-bounded, never append-everything.
 - **The fiction↔crunch dial is rule-pack selection, not architecture.** Tone and
   hardness are data (JSON rule packs, persona config, `model_registry` tiers).
+- **Worlds are data; the engine is world-agnostic.** Starting state + rules +
+  personas ship as a package-shaped fixture (template-local IDs, manifest v0)
+  loaded via an importer through graph-ingest. Template = immutable versioned
+  product; world instance = mutable campaign. Never hardcode a world in Go.
 - **Do not compete on simulation depth.** The adjudicator is compressed
   simulation — LLM judgment substituting for hand-built systems.
 
