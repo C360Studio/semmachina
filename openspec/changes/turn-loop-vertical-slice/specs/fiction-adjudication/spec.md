@@ -35,6 +35,24 @@ occur before effect application — band selection is fully determined by the ro
 - **WHEN** the adjudicator emits a verdict with `requires_roll` false
 - **THEN** the verdict contains exactly one `auto` effect-intent band
 
+### Requirement: The adjudicator holds the roll gate
+The adjudicator's reported `requires_roll` SHALL be authoritative, and a verdict SHALL NOT
+be rejected for disagreeing with the engine's advisory (plausibility, risk) mapping. The
+disagreement SHALL be recorded as structured data on the resolved turn. The declared band
+set SHALL follow the reported value, so the engine never synthesizes a band the adjudicator
+did not author.
+
+#### Scenario: Verdict disagreeing with the advisory mapping proceeds
+- **WHEN** the adjudicator reports `requires_roll` false for an action whose plausibility
+  and risk classes would map to true
+- **THEN** the verdict is accepted, the turn resolves through its single `auto` band, and
+  the gate disagreement is recorded on the turn
+
+#### Scenario: Engine never fabricates a band
+- **WHEN** a verdict's reported roll gate disagrees with the mapping
+- **THEN** the bands validated and applied are exactly those the adjudicator declared, and
+  no empty band is synthesized to satisfy the mapping
+
 ### Requirement: Fiction boundary
 Only the adjudicator (and other personas) SHALL read the action's free text. No rule
 condition or non-persona component SHALL parse, branch on, or transform it.

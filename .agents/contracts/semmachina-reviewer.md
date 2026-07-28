@@ -115,9 +115,12 @@ mechanism rather than asserting from memory.
 ### B. Payload registry — *trigger: a new message/payload/fact type, or any NATS publish*
 
 - **Every polymorphic publish wraps `BaseMessage`**, even when the one known consumer reads raw.
-- A new payload has all three: factory registration in a `payload_registry.go` `init()`, alias-based
-  `MarshalJSON` (type alias or infinite recursion), and a package import (blank if needed) in every binary
-  that must run registration. Confirm all three, not just the struct. (See the `new-payload` skill.)
+- A new payload has all three: factory registration in `RegisterPayloads(reg *payloadregistry.Registry)
+  error`, alias-based `MarshalJSON` that does **not** wrap `BaseMessage` (the publisher owns the
+  envelope; a wrapping payload double-envelopes), and a `RegisterPayloads` call at every binary's
+  bootstrap. Confirm all three, not just the struct. The package-level registry singleton and
+  `init()` registration were retired upstream in beta.18 — a `payload_registry.go` with an `init()`
+  is a finding, not a pass. (See the `new-payload` skill.)
 - Round-trip tests use the production decoder, not an anonymous shape cast.
 
 ### C. Graph and state ownership — *trigger: graph mutation, KV bucket, Graphable, lifecycle*

@@ -159,6 +159,31 @@ no-roll turn, each outcome band, invalid effect intent (rejection path), duplica
 delivery, crash-resume at each phase. Live-model runs are a manual flow config swap
 (`model_registry` retarget), never required by CI.
 
+### D12 — Roll-gate authority: the adjudicator decides, the mapping advises
+
+`requires_roll` is a closed-vocabulary mapping over (plausibility, risk) — `roll = plausibility ∈
+{unlikely, plausible} AND risk ≠ none` — but that mapping is **advisory, not authoritative**. The
+adjudicator's reported `requires_roll` is trusted; a verdict whose reported gate disagrees with the
+mapping is valid and proceeds, with the disagreement recorded as structured data for the ledger and
+for quality metrics.
+
+*Why:* the project's founding claim is that narrative positioning dictates mechanics. A deterministic
+two-axis lookup deciding when the dice come out is rules-first — it is precisely the thing a
+fiction-first engine exists not to do. A PbtA GM decides that a move triggers by reading the fiction,
+not by consulting a table.
+
+*What this costs:* a persona can decline the dice, so the roll gate is no longer a structural
+guarantee. That is accepted deliberately. The compensating controls are elsewhere and remain
+structural: effect intents are still drawn from the closed vocabulary and validated by the applier
+(D5), modifiers are bounded so a verdict cannot pre-determine a band, and the dice remain
+seeded-deterministic (D4). The persona chooses *whether* the dice are consulted; it cannot choose
+what they say, nor what the world does afterward.
+
+*Band shape follows the reported value*, so the engine never fabricates bands the adjudicator did not
+author — a verdict reporting no roll declares exactly one `auto` band, and the recorded disagreement
+tells us whether the persona's fiction judgment tracks the mapping over time. If it diverges wildly
+in play, that is data about the persona or the vocabulary, not a reason to re-take the authority.
+
 ## Risks / Trade-offs
 
 - [Beta API drift until semstreams v1] → pin exact beta tag; file upstream issues instead
@@ -307,5 +332,15 @@ eviction (`processor/graph-ingest/component.go:1128`), matching the project inva
 
 - Whether the intake component and effect applier are one component or two (both are
   thin; decide at implementation by port topology, not architecture).
+- Are `risk: none` and `consequence: none` independent, or the same claim? Both are
+  rule-matched scalars, so an incoherent pair is a value a future rule pack can match on.
+  Either constrain them (`RiskNone ⟺ ConsequenceNone`) or document why they differ.
+- Does `consequence` describe the miss shape, the partial shape, or the worst case? In PbtA
+  those differ (`cost` is a 7–9 shape; `harm`/`setback`/`escalation` are 6− shapes). No
+  consumer reads it in this slice; the meaning must be stated before a rule pack matches it.
+- Plausibility and risk carry four values each but only two bits of behavior today, and
+  `ModifierPosition` lets the adjudicator express positioning a second time as a number —
+  a verdict can double-penalize with nothing noticing. Mapping plausibility to a
+  deterministic modifier would give the middle values real work and remove the double-count.
 - `world_ns` allocation format (slug rules, collision policy) — trivial single-instance,
   worth one paragraph in the `world-loading` spec.

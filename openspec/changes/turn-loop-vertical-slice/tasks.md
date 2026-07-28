@@ -32,7 +32,9 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       tests that every rule-matched constant set is closed and enumerable
 - [ ] 2.2 Implement the five payload types (`PlayerAction`, `Verdict` with banded effect
       intents, `RollResult`, `EffectBatch`, `TurnManifest`) per the `new-payload` skill:
-      registry `init()`, alias-based `MarshalJSON`, production-decoder round-trip tests
+      explicit `RegisterPayloads(reg)` (the `init()` singleton was retired upstream in
+      beta.18), alias-based `MarshalJSON` that does not wrap `BaseMessage`,
+      production-decoder round-trip tests over fully-populated fixtures
 
 ## 3. World loading
 
@@ -53,15 +55,22 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 
 - [ ] 4.1 Implement `2d6-pbta/v1` with seed = SHA-256(campaign_seed ‖ turn_id) → PCG;
       tests: band boundaries (6/7/9/10), byte-identical re-execution, distinct turns roll
-      independently, no wall-clock/global-RNG usage
+      independently, no wall-clock/global-RNG usage. Key dice count, faces, and band
+      thresholds off the mechanic version (a `MechanicSpec` registry) rather than
+      package-level constants — today it is one member, but a recorded mechanic that
+      validation ignores would re-band a future `v2` record under `v1` rules
 - [ ] 4.2 Emit the roll-result triple with mechanic/RNG versions, dice, modifiers, total,
-      band; at-most-one-roll-per-turn guard test
+      band; at-most-one-roll-per-turn guard test. Reuse `Verdict.Triples()`'s discipline
+      (validate → project only registered predicates → append one ref) rather than
+      hand-rolling it — extract a shared helper so `RollResult` and `EffectBatch` cannot
+      diverge from the one payload whose triple discipline is currently enforced
 
 ## 5. Effect applier
 
 - [ ] 5.1 Implement deterministic validation of the five effect types (vocabulary
-      membership, per-type bounds, target existence); rejection tests for each failure
-      class per effect-application spec
+      membership, per-type bounds, target existence, and target-*type* compatibility —
+      `character.attribute.health` must not land on a scene entity); rejection tests for
+      each failure class per effect-application spec
 - [ ] 5.2 Implement whole-batch commit via `graph.mutation.*` with replace semantics and
       batch identity derived from `turn_id`; validate every intent before issuing any
       write, and treat a response naming `FailedSubjects` as failure even though the
