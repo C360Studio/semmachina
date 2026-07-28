@@ -1,0 +1,40 @@
+schema: spec-driven
+
+# Project context shown to AI when creating artifacts. Full context lives in
+# openspec/project.md (Purpose + Product Boundary + Conventions) and CLAUDE.md.
+context: |
+  SemMachina is a fiction-first AI RPG built framework-native on SemStreams
+  (github.com/c360studio/semstreams — Go 1.26+, NATS JetStream KV/ObjectStore;
+  pinned to latest v1.0.0-beta.*, retargeting v1 on release). SemMachina owns
+  game domain semantics (agentic personas, rule packs, game components,
+  lifecycle workflows); SemStreams owns the substrate. Read openspec/project.md
+  "Product Boundary" before scoping a change; the founding document is
+  docs/proposals/fiction-first-rpg.md.
+
+  Design rules to reflect in every proposal/spec:
+  - Agentic judges fiction, rules match structure, components execute work.
+    Only the LLM layer reads fiction; it exits through structured triples with
+    a closed, rule-matchable vocabulary.
+  - Facts vs requests: world facts → KV/ENTITY_STATES; player actions →
+    JetStream; prose → ObjectStore with ref-triples.
+  - Substrate gaps are filed upstream as SemStreams engine asks, never
+    hand-rolled here (semdragon's migration arc is the cautionary tale).
+  - Seeded-deterministic dice; NPC decision/voice split; structurally capped
+    NPC cascades; per-session cost governance via admission gate.
+
+  Role split (mirrors semstreams):
+  - openspec/specs/<capability>/spec.md = CURRENT TRUTH (Requirement +
+    GIVEN/WHEN/THEN). Seed lazily when a change first touches a capability.
+  - openspec/changes/<id>/ = proposal + tasks + spec deltas; archive on
+    completion.
+  - docs/adr/ = genuine decisions only (irreversible choices, cross-repo
+    contracts). Mechanics live in the spec, not the ADR.
+
+# Per-artifact rules shown to AI when creating that artifact.
+rules:
+  proposal:
+    - Always include a "## Non-goals" section (boundary discipline).
+    - Classify the work — game-repo (personas/rule packs/components/lifecycle)
+      vs SemStreams engine ask; engine asks are filed upstream, not built here.
+  spec:
+    - Specs describe CURRENT behavior verified against code, not aspirations.
