@@ -68,6 +68,19 @@ SemStreams repo review; read it before scoping anything).
 - **Cost is a policy, not a forecast:** per-session budget enforced by admission
   gate + spend ledger; per-turn cost is flat because context is
   graph-retrieval-bounded, never append-everything.
+- **Scale is a budget dial, not an architecture decision — and the bill is stated
+  honestly.** World size, spatial-index precision, and how many NPCs get real
+  cognition are things an operator buys; the engine's job is to report the
+  envelope, not to pick a ceiling. That promise is only keepable because nothing
+  is unbounded — iteration caps, capped NPC cascades, and retrieval-bounded
+  context are STRUCTURAL, and a budget dial on a runaway path is a fuse, not a
+  dial. Published capacity envelopes are **measured from spend-ledger data on real
+  runs**, never estimated. **Infra follows the clock policy, not the world size:**
+  reactive play is zero-idle-cost on one box however large the map, while an
+  always-on ticking world with NPC life ticks is a different cost class and
+  possibly a different topology. Distinguish cheap dials from baked ones —
+  index precision is re-derivable from `ENTITY_STATES` at any time, whereas a
+  world's spatial scale is authored into an immutable content-addressed template.
 - **World time is a world fact, governed by policy.** The campaign clock is a
   graph entity advanced under a per-campaign clock policy — **reactive**
   (advances only on player action; the world waits), **scheduled** (in-game time
