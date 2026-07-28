@@ -68,6 +68,17 @@ SemStreams repo review; read it before scoping anything).
 - **Cost is a policy, not a forecast:** per-session budget enforced by admission
   gate + spend ledger; per-turn cost is flat because context is
   graph-retrieval-bounded, never append-everything.
+- **World time is a world fact, governed by policy.** The campaign clock is a
+  graph entity advanced under a per-campaign clock policy — **reactive**
+  (advances only on player action; the world waits), **scheduled** (in-game time
+  per real time; the world lives alongside you), or **fiction-driven**
+  (rounds / scene / travel pacing). The clock policy is also a COST policy: only
+  reactive mode preserves zero-idle-cost; ticking worlds spend under the
+  admission gate/LOD tiers and are priced accordingly. Deadlines are world facts
+  with threshold rules — player inaction is an input, and deadline evaluation
+  uses the action's arrival time (JetStream ingest timestamp), never processing
+  time. Personas always judge against current authoritative state at execution
+  time, never a submission-time snapshot.
 - **Player I/O is adapter-shaped.** The engine's contract is a canonical action
   payload in (JetStream) and a canonical committed result out (ledger, graph,
   ObjectStore); channels — WebSocket now; Slack, email, SMS later — are thin
@@ -113,9 +124,14 @@ vision but are NOT on the active MVP path.
 7. **Epistemic model** — canonical truth vs character belief vs player knowledge
    vs narration-revealed; required BEFORE NPC cognition, else retrieval produces
    spoilers and omniscient NPCs.
-8. **NPC cognition + cost governance** — tiered NPCs, decision/voice split,
+8. **World clock + pacing policies** — campaign clock entity, clock-policy modes
+   (reactive / scheduled / fiction-driven), deadline entities + threshold rules
+   ("the caravan leaves at dawn"), deadline-warning notification egress over
+   channel bindings, world-time stamps in the ledger. Prerequisite for NPC life
+   ticks; useful long before them (time-sensitive choices work solo).
+9. **NPC cognition + cost governance** — tiered NPCs, decision/voice split,
    admission-gate LOD (needs the upstream governance engine ask).
-9. **Deferred**: human-GM editing surface, sandboxed user-authored rules, hosting,
+10. **Deferred**: human-GM editing surface, sandboxed user-authored rules, hosting,
    federation, multi-tenancy, detailed inventory/economy, **multi-channel play**
    (Slack/email/SMS ingress-egress adapters over the same action/result contract —
    allowed-for by design, built later), and the **world-template marketplace**. Marketplace principles, recorded now so the package shape stays

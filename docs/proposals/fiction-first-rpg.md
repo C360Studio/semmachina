@@ -21,6 +21,12 @@ actual stack in-session.
 >    load-bearing**, and the "second co-location corpus when B2's gate lands" de-risk becomes: an
 >    RPG-shaped corpus is valuable as a general retrieval-evaluation corpus (theme-spanning
 >    ground-truth queries over heterogeneous types), not as an instrument for a closed experiment.
+> 3. **"Nothing burns while idle" is clock-policy-dependent.** The cost-model claim below holds for
+>    reactive pacing (the clock advances only on player action). The always-on world named in the
+>    Dwarf Fortress section is a scheduled-tick mode that DOES spend while the player is away
+>    (Tier-1 NPC life ticks under the admission gate) — a priced, subscription-shaped choice, not a
+>    leak. See `openspec/project.md` ("World time is a world fact") for the clock-policy design
+>    rule.
 
 ## The idea
 

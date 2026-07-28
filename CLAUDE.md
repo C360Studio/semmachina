@@ -84,6 +84,12 @@ parsing prose.
   committed result out; WebSocket is one adapter of N (Slack/email/SMS later).
   Player identity is a graph entity, never a connection ID. No turn-loop step
   assumes interactive pacing — email-cadence play is valid.
+- **World time is a world fact, governed by policy.** The campaign clock is a
+  graph entity; advancement (reactive / scheduled / fiction-driven) is a
+  per-campaign dial, and the clock policy is a cost policy — only reactive mode
+  is zero-idle-cost. Deadlines are world facts (threshold rules); inaction is an
+  input; deadline evaluation uses action arrival time. Personas judge current
+  state at execution time, never submission-time snapshots.
 - **Do not compete on simulation depth.** The adjudicator is compressed
   simulation — LLM judgment substituting for hand-built systems.
 
