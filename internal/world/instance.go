@@ -6,8 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/c360studio/semstreams/pkg/types"
-
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
@@ -120,21 +118,6 @@ func (p *Plan) IDs() []string {
 	return out
 }
 
-// composeEntityID builds the documented six-part ID and validates it against
-// the same contract the graph will apply.
-//
-// Validation happens on the COMPOSED id, not just on its parts, because the
-// 256-byte limit is a property of the whole string: five individually legal
-// segments can still compose an ID the graph refuses, and finding that out at
-// write time means finding it out after a partial import.
-func composeEntityID(org, worldNS, templateID string, kind vocabulary.EntityKind, localID string) (string, error) {
-	id := strings.Join([]string{org, payload.Domain, worldNS, templateID, string(kind), localID}, ".")
-	if err := types.ValidateEntityID(id); err != nil {
-		return "", fmt.Errorf("composed entity id %q is not canonical: %w", id, err)
-	}
-	return id, nil
-}
-
 // Resolve maps a package into one world instance: template-local ids become
 // six-part entity IDs, `local:` references become those same IDs, and the
 // instance's player entity is appended.
@@ -157,7 +140,8 @@ func (p *Package) Resolve(inst InstanceConfig) (*Plan, error) {
 	mapped := make(map[string]string, len(p.Entities))
 	kinds := make(map[string]vocabulary.EntityKind, len(p.Entities))
 	for _, entity := range p.Entities {
-		id, err := composeEntityID(inst.Org, inst.WorldNS, p.Manifest.ID, entity.Kind, entity.LocalID)
+		id, err := vocabulary.ComposeEntityID(
+			inst.Org, inst.WorldNS, p.Manifest.ID, string(entity.Kind), entity.LocalID)
 		if err != nil {
 			return nil, &LineError{File: EntitiesFile, Line: entity.Line, Err: err}
 		}
@@ -255,8 +239,9 @@ func planPlayerEntity(
 			inst.Player.LocalID)
 	}
 
-	id, err := composeEntityID(
-		inst.Org, inst.WorldNS, pkg.Manifest.ID, vocabulary.EntityKindPlayer, inst.Player.LocalID)
+	id, err := vocabulary.ComposeEntityID(
+		inst.Org, inst.WorldNS, pkg.Manifest.ID,
+		string(vocabulary.EntityKindPlayer), inst.Player.LocalID)
 	if err != nil {
 		return PlannedEntity{}, err
 	}

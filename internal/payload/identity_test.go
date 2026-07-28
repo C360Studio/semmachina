@@ -12,8 +12,10 @@ import (
 )
 
 // testTurnEntityPrefix is the five leading segments of the turn entity ID the
-// starter world composes; the sixth is the turn id.
-const testTurnEntityPrefix = "c360.semmachina.starter.world1.turn."
+// starter world composes; the sixth is the turn id. The order is
+// org.platform.domain.system.type.instance, so the WORLD NAMESPACE (world1)
+// sits in the domain slot and the TEMPLATE (starter) in the system slot.
+const testTurnEntityPrefix = "c360.semmachina.world1.starter.turn."
 
 // action_id arrives from an ingress adapter — a Slack ts, an email
 // Message-ID — and TurnIDForAction turns it into the instance segment of the
@@ -146,7 +148,7 @@ func TestPlayerAction_AcceptsEveryEntityIDSegmentLegalActionID(t *testing.T) {
 // that exactly fills the reserved budget, must compose an ID of exactly
 // types.MaxEntityIDBytes that upstream accepts.
 func TestActionIDBound_LeavesTheComposedEntityIDInsideTheUpstreamLimit(t *testing.T) {
-	prefixBudget := types.MaxEntityIDBytes - payload.MaxIDSegmentBytes
+	prefixBudget := types.MaxEntityIDBytes - vocabulary.MaxIDSegmentBytes
 	if prefixBudget < 12 {
 		t.Fatalf("the reserved prefix budget of %d bytes cannot hold five segments", prefixBudget)
 	}
@@ -194,9 +196,9 @@ func TestActionIDBound_LeavesRoomForTheDerivedTurnID(t *testing.T) {
 	longest := strings.Repeat("a", payload.MaxActionIDBytes)
 	derived := payload.TurnIDForAction(longest)
 
-	if len(derived) != payload.MaxIDSegmentBytes {
+	if len(derived) != vocabulary.MaxIDSegmentBytes {
 		t.Fatalf("the derived turn id is %d bytes, want exactly the %d-byte segment budget",
-			len(derived), payload.MaxIDSegmentBytes)
+			len(derived), vocabulary.MaxIDSegmentBytes)
 	}
 
 	action := validPlayerAction()
@@ -219,7 +221,7 @@ func TestActionIDBound_LeavesRoomForTheDerivedTurnID(t *testing.T) {
 // contract.
 func TestPayloads_GateEveryTurnAndActionIdentity(t *testing.T) {
 	const dotted = "a.b"
-	overlong := strings.Repeat("a", payload.MaxIDSegmentBytes+1)
+	overlong := strings.Repeat("a", vocabulary.MaxIDSegmentBytes+1)
 
 	cases := []struct {
 		name    string

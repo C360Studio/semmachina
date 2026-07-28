@@ -8,8 +8,11 @@ import (
 	"io/fs"
 	"path"
 	"sort"
+	"strings"
 
 	"github.com/c360studio/semstreams/persona"
+	"github.com/c360studio/semstreams/processor/rule"
+	ssvocab "github.com/c360studio/semstreams/vocabulary"
 
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
@@ -33,10 +36,11 @@ type Package struct {
 	// Entities are the template entities in file order.
 	Entities []TemplateEntity
 	// RuleFiles and PersonaFiles are the package-relative paths of the rule
-	// pack and persona configurations, sorted. This slice is loaded but not
-	// interpreted here: rule semantics belong to the rule processor, and
-	// interpreting them at world-load would put a second rule parser in the
-	// tree.
+	// pack and persona configurations, sorted. Rule SEMANTICS are not
+	// interpreted here — they belong to the rule processor, and re-deriving
+	// them at world-load would put a second rule engine in the tree. What is
+	// checked is the part an author can only be told about at import: the
+	// predicate syntax of every condition field (see checkRuleFile).
 	RuleFiles    []string
 	PersonaFiles []string
 }
@@ -94,7 +98,7 @@ func LoadPackage(fsys fs.FS, opts LoadOptions) (*Package, error) {
 		return nil, err
 	}
 
-	ruleFiles, err := loadJSONDir(fsys, RulesDir, checkWellFormedJSON)
+	ruleFiles, err := loadJSONDir(fsys, RulesDir, checkRuleFile)
 	if err != nil {
 		return nil, err
 	}
@@ -141,21 +145,68 @@ func loadJSONDir(fsys fs.FS, dir string, check func(data []byte) error) ([]strin
 	return files, nil
 }
 
-// checkWellFormedJSON is the rule pack's gate: syntax only.
+// checkRuleFile is the rule pack's gate: JSON syntax, plus PREDICATE syntax on
+// every condition field.
 //
-// It deliberately does NOT run rule.ValidateDefinition. That validator requires
-// every condition field to be DECLARED in semstreams' process-global predicate
-// registry (vocabulary.RequireDeclaredPredicate), and SemMachina's predicates
-// are not registered there yet — registering them is the rule pack's own wiring
-// (task group 8), and it is a decision with teeth, because the same registry
-// carries the RuleOpaque flag that would stop a rule branching on narration.
-// Running a validator here that is guaranteed to reject our own rule pack would
-// make world loading fail for a reason that has nothing to do with the world.
-func checkWellFormedJSON(data []byte) error {
+// It deliberately does NOT run rule.ValidateDefinition. That validator's
+// condition check is two checks in one — vocabulary.RequireDeclaredPredicate is
+// ParsePredicate followed by a registry lookup — and only the second half is
+// premature. SemMachina's predicates are not in semstreams' process-global
+// registry yet; registering them is the rule pack's own wiring (task group 8),
+// and it is a decision with teeth, because the same registry carries the
+// RuleOpaque flag that would stop a rule branching on narration. Running the
+// declaration check here would reject our own rule pack for a reason that has
+// nothing to do with the world.
+//
+// The SYNTAX half is safe today and is exactly what import owes an author. A
+// condition field is a predicate, so it faces the three-segment lower-kebab
+// alphabet an entity-ID segment does not (F9): `item.condition.rust_level` is
+// legal-looking, imports cleanly without this check, and then fails when the
+// rule processor loads the pack — with an error naming a rule id rather than a
+// file. Upstream escapes non-predicate message/state fields with a `$` prefix
+// (processor/rule/config_validation.go validateConditionFields); so does this.
+func checkRuleFile(data []byte) error {
 	if !json.Valid(data) {
 		return errors.New("is not well-formed JSON")
 	}
+
+	definitions, err := decodeRuleDefinitions(data)
+	if err != nil {
+		return err
+	}
+	for _, definition := range definitions {
+		for index, condition := range definition.Conditions {
+			if condition.Field == "" || strings.HasPrefix(condition.Field, "$") {
+				continue
+			}
+			if _, err := ssvocab.ParsePredicate(condition.Field); err != nil {
+				return fmt.Errorf(
+					"rule %q condition[%d] field %q is not a canonical three-segment lower-kebab "+
+						"predicate (entity ids may carry underscores and uppercase, predicates may not): %w",
+					definition.ID, index, condition.Field, err)
+			}
+		}
+	}
 	return nil
+}
+
+// decodeRuleDefinitions decodes a rule file into the production Definition type,
+// accepting an array or a single object exactly as the rule loader does
+// (processor/rule/rule_loader.go loadRuleDefinitionsFromFiles). Decoding into
+// the real type rather than a local mirror is what keeps the field names from
+// drifting; a gate that read a `conditions` array the loader does not would
+// check nothing.
+func decodeRuleDefinitions(data []byte) ([]rule.Definition, error) {
+	var definitions []rule.Definition
+	if err := json.Unmarshal(data, &definitions); err == nil {
+		return definitions, nil
+	}
+
+	var single rule.Definition
+	if err := json.Unmarshal(data, &single); err != nil {
+		return nil, fmt.Errorf("is neither a rule nor an array of rules: %w", err)
+	}
+	return []rule.Definition{single}, nil
 }
 
 // checkPersonaRecord decodes a persona file as the upstream persona.Persona it

@@ -13,9 +13,10 @@
 // purpose:
 //
 //	LoadPackage  — everything checkable from the package alone: manifest v0,
-//	               engine compatibility, the predicate alphabet, vocabulary
-//	               membership, kind compatibility, object shapes, and attribute
-//	               bounds. Fails with a file and a line.
+//	               engine compatibility, the predicate alphabet (in entity facts
+//	               AND in rule conditions), vocabulary membership, kind
+//	               compatibility, object shapes, entity-ID segment legality, and
+//	               attribute bounds. Fails with a file and a line.
 //	Resolve      — everything that needs instance identity: the six-part ID
 //	               mapping, `local:` reference rewriting, dangling references,
 //	               and the instance-configured player binding. Pure and

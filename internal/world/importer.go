@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semmachina/internal/payload"
@@ -30,12 +31,17 @@ const (
 // Publisher is the narrow JetStream publish surface the importer needs.
 //
 // It is an interface so a test can drive the failure paths a real broker will
-// not produce on demand — but the surface is the production method verbatim
-// (*natsclient.Client satisfies it), so an importer that works against a fake
-// is calling the same method it will call against NATS.
+// not produce on demand — but the surface is the production method verbatim, so
+// an importer that works against a fake is calling the same method it will call
+// against NATS.
 type Publisher interface {
 	PublishToStreamWithAck(ctx context.Context, subject string, data []byte) (*jetstream.PubAck, error)
 }
+
+// The claim above, enforced by the compiler rather than by a doc comment: if
+// the upstream signature moves, this build breaks here instead of at the one
+// call site that only runs against a real broker.
+var _ Publisher = (*natsclient.Client)(nil)
 
 // Importer materializes a resolved plan into the graph.
 //
@@ -97,8 +103,10 @@ type ImportResult struct {
 	// Entities are the materialized entity IDs in plan order.
 	Entities []string
 	// Sequences are the stream sequences the broker assigned, positionally
-	// matching Entities. They are the durable proof a message was accepted,
-	// which is a different claim from "the entity exists" — see Import.
+	// matching Entities — one entry per published entity, zero where the
+	// publisher returned no acknowledgment. They are the durable proof a
+	// message was accepted, which is a different claim from "the entity
+	// exists" — see Import.
 	Sequences []uint64
 	// RecordedAt is the timestamp stamped on every published triple.
 	RecordedAt time.Time
@@ -113,6 +121,15 @@ type ImportResult struct {
 // graph. Import does not do that polling itself because it has no read
 // surface, and inventing one here would put a second graph client in the
 // importer purely to make an asynchronous pipeline look synchronous.
+//
+// Such a poll MUST exclude referential stubs via graph.EntityState.IsStub().
+// When one imported entity references another, graph-ingest materializes a
+// referential-integrity STUB at the referenced ID the moment the REFERENCING
+// entity lands — before the referenced entity's own message is applied. So an
+// existence poll can succeed against an entity carrying only core.identity.*
+// stub markers and none of its own facts, and report a world loaded when it is
+// half-written. IsStub keys on the envelope, which the fact lane re-stamps at
+// true birth, so it is the signal that actually flips.
 //
 // One timestamp is minted for the whole import and stamped on every triple, so
 // an imported world has a single coherent birth time rather than a spread that
@@ -152,9 +169,17 @@ func (i *Importer) Import(ctx context.Context, plan *Plan) (ImportResult, error)
 		}
 
 		result.Entities = append(result.Entities, entity.ID)
+		// Appended unconditionally, including the zero for a publisher that
+		// returned no ack and no error: Sequences promises positional
+		// correspondence with Entities, and a skipped append would silently
+		// shift every later sequence onto the wrong entity. Zero is not a
+		// sequence JetStream ever assigns, so it reads as "no proof" rather
+		// than as somebody else's message.
+		var sequence uint64
 		if ack != nil {
-			result.Sequences = append(result.Sequences, ack.Sequence)
+			sequence = ack.Sequence
 		}
+		result.Sequences = append(result.Sequences, sequence)
 	}
 	return result, nil
 }

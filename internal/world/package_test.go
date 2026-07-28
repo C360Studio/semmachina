@@ -6,6 +6,8 @@ import (
 	"testing"
 	"testing/fstest"
 
+	ssvocab "github.com/c360studio/semstreams/vocabulary"
+
 	"github.com/c360studio/semmachina/fixtures"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 	"github.com/c360studio/semmachina/internal/world"
@@ -106,6 +108,100 @@ func TestLoadPackage_RejectsMalformedPackageContent(t *testing.T) {
 				t.Fatalf("rejection reason %q does not name the offending file", err)
 			}
 		})
+	}
+}
+
+// F9 again, one file over: a condition field is a PREDICATE, so it faces the
+// lower-kebab three-segment alphabet that an entity-ID segment does not. Without
+// this gate `item.condition.rust_level` imports cleanly and fails when the rule
+// processor loads the pack — an error naming a rule id, from a component that
+// has never heard of the author's file.
+func TestLoadPackage_RejectsARulePredicateThatTheWriteGateWouldRefuse(t *testing.T) {
+	badRule := `{"id":"starter_rusty","type":"expression","name":"rusty","enabled":false,` +
+		`"entity":{"pattern":"*.*.*.*.*.*"},"conditions":[` +
+		`{"field":"turn.phase.current","operator":"eq","value":"accepted"},` +
+		`{"field":"item.condition.rust_level","operator":"gt","value":3}],"logic":"and"}`
+
+	fsys := minimalPackageFS()
+	fsys["rules/00-stub.json"] = &fstest.MapFile{Data: []byte(badRule)}
+
+	_, err := world.LoadPackage(fsys, world.LoadOptions{})
+	if err == nil {
+		t.Fatal("LoadPackage accepted a rule condition on a predicate the write gate refuses")
+	}
+	for _, want := range []string{"rules/00-stub.json", "item.condition.rust_level", "condition[1]"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("rejection reason %q does not name %q", err, want)
+		}
+	}
+
+	// The upstream contract error must survive, for the same reason it must
+	// survive in entities.jsonl: "we do not know that predicate" and "the graph
+	// will refuse that alphabet" read alike and mean opposite things.
+	var predicateError *ssvocab.PredicateValidationError
+	if !errorAs(err, &predicateError) {
+		t.Fatalf("expected the upstream *vocabulary.PredicateValidationError to survive, got %T: %v", err, err)
+	}
+}
+
+// The gate is SYNTAX, not declaration. RequireDeclaredPredicate additionally
+// demands registration in semstreams' process-global vocabulary registry, which
+// is task 8.0's wiring — running it here would reject SemMachina's own rule pack
+// for a reason that has nothing to do with the world, so a world author would be
+// told their package is broken because the engine has not finished booting.
+func TestLoadPackage_ChecksRulePredicateSyntaxWithoutRequiringDeclaration(t *testing.T) {
+	// Both halves are asserted against the starter pack's own condition field,
+	// because the gate's design rests entirely on the two being separable.
+	const undeclared = "turn.phase.current"
+	if _, err := ssvocab.ParsePredicate(undeclared); err != nil {
+		t.Fatalf("the starter pack's own condition field is not canonical: %v", err)
+	}
+	if err := ssvocab.RequireDeclaredPredicate(undeclared); err == nil {
+		t.Fatalf("%q is now DECLARED upstream, so this test no longer shows the syntax check "+
+			"is separable from the declaration check; re-point it at a still-undeclared "+
+			"canonical predicate and re-check whether task 8.0 still owns registration", undeclared)
+	}
+
+	// The shipped starter pack carries exactly that undeclared-but-canonical
+	// field, so loading it IS the assertion.
+	starterPackage(t)
+
+	// A rule may also name message/state fields, which are not predicates at
+	// all. Upstream escapes them with a `$` prefix; so does this gate.
+	dollarRule := `{"id":"stub","type":"expression","name":"stub","enabled":false,` +
+		`"entity":{"pattern":"*.*.*.*.*.*"},"conditions":[` +
+		`{"field":"$message.payload.kind","operator":"eq","value":"x"}],"logic":"and"}`
+
+	fsys := minimalPackageFS()
+	fsys["rules/00-stub.json"] = &fstest.MapFile{Data: []byte(dollarRule)}
+	if _, err := world.LoadPackage(fsys, world.LoadOptions{}); err != nil {
+		t.Fatalf("LoadPackage rejected a $-escaped message field: %v", err)
+	}
+}
+
+// A rule file may hold one rule or an array of them — the rule loader accepts
+// both, so a gate that only understood one shape would silently pass every
+// predicate in the other.
+func TestLoadPackage_ChecksEveryRuleInAnArrayValuedRuleFile(t *testing.T) {
+	pack := `[{"id":"ok","type":"expression","name":"ok","enabled":false,` +
+		`"entity":{"pattern":"*.*.*.*.*.*"},"conditions":[` +
+		`{"field":"turn.phase.current","operator":"eq","value":"accepted"}],"logic":"and"},` +
+		`{"id":"bad","type":"expression","name":"bad","enabled":false,` +
+		`"entity":{"pattern":"*.*.*.*.*.*"},"conditions":[` +
+		`{"field":"item.condition.rust_level","operator":"gt","value":3}],"logic":"and"}]`
+
+	fsys := minimalPackageFS()
+	fsys["rules/00-stub.json"] = &fstest.MapFile{Data: []byte(pack)}
+
+	_, err := world.LoadPackage(fsys, world.LoadOptions{})
+	if err == nil {
+		t.Fatal("LoadPackage accepted a bad predicate in the second rule of an array-valued file")
+	}
+	if !strings.Contains(err.Error(), "item.condition.rust_level") {
+		t.Fatalf("rejection reason %q does not name the offending predicate", err)
+	}
+	if !strings.Contains(err.Error(), "bad") {
+		t.Fatalf("rejection reason %q does not name the offending rule", err)
 	}
 }
 

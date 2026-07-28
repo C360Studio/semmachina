@@ -2,9 +2,10 @@ package payload
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/c360studio/semstreams/pkg/types"
+
+	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
 // Payload-registry coordinates. Domain, Category, and Version must match
@@ -48,19 +49,15 @@ const (
 // it here converts that loop into one rejected action at the boundary that
 // owns the contract, which is also the boundary every future adapter
 // normalizes into.
+//
+// The segment bound itself is vocabulary.MaxIDSegmentBytes — the payload
+// boundary consumes the rule, it does not restate it.
 const (
-	// MaxIDSegmentBytes bounds an identifier that becomes an entity-ID
-	// instance segment. The upstream cap (types.MaxEntityIDBytes) is on the
-	// WHOLE composed ID, and the five leading segments come from the world
-	// package rather than from the adapter, so half the budget is reserved for
-	// them and their separators and half is left for the instance segment.
-	MaxIDSegmentBytes = types.MaxEntityIDBytes / 2
-
-	// MaxActionIDBytes is tighter than MaxIDSegmentBytes by exactly the prefix
-	// TurnIDForAction adds. Without this, an action_id could pass here and its
-	// derived turn_id fail on the very next payload — reintroducing the poison
-	// message one hop downstream.
-	MaxActionIDBytes = MaxIDSegmentBytes - len(TurnIDPrefix)
+	// MaxActionIDBytes is tighter than vocabulary.MaxIDSegmentBytes by exactly
+	// the prefix TurnIDForAction adds. Without this, an action_id could pass
+	// here and its derived turn_id fail on the very next payload —
+	// reintroducing the poison message one hop downstream.
+	MaxActionIDBytes = vocabulary.MaxIDSegmentBytes - len(TurnIDPrefix)
 )
 
 // requireNonEmpty rejects a missing opaque identifier or storage reference.
@@ -72,31 +69,17 @@ func requireNonEmpty(field, value string) error {
 }
 
 // requireIDSegment rejects an identifier that cannot survive composition into
-// a canonical entity ID: it must be a single segment in the upstream alphabet
-// ([A-Za-z0-9][A-Za-z0-9_-]*) and short enough that the composed six-part ID
-// stays inside types.MaxEntityIDBytes.
+// a canonical entity ID.
 //
-// The alphabet check delegates to types.ValidateEntityIDPrefix — the same
-// parser the composed ID will face — so this cannot drift from the contract it
-// is protecting. That parser accepts one to six dot-separated positions, so
-// the dot rejection below is ours: a dotted value is legal as a prefix and
-// catastrophic as a segment, because it silently changes the ID's arity.
+// The rule itself — non-empty, single segment, inside the upstream alphabet,
+// inside the segment budget — is vocabulary.ValidateIDSegment's, and this
+// wrapper adds exactly one thing: the name of the field that carried the bad
+// value. Restating the rule here is what produced the divergence this
+// delegation closes (the payload path bounded length, the world path did not,
+// so an oversized local id survived every local check and failed at publish).
 func requireIDSegment(field, value string) error {
-	if value == "" {
-		return fmt.Errorf("%s is required", field)
-	}
-	// Length first, so a rejection reason never echoes an oversized value.
-	if len(value) > MaxIDSegmentBytes {
-		return fmt.Errorf(
-			"%s is %d bytes, which exceeds the %d-byte entity-ID segment budget",
-			field, len(value), MaxIDSegmentBytes)
-	}
-	if strings.Contains(value, ".") {
-		return fmt.Errorf(
-			"%s %q contains a dot, which would add entity-ID segments rather than name one", field, value)
-	}
-	if err := types.ValidateEntityIDPrefix(value); err != nil {
-		return fmt.Errorf("%s %q is not a legal entity-ID segment: %w", field, value, err)
+	if err := vocabulary.ValidateIDSegment(value); err != nil {
+		return fmt.Errorf("%s: %w", field, err)
 	}
 	return nil
 }
@@ -111,7 +94,7 @@ func requireActionID(field, value string) error {
 	if len(value) > MaxActionIDBytes {
 		return fmt.Errorf(
 			"%s is %d bytes; the derived turn id %q would exceed the %d-byte entity-ID segment budget",
-			field, len(value), TurnIDForAction(value), MaxIDSegmentBytes)
+			field, len(value), TurnIDForAction(value), vocabulary.MaxIDSegmentBytes)
 	}
 	return nil
 }

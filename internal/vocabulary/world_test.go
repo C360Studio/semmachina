@@ -1,7 +1,10 @@
 package vocabulary_test
 
 import (
+	"strings"
 	"testing"
+
+	"github.com/c360studio/semstreams/pkg/types"
 
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
@@ -204,6 +207,95 @@ func TestValidateIDSegment_MatchesTheEntityIDAlphabet(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if err := vocabulary.ValidateIDSegment(s); err == nil {
 				t.Fatalf("ValidateIDSegment(%q) accepted an illegal segment", s)
+			}
+		})
+	}
+}
+
+// The length bound belongs to the ONE segment rule, not to whichever caller
+// happened to think of it. A segment past the reserve composes a legal ID under
+// a short prefix and an illegal one under a long prefix, so upstream cannot
+// reject it and every caller that skips the bound ships the failure to the
+// first step that touches the network.
+func TestValidateIDSegment_BoundsSegmentLength(t *testing.T) {
+	if err := vocabulary.ValidateIDSegment(strings.Repeat("a", vocabulary.MaxIDSegmentBytes)); err != nil {
+		t.Fatalf("a segment exactly at the budget was rejected: %v", err)
+	}
+
+	oversized := strings.Repeat("a", vocabulary.MaxIDSegmentBytes+1)
+	err := vocabulary.ValidateIDSegment(oversized)
+	if err == nil {
+		t.Fatalf("ValidateIDSegment accepted a %d-byte segment", len(oversized))
+	}
+	// The length check runs before every check that quotes its input, so a
+	// rejection never echoes an oversized value back into a log line.
+	if strings.Contains(err.Error(), oversized) {
+		t.Fatalf("the rejection echoes the whole oversized segment: %q", err)
+	}
+
+	// The bound is a RESERVE, not the upstream failure point: this segment
+	// composes an entity ID well inside types.MaxEntityIDBytes, which is exactly
+	// why upstream cannot be the one to catch it.
+	composed := "c360.semmachina.world1.starter.item." + oversized
+	if err := types.ValidateEntityID(composed); err != nil {
+		t.Fatalf("the oversized segment already fails upstream composition (%d bytes); "+
+			"this test proves nothing about the reserve: %v", len(composed), err)
+	}
+}
+
+// Two capabilities outside the world importer — turn entities (group 6) and
+// campaign entities (group 8) — compose six-part IDs whose type segment is
+// deliberately not an EntityKind. They get the composer, not a second copy of
+// the join-and-validate rule.
+func TestComposeEntityID_ComposesTheDocumentedSixPartOrder(t *testing.T) {
+	id, err := vocabulary.ComposeEntityID("c360", "world1", "starter", "character", "rook")
+	if err != nil {
+		t.Fatalf("ComposeEntityID: %v", err)
+	}
+	// world_ns lands in the domain slot and the template in the system slot:
+	// org.platform.domain.system.type.instance.
+	if want := "c360.semmachina.world1.starter.character.rook"; id != want {
+		t.Fatalf("composed %q, want %q", id, want)
+	}
+
+	parsed, err := types.ParseEntityID(id)
+	if err != nil {
+		t.Fatalf("the composed ID is not parseable upstream: %v", err)
+	}
+	if parsed.Domain != "world1" || parsed.System != "starter" {
+		t.Fatalf("world namespace landed in %q and the template in %q", parsed.Domain, parsed.System)
+	}
+
+	// A type segment that is not an EntityKind is the whole reason this is
+	// exported with a plain string.
+	for _, typeSegment := range []string{"turn", "campaign"} {
+		if _, err := vocabulary.ComposeEntityID("c360", "world1", "starter", typeSegment, "x1"); err != nil {
+			t.Fatalf("ComposeEntityID rejected the %q type segment: %v", typeSegment, err)
+		}
+	}
+}
+
+// The 256-byte limit is a property of the WHOLE composed ID, so positions that
+// are individually legal can still compose an ID the graph refuses. Validating
+// the composed result is what makes that a caller-visible error rather than a
+// write-time one.
+func TestComposeEntityID_ValidatesTheComposedResult(t *testing.T) {
+	long := strings.Repeat("w", vocabulary.MaxIDSegmentBytes)
+	for _, tc := range []struct {
+		name                                        string
+		org, worldNS, template, typeSeg, instanceID string
+	}{
+		{name: "dotted position", org: "c360", worldNS: "a.b", template: "starter",
+			typeSeg: "character", instanceID: "rook"},
+		{name: "empty position", org: "", worldNS: "world1", template: "starter",
+			typeSeg: "character", instanceID: "rook"},
+		{name: "legal positions composing an oversized ID", org: long, worldNS: long,
+			template: "starter", typeSeg: "character", instanceID: "rook"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := vocabulary.ComposeEntityID(
+				tc.org, tc.worldNS, tc.template, tc.typeSeg, tc.instanceID); err == nil {
+				t.Fatal("ComposeEntityID returned an ID the graph would refuse")
 			}
 		})
 	}

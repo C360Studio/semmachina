@@ -1,16 +1,12 @@
 package world_test
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semmachina/internal/vocabulary"
 	"github.com/c360studio/semmachina/internal/world"
@@ -271,51 +267,6 @@ func TestIntegration_PlayerBindingMaterializesFromInstanceConfig(t *testing.T) {
 	if got := firstObject(bound, vocabulary.WorldEntityKind.String()); got != string(vocabulary.EntityKindCharacter) {
 		t.Fatalf("the player is bound to a %v, not a character", got)
 	}
-}
-
-// A publish failure part-way through must be reported with the entity that
-// failed, not swallowed into a partial success. The real broker will not fail
-// on demand, so the failure is injected at the production publish surface.
-func TestIntegration_ImportReportsAPartialPublishFailure(t *testing.T) {
-	plan := starterPlan(t, "failns")
-
-	publisher := &failingPublisher{failAfter: 2, err: errors.New("broker said no")}
-	importer, err := world.NewImporter(publisher)
-	if err != nil {
-		t.Fatalf("NewImporter: %v", err)
-	}
-
-	result, err := importer.Import(context.Background(), plan)
-	if err == nil {
-		t.Fatal("Import reported success after a publish failure")
-	}
-	if len(result.Entities) != 2 {
-		t.Fatalf("result reported %d published entities, want the 2 that succeeded", len(result.Entities))
-	}
-	if !strings.Contains(err.Error(), plan.Entities[2].ID) {
-		t.Fatalf("error %q does not name the entity that failed", err)
-	}
-	if !strings.Contains(err.Error(), "broker said no") {
-		t.Fatalf("error %q loses the broker's reason", err)
-	}
-}
-
-type failingPublisher struct {
-	failAfter int
-	err       error
-	calls     int
-	subjects  []string
-}
-
-func (p *failingPublisher) PublishToStreamWithAck(
-	_ context.Context, subject string, _ []byte,
-) (*jetstream.PubAck, error) {
-	p.calls++
-	p.subjects = append(p.subjects, subject)
-	if p.calls > p.failAfter {
-		return nil, p.err
-	}
-	return &jetstream.PubAck{Sequence: uint64(p.calls)}, nil
 }
 
 // characterID returns the mapped ID of the plan's player character.

@@ -13,15 +13,20 @@ import (
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
+// Six-part IDs in the documented position order,
+// org.platform.domain.system.type.instance: the WORLD NAMESPACE (world1) is the
+// domain and the TEMPLATE (starter) is the system. These are opaque strings to
+// every payload, so the order costs nothing here and is copied by the next
+// author — which is the only reason it has to be right.
 const (
-	testPlayerID   = "c360.semmachina.starter.world1.player.p1"
-	testCharacter  = "c360.semmachina.starter.world1.character.rook"
-	testAlly       = "c360.semmachina.starter.world1.character.wren"
-	testCampaignID = "c360.semmachina.starter.world1.campaign.main"
-	testSceneID    = "c360.semmachina.starter.world1.scene.gatehouse"
-	testTurnEntity = "c360.semmachina.starter.world1.turn.turn-act-1"
-	testLocation   = "c360.semmachina.starter.world1.location.courtyard"
-	testItem       = "c360.semmachina.starter.world1.item.rations"
+	testPlayerID   = "c360.semmachina.world1.starter.player.p1"
+	testCharacter  = "c360.semmachina.world1.starter.character.rook"
+	testAlly       = "c360.semmachina.world1.starter.character.wren"
+	testCampaignID = "c360.semmachina.world1.starter.campaign.main"
+	testSceneID    = "c360.semmachina.world1.starter.scene.gatehouse"
+	testTurnEntity = "c360.semmachina.world1.starter.turn.turn-act-1"
+	testLocation   = "c360.semmachina.world1.starter.location.courtyard"
+	testItem       = "c360.semmachina.world1.starter.item.rations"
 
 	testActionID = "act-1"
 	testTurnID   = "turn-act-1"

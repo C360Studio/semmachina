@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/c360studio/semstreams/pkg/types"
 	ssvocab "github.com/c360studio/semstreams/vocabulary"
 
 	"github.com/c360studio/semmachina/internal/vocabulary"
@@ -127,6 +128,47 @@ func TestParseEntities_RejectsAnUnderscorePredicateBesideALegalUnderscoreLocalID
 	ok := `{"local_id":"rusty_sword","type":"item","triples":[` +
 		`{"predicate":"world.entity.name","object":"A rusty sword"}]}`
 	parse(t, ok)
+}
+
+// An oversized local_id must be rejected HERE, with a file and a line.
+//
+// This is the failure the one-rule/one-bound consolidation closes, and it was
+// measured rather than imagined: a 129-byte local_id passed LoadPackage, passed
+// Resolve — the composed ID is well inside the 256-byte limit, as the assertion
+// below re-proves — and then failed inside Import at the payload's own segment
+// bound, from the one step that touches the network, with no file and no line.
+// Because encoding happens inside the publish loop, earlier entities were
+// already in the stream: a permanently partial world that no retry completes,
+// from a fault the package alone could have named.
+func TestParseEntities_RejectsAnOversizedLocalIDWithAFileAndALine(t *testing.T) {
+	oversized := strings.Repeat("a", vocabulary.MaxIDSegmentBytes+1)
+	line := `{"local_id":"` + oversized + `","type":"item","triples":[` +
+		`{"predicate":"world.entity.name","object":"A very long name"}]}`
+
+	err := parseErr(t, gatehouseLine, line)
+
+	var lineError *world.LineError
+	if !errorAs(err, &lineError) {
+		t.Fatalf("expected a *world.LineError so the author can find the line, got %T: %v", err, err)
+	}
+	if !strings.Contains(err.Error(), world.EntitiesFile+":2") {
+		t.Fatalf("rejection reason %q does not name the file and line", err)
+	}
+	if !strings.Contains(err.Error(), "local_id") {
+		t.Fatalf("rejection reason %q does not name the offending field", err)
+	}
+
+	// The pin: composition would NOT have caught this. If this ID ever becomes
+	// invalid upstream, the test has stopped proving that parse is the only
+	// place the fault is visible.
+	composed, composeErr := vocabulary.ComposeEntityID("c360", "world1", "starter", "item", oversized)
+	if composeErr != nil {
+		t.Fatalf("the oversized local_id fails composition too (%v); "+
+			"this test no longer proves parse is the earliest gate", composeErr)
+	}
+	if err := types.ValidateEntityID(composed); err != nil {
+		t.Fatalf("the composed ID is already invalid upstream: %v", err)
+	}
 }
 
 func TestParseEntities_RejectsMalformedRecords(t *testing.T) {

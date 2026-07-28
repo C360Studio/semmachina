@@ -315,14 +315,23 @@ func TestResolve_RejectsBadInstanceConfiguration(t *testing.T) {
 // The 256-byte limit is a property of the WHOLE composed ID, so six
 // individually legal positions can still compose an ID the graph refuses. That
 // has to fail at resolve, before anything is published.
+//
+// The oversized positions are INSTANCE configuration rather than template
+// content, because a template's own positions are now bounded per segment at
+// parse (see TestParseEntities_RejectsAnOversizedLocalIDWithAFileAndALine) —
+// which is exactly why the whole-ID check still has work to do: two positions
+// that each sit at the segment budget compose past the upstream limit together.
 func TestResolve_RejectsAnOversizedComposedID(t *testing.T) {
-	long := strings.Repeat("x", 250)
-	line := `{"local_id":"` + long + `","type":"item","triples":[` +
-		`{"predicate":"world.entity.name","object":"A very long name"}]}`
+	long := strings.Repeat("x", vocabulary.MaxIDSegmentBytes)
+	if err := vocabulary.ValidateIDSegment(long); err != nil {
+		t.Fatalf("the test's positions are not individually legal, so it proves nothing: %v", err)
+	}
 
-	// rookLine is kept so the package is otherwise complete and the player
-	// binding resolves — the ONLY thing wrong here is the composed length.
-	_, err := testPackage(t, rookLine, gatehouseLine, line).Resolve(testInstance())
+	instance := testInstance()
+	instance.Org = long
+	instance.WorldNS = long
+
+	_, err := testPackage(t).Resolve(instance)
 	if err == nil {
 		t.Fatal("Resolve composed an entity ID past the 256-byte limit")
 	}

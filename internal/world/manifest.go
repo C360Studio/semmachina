@@ -86,15 +86,19 @@ func ParseManifest(data []byte, engineVersion string) (Manifest, error) {
 }
 
 func (m Manifest) validate(engineVersion string) error {
-	for field, value := range map[string]string{
-		"id":            m.ID,
-		"name":          m.Name,
-		"version":       m.Version,
-		"engine_compat": m.EngineCompat,
-		"description":   m.Description,
+	// A slice, not a map: validation stops at the FIRST missing field, and map
+	// iteration order is randomized, so a manifest missing two fields would
+	// name a different one on each run. An author fixing an import by
+	// re-running it deserves the same answer twice.
+	for _, required := range []struct{ field, value string }{
+		{"id", m.ID},
+		{"name", m.Name},
+		{"version", m.Version},
+		{"engine_compat", m.EngineCompat},
+		{"description", m.Description},
 	} {
-		if value == "" {
-			return manifestFieldErr(field, errors.New("is required"))
+		if required.value == "" {
+			return manifestFieldErr(required.field, errors.New("is required"))
 		}
 	}
 

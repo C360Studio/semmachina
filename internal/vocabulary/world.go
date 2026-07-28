@@ -150,16 +150,49 @@ func RelationForPredicate(p Predicate) (Relation, bool) {
 	return "", false
 }
 
+// PlatformSegment is the platform position of every entity ID this engine
+// mints — position two of org.platform.domain.system.type.instance.
+//
+// It is a constant rather than a parameter because an instance-per-world
+// deployment has exactly one platform, and a caller that could choose it could
+// mint an ID no other component would find. It shares its spelling with the
+// payload-registry domain and is NOT the same contract: one addresses entities,
+// the other addresses message schemas.
+const PlatformSegment = "semmachina"
+
+// MaxIDSegmentBytes bounds one position of a composed entity ID.
+//
+// Upstream has no per-segment bound: types.MaxEntityIDBytes is a property of
+// the WHOLE composed string. That makes an oversized segment invisible to every
+// check that sees only the segment, and legal-or-not to every check that sees
+// the composition, depending on how long the other five positions happen to be.
+// So the bound is drawn here, as a RESERVE: half the upstream budget for the
+// five leading positions and their separators, half for the instance position.
+//
+// Being a reserve rather than the exact upstream failure point is the whole
+// reason it must live with the segment rule. A 129-byte local id composes a
+// 165-byte ID under the starter world's short prefix — accepted by
+// types.ValidateEntityID, accepted by every composition check — and an
+// oversized one under a long world namespace. Without the reserve, whether an
+// author's world imports depends on a prefix they never see.
+const MaxIDSegmentBytes = types.MaxEntityIDBytes / 2
+
 // ValidateIDSegment rejects anything that cannot serve as one position of a
 // canonical six-part entity ID.
 //
-// This is the F9 seam. Entity-ID segments and triple predicates have DIFFERENT
-// alphabets — a segment may carry uppercase and underscores (`rusty_sword` is a
-// fine local id), a predicate may not (`item.condition.rust_level` is rejected
-// at the write gate) — and the difference is invisible until a write fails far
-// from the file that caused it. Every producer of a segment goes through here
-// so the decision is made once, against the upstream parser, rather than
-// approximated by a local regex per caller.
+// This is the F9 seam, and it is the ONLY statement of the rule: the world
+// package's local ids, the manifest's template id, the instance config's
+// org/namespace/player id, and every untrusted identifier an ingress adapter
+// turns into an instance segment all come through here. A second copy of this
+// rule is not redundancy, it is a divergence waiting to happen — the length
+// bound was enforced on one of the two paths for exactly one task group, and
+// the gap put a partial world in the graph.
+//
+// Entity-ID segments and triple predicates have DIFFERENT alphabets — a segment
+// may carry uppercase and underscores (`rusty_sword` is a fine local id), a
+// predicate may not (`item.condition.rust_level` is rejected at the write
+// gate) — and the difference is invisible until a write fails far from the file
+// that caused it.
 //
 // The alphabet check delegates to types.ValidateEntityIDPrefix, the same parser
 // the composed ID will face. That parser accepts one to six dot-separated
@@ -170,6 +203,12 @@ func ValidateIDSegment(s string) error {
 	if s == "" {
 		return fmt.Errorf("entity-ID segment is required")
 	}
+	// Length first, so a rejection reason never echoes an oversized value.
+	if len(s) > MaxIDSegmentBytes {
+		return fmt.Errorf(
+			"entity-ID segment is %d bytes, which exceeds the %d-byte segment budget",
+			len(s), MaxIDSegmentBytes)
+	}
 	if strings.Contains(s, ".") {
 		return fmt.Errorf(
 			"entity-ID segment %q contains a dot, which would add positions rather than name one", s)
@@ -178,4 +217,31 @@ func ValidateIDSegment(s string) error {
 		return fmt.Errorf("%q is not a legal entity-ID segment: %w", s, err)
 	}
 	return nil
+}
+
+// ComposeEntityID builds the documented six-part ID and validates it against
+// the same contract the graph will apply.
+//
+// The type segment is a plain string, not an EntityKind, because the engine's
+// own entities are addressed the same way world entities are while carrying
+// type segments that are deliberately outside the world vocabulary — a turn is
+// not a thing in the fiction, and a campaign is not an entity kind a template
+// may declare. Composition is one rule for both, or the two grow apart.
+//
+// Position order is org.platform.domain.system.type.instance, which places the
+// WORLD NAMESPACE in the domain slot and the TEMPLATE in the system slot: two
+// campaigns from one template are disjoint at the domain level, and one
+// campaign's entities share a system.
+//
+// Validation happens on the COMPOSED id, not just on its parts, because the
+// 256-byte limit is a property of the whole string: six individually legal
+// positions can still compose an ID the graph refuses, and finding that out at
+// write time means finding it out after a partial import.
+func ComposeEntityID(org, worldNS, template, typeSegment, instance string) (string, error) {
+	id := strings.Join(
+		[]string{org, PlatformSegment, worldNS, template, typeSegment, instance}, ".")
+	if err := types.ValidateEntityID(id); err != nil {
+		return "", fmt.Errorf("composed entity id %q is not canonical: %w", id, err)
+	}
+	return id, nil
 }

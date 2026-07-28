@@ -2,6 +2,7 @@ package world_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -179,6 +180,106 @@ func TestImporter_RefusesToPublishAnInvalidEntity(t *testing.T) {
 	if len(publisher.messages) != 0 {
 		t.Fatalf("the invalid entity was published anyway (%d messages)", len(publisher.messages))
 	}
+}
+
+// A publish failure part-way through must be reported with the entity that
+// failed, not swallowed into a partial success.
+//
+// The failure is injected at the production publish surface because a real
+// broker will not fail on demand — which also means this test needs no
+// infrastructure, so it lives with the other in-process importer tests rather
+// than behind the Docker gate.
+func TestImport_ReportsAPartialPublishFailure(t *testing.T) {
+	plan := importedPlan(t)
+	if len(plan.Entities) < 3 {
+		t.Fatalf("the fixture plans %d entities; this test needs a failure after at least two",
+			len(plan.Entities))
+	}
+
+	publisher := &failingPublisher{failAfter: 2, err: errors.New("broker said no")}
+	importer, err := world.NewImporter(publisher)
+	if err != nil {
+		t.Fatalf("NewImporter: %v", err)
+	}
+
+	result, err := importer.Import(t.Context(), plan)
+	if err == nil {
+		t.Fatal("Import reported success after a publish failure")
+	}
+	if len(result.Entities) != 2 {
+		t.Fatalf("result reported %d published entities, want the 2 that succeeded", len(result.Entities))
+	}
+	// The partial result stays positionally usable: one sequence per reported
+	// entity, or a caller cannot tell which message the broker accepted.
+	if len(result.Sequences) != len(result.Entities) {
+		t.Fatalf("result reported %d entities and %d sequences",
+			len(result.Entities), len(result.Sequences))
+	}
+	if !strings.Contains(err.Error(), plan.Entities[2].ID) {
+		t.Fatalf("error %q does not name the entity that failed", err)
+	}
+	if !strings.Contains(err.Error(), "broker said no") {
+		t.Fatalf("error %q loses the broker's reason", err)
+	}
+}
+
+// ImportResult.Sequences promises positional correspondence with Entities, so
+// it must stay a per-entity slot even when a publisher hands back no
+// acknowledgment. A skipped append would not shorten the slice visibly — it
+// would slide every later sequence one entity to the left, which reads as a
+// successful import against the wrong messages.
+func TestImport_KeepsSequencesPositionalWhenAPublisherReturnsNoAck(t *testing.T) {
+	plan := importedPlan(t)
+
+	result, err := mustImport(t, &ackLessPublisher{}, plan)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if len(result.Sequences) != len(result.Entities) {
+		t.Fatalf("result reported %d entities and %d sequences; the two are positional",
+			len(result.Entities), len(result.Sequences))
+	}
+	for index, sequence := range result.Sequences {
+		if sequence != 0 {
+			t.Fatalf("entity %d reports sequence %d without an acknowledgment", index, sequence)
+		}
+	}
+}
+
+func mustImport(t *testing.T, publisher world.Publisher, plan *world.Plan) (world.ImportResult, error) {
+	t.Helper()
+	importer, err := world.NewImporter(publisher)
+	if err != nil {
+		t.Fatalf("NewImporter: %v", err)
+	}
+	return importer.Import(t.Context(), plan)
+}
+
+// ackLessPublisher accepts every message and acknowledges nothing.
+type ackLessPublisher struct{}
+
+func (p *ackLessPublisher) PublishToStreamWithAck(
+	_ context.Context, _ string, _ []byte,
+) (*jetstream.PubAck, error) {
+	return nil, nil
+}
+
+type failingPublisher struct {
+	failAfter int
+	err       error
+	calls     int
+	subjects  []string
+}
+
+func (p *failingPublisher) PublishToStreamWithAck(
+	_ context.Context, subject string, _ []byte,
+) (*jetstream.PubAck, error) {
+	p.calls++
+	p.subjects = append(p.subjects, subject)
+	if p.calls > p.failAfter {
+		return nil, p.err
+	}
+	return &jetstream.PubAck{Sequence: uint64(p.calls)}, nil
 }
 
 func TestNewImporter_RejectsAnUnusableConfiguration(t *testing.T) {

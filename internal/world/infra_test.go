@@ -219,16 +219,12 @@ func (i *testInfra) queryEntity(ctx context.Context, id string) (*graph.EntitySt
 // awaitEntity polls until the entity is queryable AND is no longer a bare
 // referential stub.
 //
-// Both conditions are load-bearing, and the second was found the hard way. When
-// one imported entity references another, graph-ingest materializes a
-// referential-integrity STUB at the referenced ID the moment the referencing
-// entity lands — before the referenced entity's own message is applied. So an
-// existence poll can succeed against an entity that carries three stub markers
-// and none of its own facts. `IsStub` keys on the envelope, which the fact lane
-// re-stamps at true birth, so it is the signal that actually flips.
-//
-// Anything that treats "the ID resolves" as "the world is loaded" is exposed to
-// the same half-entity — including a future boot-readiness check.
+// Both conditions are load-bearing, and the second was found the hard way: an
+// existence poll alone succeeds against a referential stub carrying none of the
+// entity's own facts. The contract is stated where the next caller will read
+// it — Import's doc comment — because anything that treats "the ID resolves" as
+// "the world is loaded" is exposed to the same half-entity, including a future
+// boot-readiness check that will never open this file.
 func (i *testInfra) awaitEntity(t *testing.T, id string) *graph.EntityState {
 	t.Helper()
 	ctx := t.Context()
