@@ -68,6 +68,9 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 
 ## 4. Dice component
 
+- [ ] 4.0 Create the campaign entity holding `campaign_seed`, generated once at world
+      instantiation, via atomic `graph.mutation.entity.create` — the same call is task
+      10.1's instantiation gate, so the seed holder and the boot sentinel are one entity
 - [ ] 4.1 Implement `2d6-pbta/v1` with seed = SHA-256(campaign_seed ‖ turn_id) → PCG;
       tests: band boundaries (6/7/9/10), byte-identical re-execution, distinct turns roll
       independently, no wall-clock/global-RNG usage. Key dice count, faces, and band
@@ -159,10 +162,14 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       (grep-check across `cmd/`). **Guard instantiation: import only when the world instance
       does not already exist** — a boot-time import into a live campaign resets every
       template-declared fact and drops play-created relationships, which is the exact
-      inverse of "a restart must not replay the dragon eating you". The campaign entity
-      carries a `{template_id}@{version}` marker the importer checks before publishing
-      (`Plan` already carries both). Boot-readiness must also exclude stubs via
-      `EntityState.IsStub()` (F11), or it reports a world loaded that is half-materialized
+      inverse of "a restart must not replay the dragon eating you". Gate it the way
+      semstreams seeds rule configs into KV (`ConfigManager.SeedFromRuntime`: Create-not-Put,
+      key-exists treated as a no-op, so operator edits are never overwritten): **one atomic
+      `graph.mutation.entity.create` of the campaign entity is the whole gate** — success
+      means a fresh world, `ErrorCodeEntityExists` means already instantiated, skip the
+      import. Do NOT apply create-not-put per template entity: referential stubs occupy
+      keys, so a referenced entity's own create would return key-exists and it would stay a
+      permanent stub (F11). Boot-readiness must also exclude stubs via `EntityState.IsStub()`
 - [ ] 10.2 Implement the mock model endpoint (HTTP stub honoring the model-endpoint
       contract, scripted by persona role + scenario fixture; re-derived, no semdragon
       imports)

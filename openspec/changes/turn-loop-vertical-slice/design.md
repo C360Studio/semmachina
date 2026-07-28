@@ -354,6 +354,30 @@ distinct rules — `types.ValidateEntityID` for mapped IDs, `vocabulary.ParsePre
 every predicate in `entities.jsonl` — and must reject bad predicates at import time with a
 reason naming the offending line, rather than letting them fail later at materialization.
 
+### F13 — The instantiation gate is one atomic create, borrowed from KV config seeding
+
+semstreams already solves "seed declared state without clobbering live state":
+`ConfigManager.SeedFromRuntime` writes file-loaded rules into KV **using Create, not Put, so
+operator edits already in KV are never overwritten — key-already-exists is a no-op**
+(`processor/rule/kv_config_integration.go`); `flowstore.Manager.Create` uses the same idiom.
+That maps onto world instantiation exactly: template entities are the file-loaded rules,
+play-created state is the operator edits.
+
+Granularity is where it gets interesting. **Per-entity create-not-put is wrong here**:
+referential stubs occupy keys (F11), so importing an entity that references another creates
+a stub at the referenced key, and that entity's own create then returns `ErrKVKeyExists` —
+which a no-op policy would swallow, leaving it a permanent factless stub. The stream path
+works today precisely because it merges.
+
+So the gate is **a single sentinel**: one atomic `graph.mutation.entity.create` of the
+campaign entity decides the whole question — created means fresh world, proceed with the
+full import; `ErrorCodeEntityExists` means already instantiated, skip. This is genuinely
+atomic (`CreateEntityStrict` exists specifically to close the exists-check-then-Put TOCTOU,
+per its own doc comment), costs one round trip rather than N, and is immune to the stub
+problem because no template entity references the campaign. It is also free: D4 needs a
+campaign entity to hold `campaign_seed` regardless, so the boot sentinel and the seed holder
+are the same entity.
+
 ### F12 — Verify against the pinned module cache, not the working checkout
 
 The semstreams working checkout at `~/Code/c360/semstreams` runs ahead of the pin — measured
