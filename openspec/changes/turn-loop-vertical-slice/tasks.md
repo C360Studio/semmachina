@@ -7,18 +7,23 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 
 ## 1. Upstream verification (design Open Questions — do FIRST)
 
-- [ ] 1.1 Verify the typed rule evaluator can watch/match game predicates on `ENTITY_STATES`
-      (turn phase, verdict class triples); record findings in design.md; file an upstream
-      semstreams issue if game triples cannot be rule-matched (design risk #2 — do NOT
-      work around locally)
-- [ ] 1.2 Verify agentic terminal-tool schema support for the banded verdict exit (D3);
-      if nesting is unsupported, adopt the flattened three-parameter fallback and note it
-      in design.md
-- [ ] 1.3 Verify WebSocket input/output component bidirectional support and the
-      graph.mutation batch atomicity semantics (affects D5 no-partial-batches); record
-      findings and file upstream issues for gaps
-- [ ] 1.4 Pin `github.com/c360studio/semstreams` to the latest `v1.0.0-beta.*` tag in
-      go.mod and confirm the e2e-relevant packages compile against it
+- [x] 1.1 Verified GREEN (design.md F1): `conditions[].field` matches arbitrary triple
+      predicates on `ENTITY_STATES`; in-tree precedent
+      `configs/rules/lifecycle/01-mission-launch.json`. No upstream issue needed — design
+      risk #2 retired. Constraint found: predicates are exactly three lower-kebab segments
+      (F2), so `turn.phase` → `turn.phase.current` and no underscores; `transition` cannot
+      fire on an entity's first write (F3)
+- [x] 1.2 Verified AMBER (design.md F4/F5): `ToolDefinition.Parameters` is arbitrary JSON
+      Schema so the nested banded shape holds — flattened fallback NOT needed. But `Strict`
+      is provider-dependent and unreliable on the MVP runtime, so executor-side validation
+      is the enforcement of record; ADR-026 documents small-model schema collapse, so the
+      adjudicator starts on the mid slot
+- [x] 1.3 Verified (design.md F7/F8): `input/websocket` + `output/websocket` both exist as
+      an ingress/egress pair. `graph.mutation.triple.add_batch` is atomic PER ENTITY only —
+      cross-entity partial success returns `FailedSubjects` with a nil error. D5 survives
+      via validate-then-commit + idempotent retry; no upstream issue filed
+- [x] 1.4 Pinned `github.com/c360studio/semstreams v1.0.0-beta.158`; `go build ./...` and
+      `go vet ./...` clean against the full import surface the slice needs
 
 ## 2. Vocabulary and payloads
 
@@ -56,16 +61,19 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       membership, per-type bounds, target existence); rejection tests for each failure
       class per effect-application spec
 - [ ] 5.2 Implement whole-batch commit via `graph.mutation.*` with replace semantics and
-      batch identity derived from `turn_id`; tests: atomicity (reject leaves world
-      unchanged), idempotent re-application, committed effects graph-visible
+      batch identity derived from `turn_id`; validate every intent before issuing any
+      write, and treat a response naming `FailedSubjects` as failure even though the
+      transport returns nil error (F7 — batches are atomic per entity, not per batch);
+      tests: validation rejection leaves world unchanged, failed-subjects response fails
+      the turn, idempotent re-application converges, committed effects graph-visible
 
 ## 6. Turn intake and phase management
 
 - [ ] 6.1 Implement the intake consumer: durable consumer on the player-action stream,
       turn entity creation in `accepted`, ack-after-durable-accept; duplicate-delivery
       test (one turn, second delivery no-op)
-- [ ] 6.2 Implement phase transitions as replace-writes on `turn.phase` with stage guards;
-      tests: single-valued phase, duplicate stage trigger no-op
+- [ ] 6.2 Implement phase transitions as replace-writes on `turn.phase.current` with stage
+      guards; tests: single-valued phase, duplicate stage trigger no-op
 - [ ] 6.3 Implement explicit `failed` transitions (validation rejection, cap exhaustion)
       with recorded reasons retrievable from the turn entity
 
@@ -74,9 +82,11 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 - [ ] 7.1 Implement the context assembler component: fixed scene-scoped query (scene +
       members + 1-hop) executed at persona run time; test that post-submission state
       changes are reflected (execution-time reads)
-- [ ] 7.2 Configure the adjudicator loop + terminal tool enforcing the banded verdict
-      schema and closed classes at the tool boundary; rejection test for out-of-vocabulary
-      exit; `MaxIterations` cap with explicit failure
+- [ ] 7.2 Configure the adjudicator loop (mid model slot per F5) + terminal tool enforcing
+      the banded verdict schema and closed classes **in the executor**, not via provider
+      strict-mode (F4); emit only rule-matchable scalar triples and carry banded intents by
+      reference (F6); rejection test for out-of-vocabulary exit; `MaxIterations` cap with
+      explicit failure
 - [ ] 7.3 Configure the narrator loop + terminal tool (prose ref + rule-opaque metadata
       only, no mutation-capable tools); prose-first-ref-last write ordering per narration
       spec

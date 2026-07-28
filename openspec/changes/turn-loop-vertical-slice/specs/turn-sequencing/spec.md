@@ -4,10 +4,17 @@
 
 ### Requirement: Turn entity with durable phase
 Each accepted `PlayerAction` SHALL create exactly one turn entity in `ENTITY_STATES`,
-identified 1:1 with `action_id`, carrying a single-valued `turn.phase` predicate that
-moves through `accepted → adjudicating → resolving → applying → narrating → complete`
+identified 1:1 with `action_id`, carrying a single-valued `turn.phase.current` predicate
+that moves through `accepted → adjudicating → resolving → applying → narrating → complete`
 (or `failed`). Phase writes SHALL replace, never append. Verdict, roll, effect-batch, and
-narration references SHALL land as triples on the turn entity as they are produced.
+narration references SHALL land as triples on the turn entity as they are produced. Every
+predicate the engine writes SHALL be a canonical three-segment lower-kebab identity
+(`domain.category.property`) — the graph write gate rejects any other shape.
+
+#### Scenario: Engine predicates satisfy the canonical contract
+- **WHEN** any turn-loop predicate is written to `ENTITY_STATES`
+- **THEN** it has exactly three lower-kebab segments and is accepted by the graph write
+  gate, and no two-segment or underscore-bearing predicate appears anywhere in the engine
 
 #### Scenario: One action, one turn
 - **WHEN** a `PlayerAction` is consumed and accepted

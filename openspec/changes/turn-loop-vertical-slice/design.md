@@ -31,7 +31,7 @@ process stops), no operator UI.
 ### D1 — Turn state: plain graph entity, not a lifecycle Participant (yet)
 
 Each accepted action creates a **turn entity** in `ENTITY_STATES` with a single-valued
-`turn.phase` predicate (`accepted → adjudicating → resolving → applying → narrating →
+`turn.phase.current` predicate (`accepted → adjudicating → resolving → applying → narrating →
 complete | failed`), written via `graph.mutation.*` (replace semantics) by the component
 that owns each transition. Verdict, roll, effect-batch, and narration refs land as triples
 on the turn entity as they are produced.
@@ -141,8 +141,10 @@ not from adapter memory.
 
 ### D10 — Personas and context assembly
 
-Two agentic-loop configurations (upstream substrate): `adjudicator` (small/fast model
-slot) and `narrator` (larger slot), both with `MaxIterations` caps and terminal tools
+Two agentic-loop configurations (upstream substrate): `adjudicator` (**mid** model slot per
+F5 — it carries the slice's only schema-bearing exit; demoting it to the small/fast slot is
+a later optimization, not the starting configuration) and `narrator` (larger slot, prose
+only — no schema burden), both with `MaxIterations` caps and terminal tools
 enforcing D3/D7 schemas (M5, M2). The context assembler is a component performing a fixed
 scene-scoped graph query at persona execution time — scene entity, its member entities,
 1-hop relationships, current turn artifacts — explicitly not thematic retrieval. No
@@ -161,11 +163,10 @@ delivery, crash-resume at each phase. Live-model runs are a manual flow config s
 
 - [Beta API drift until semstreams v1] → pin exact beta tag; file upstream issues instead
   of workarounds; the spike touches broad substrate surface early, which is the point.
-- [Rule engine's typed `ENTITY_STATES` evaluator may not match game predicates
-  (turn.phase, verdict class) without upstream support] → verify against semstreams
-  source FIRST (developer contract); if game triples can't be rule-matched, that is an
-  engine ask filed upstream, not a local rule-engine workaround. This is the spike's
-  biggest unknown.
+- ~~[Rule engine's typed `ENTITY_STATES` evaluator may not match game predicates
+  (turn.phase, verdict class) without upstream support]~~ **RESOLVED — see F1.** Arbitrary
+  triple predicates are matchable on `ENTITY_STATES` with an in-tree precedent; no upstream
+  ask. Residual constraint is naming only (F2, three-segment lower-kebab).
 - [Terminal-tool schema expressiveness for banded effect intents] → verify agentic tool
   schema support early; fallback is flattening bands into three tool parameters, not
   loosening the closed vocabulary.
@@ -176,9 +177,11 @@ delivery, crash-resume at each phase. Live-model runs are a manual flow config s
   instance-per-world at slice scale; durable archive/export policy is a stage-4+ concern
   and possibly an upstream ask.
 - [One adjudicator call must anticipate outcome bands, which strains small models] →
-  mitigated by schema-constrained tool exit + mock-first development; if quality is
-  insufficient at the 4B slot, move adjudicator to the mid slot before changing the
-  architecture.
+  **sharpened by F5**: upstream (ADR-026) already hit schema-adherence collapse on small
+  models, so the adjudicator starts on the mid slot and the tool-boundary validator — not
+  provider strict-mode (F4) — is the enforcement of record. Mock-first development plus
+  per-tool retry policy absorbs the residual; dropping to the 4B slot is an experiment run
+  after the loop is green, never the default.
 
 ## Migration Plan
 
@@ -187,13 +190,108 @@ starter world fixture; CI runs unit + mock-LLM e2e. Rollback = git revert; no pe
 state contract to preserve until a campaign is worth keeping (pre-v1 clean-break policy
 applies to any NATS state).
 
+## Upstream Verification Findings (task group 1, semstreams v1.0.0-beta.158)
+
+Verified against the semstreams checkout at the pinned tag. No upstream issues filed —
+every gap resolved into a local design refinement rather than an engine ask.
+
+### F1 — Game predicates are rule-matchable (design risk #2 closes GREEN)
+
+`conditions[].field` is an arbitrary triple predicate path; the evaluator looks up the
+predicate in the entity's triples and compares the object value
+(`processor/rule/docs/conditions.md`). Rule entity-watching supports `ENTITY_STATES` and
+only `ENTITY_STATES` (`processor/rule/entity_pattern_contract.go:39`) — exactly where D1
+puts turn state. In-tree precedent: `configs/rules/lifecycle/01-mission-launch.json`
+matches `mission.command.requested == "launch"` on a graph-ingest-written entity and fires
+a lifecycle action — structurally identical to `turn.phase.current == "accepted"` → spawn
+adjudicator. Operators cover eq/ne/lt/lte/gt/gte/between, string contains/prefix/suffix/
+regex, bool eq/ne, in/not_in/array_contains/length_*, plus a `transition` operator with
+`from` sets (a declarative FSM guard). Bootstrap replay with `on_recovery` supplies
+restart resume. **No engine ask; the spike's biggest unknown is retired.**
+
+### F2 — Predicates are exactly three segments (corrects D1/D7 naming)
+
+`vocabulary/predicate_contract.go` rejects any predicate without exactly three segments
+(`PredicateReasonArity`); each segment is lower-kebab ASCII `[a-z][a-z0-9]*(-[a-z0-9]+)*`,
+≤64 bytes. This is enforced fail-closed at the ENTITY_STATES write gate
+(`graph.ValidateEntityPredicates`, and `validateTriplePredicates` on the batch path), so a
+two-segment predicate is rejected at write, not silently stored. Consequences: `turn.phase`
+becomes **`turn.phase.current`** throughout, and **underscores are illegal in predicates** —
+`requires_roll` stays a payload/tool field but its triple form is
+`turn.verdict.requires-roll`. All rule-matched predicates in the rule pack must be
+three-segment lower-kebab.
+
+### F3 — `transition` cannot fire on an entity's first write (affects D2 guards)
+
+A `transition` condition returns false on first evaluation because it needs a recorded
+previous value. A turn entity created directly in `accepted` therefore never fires a
+`transition`-guarded rule on its creating write. The accepted → adjudicating trigger uses
+`eq` + `on_enter` (edge-triggered by rule match state); `transition` is available only for
+later phase hops where a prior value exists.
+
+### F4 — Terminal-tool nesting is expressible but schema enforcement is not guaranteed
+
+`agentic.ToolDefinition.Parameters` is `map[string]any` — arbitrary JSON Schema, so D3's
+banded shape is expressible and the flattened three-parameter fallback is not needed on
+expressiveness grounds. But `Strict` enforcement is provider-dependent
+(`agentic/tools.go:28`): honored on OpenAI/vLLM/OpenRouter, **silently ignored on Anthropic
+and Gemini**, best-effort and model-dependent on Ollama. Strict additionally requires
+`additionalProperties:false` at every level, every property listed in `required`, and max
+nesting 5. **Therefore tool-boundary validation in our executor is load-bearing, not
+decorative** — it is the only enforcement that holds on the MVP's local runtime.
+`agentic.MetadataKeyDecideActionAllowlist` is the ready-made closed-vocabulary seam: a
+rule-supplied allowlist validated in the executor, rejecting non-members with
+`ToolErrorInvalidArgs` so the model can self-correct on retry (M2).
+
+### F5 — Upstream has already lived D3's small-model risk (sharpens D10)
+
+ADR-026: *"requiring every agent to submit via a schema-enforced terminal tool breaks on
+small models. Schema adherence fails; retries eat iteration budget; flows stall. Semspec
+lived this."* Their resolution — concentrate schema discipline in one role and run that
+role on a stronger model — is what D3 already does (one adjudicator call is our only
+schema-bearing exit; the narrator returns prose). But **D10's placement of the adjudicator
+on the small/fast slot is the exact configuration ADR-026 warns about.** Design change: the
+adjudicator starts on the **mid** model slot; moving it down is the optimization, not the
+default. `agentic-loop`'s `SynthesizeTerminalOnCompletion` and per-tool retry policy
+(`agentic-tools.tool_retries`) are the cheap-substrate safety nets.
+
+### F6 — Verdict triples carry scalars; banded intents ride as a reference
+
+The `decide` executor (`processor/agentic-tools/decide.go:123`) publishes only a small set
+of rule-matchable metadata triples onto the loop entity and keeps bulky fields in the
+result Content for `read_loop_result`. D3's banded effect intents are bulky and are never
+rule-matched (only the applier consumes them), so they follow that precedent: the rule-
+matched scalars (`turn.verdict.plausibility`, `turn.verdict.risk`,
+`turn.verdict.requires-roll`) land as triples; the banded intent set lands as a reference.
+This is the rules-carry-references discipline applied to the verdict.
+
+### F7 — Batch mutations are per-entity atomic, not per-batch (refines D5)
+
+`graph.mutation.triple.add_batch` groups triples by Subject and issues **one CAS per
+entity**; cross-entity partial success is a first-class documented outcome returning
+`FailedSubjects` with a **nil Go error** (`processor/graph-ingest/mutations.go:373`).
+Triple-level adds are also must-exist (ADR-055): a triple targeting an absent entity is
+rejected into `FailedSubjects`. D5's no-partial-batches guarantee survives for the case it
+was written for — *validation* rejection — because the applier validates every intent
+before issuing any write. It does not survive an infrastructure-level partial commit. Two
+binding requirements follow: (a) the applier MUST inspect `FailedSubjects` on every batch
+response and treat non-empty as failure — a nil error is not success, and this is the
+sharpest bug magnet in the slice; (b) recovery is idempotent re-application keyed on
+`turn_id` under replace semantics, which D2 already specifies. Substrate-level multi-entity
+atomicity would be an upstream ask; D5 does not need it and none is filed.
+
+### F8 — Environment notes
+
+`input/websocket` and `output/websocket` both exist as separate components — bidirectional
+play is an ingress/egress pair (matching D9's split), not one duplex component.
+`ENTITY_STATES` is created with no TTL and an explicit ADR-068 guardrail against age/size
+eviction (`processor/graph-ingest/component.go:1128`), matching the project invariant;
+`processor/rule/docs/entity-watching.md` still documents a 7-day TTL and is stale doc drift
+(candidate upstream doc issue, not a blocker). Pinned `v1.0.0-beta.158`; `go build` and
+`go vet` clean against the full import surface the slice needs.
+
 ## Open Questions
 
-- Exact upstream surfaces to confirm at implementation start (read semstreams source, per
-  developer contract): typed rule-evaluator predicate coverage; agentic terminal-tool
-  schema nesting; WebSocket input/output component current state (engine gap #3 is about
-  hardening, but confirm basic bidirectional support); graph.mutation batch semantics
-  (atomicity of a multi-triple commit — affects D5's no-partial-batches guarantee).
 - Whether the intake component and effect applier are one component or two (both are
   thin; decide at implementation by port topology, not architecture).
 - `world_ns` allocation format (slug rules, collision policy) — trivial single-instance,
