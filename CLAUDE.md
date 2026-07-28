@@ -48,7 +48,7 @@ parsing prose.
 | Agentic personas | Narrator/GM, fiction adjudicator (ADR-028 coordinator pattern), NPC agents, continuity checker (ops role reskinned), chronicler, writer loop (offline replay) |
 | Rule packs (JSON data) | Turn sequencing chains, consequence propagation, world reactions (OnEnter/OnExit), bounded loops (`MaxIterations`), fan-out/join (`for_each` + counter join), salience markers |
 | Components | Dice/resolution (seeded-deterministic), context assembler (GraphRAG retrieval), inventory/economy, chronicle egress, WebSocket player I/O |
-| Lifecycle (ADR-047) | Campaign, scene/encounter, story-arc as `Participant`s; operator patch contract = human-GM override; restart recovery = "resume game" |
+| Lifecycle (ADR-049; supersedes 047) | Campaign, scene/encounter, story-arc as `Participant`s; phases land as graph triples in `ENTITY_STATES` (rule-matchable); operator patch contract = human-GM override; restart recovery = "resume game" |
 
 ## State Ownership (facts vs requests)
 

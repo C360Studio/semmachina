@@ -35,7 +35,7 @@ bookkeeping, it is a rule or component.
 | Combat rounds / NPC exchanges (bounded loop) | Coordinated rule set + `MaxIterations` over a lifecycle entity |
 | "Is this proposed action plausible?" | Agentic persona (adjudicator) exiting via verdict triple |
 | Roll dice, assemble context, write prose to ObjectStore | Component |
-| Campaign / scene / story-arc with phases and resume | Lifecycle `Participant` (ADR-047 upstream) |
+| Campaign / scene / story-arc with phases and resume | Lifecycle `Participant` (ADR-049 upstream; supersedes 047 — phases are graph triples) |
 
 ## The 5 Rules
 

@@ -12,7 +12,9 @@ design center solves: the world has a truth independent of any story told about 
 Secondary product: the **writer loop / chronicler** — a running prose collection
 during play, replayable into long-form manuscript from the event log + trajectories.
 Lead wedge is **creator/authoring** (play-to-draft story development), not
-mass-market entertainment.
+mass-market entertainment. The primary persona is a **solo story creator**: they
+complete a scene, understand why consequences occurred (legible resolution, not
+raw triples), and leave with reusable prose.
 
 Founding document: `docs/proposals/fiction-first-rpg.md` (imported from the
 SemStreams repo review; read it before scoping anything).
@@ -29,7 +31,8 @@ SemStreams repo review; read it before scoping anything).
     (seeded-deterministic), context assembler (GraphRAG retrieval path),
     inventory/economy, chronicle egress.
   - **Lifecycle workflows**: campaign, scene/encounter, story-arc as
-    `Participant`s (ADR-047); operator patch contract = human-GM override.
+    `Participant`s (ADR-049, which supersedes ADR-047 — phases land as graph
+    triples in `ENTITY_STATES`); operator patch contract = human-GM override.
 - **SemStreams owns the substrate** — graph, KV-twofer, rule engine, lifecycle
   harness, agentic loop/tool/model primitives, payload registry, governance.
   **Substrate gaps are filed upstream as engine asks, never hand-rolled here.**
@@ -72,6 +75,31 @@ Standalone 32GB Apple Silicon, **instance-per-world** (one world = one stack).
 This deletes multi-tenant campaign scoping from the MVP by resolving isolation at
 the process boundary. Federation (cross-world entity references via 6-part IDs,
 NATS leaf nodes) is post-MVP, pre-adapted by design.
+
+## Sequencing (working roadmap)
+
+Ordered; each stage is one or more OpenSpec changes. Later stages stay in the
+vision but are NOT on the active MVP path.
+
+1. **Turn-loop engine spike** (active: `turn-loop-vertical-slice`) — durable turn
+   state, idempotent effects, validated closed-vocabulary mutations, crash tests.
+2. **Creator surface** — minimal Svelte client: action in, narration out, and a
+   **resolution card** (plausibility, risk, modifiers, roll, consequence) so
+   outcomes are legible, never arbitrary; typed progress/error/reconnect.
+3. **Scene completion + chronicler** — salience marking, vignette emission,
+   Markdown preview/export (play-to-draft becomes demonstrable).
+4. **Continuity checking + retrieval evaluation** — the ops-role diff persona and
+   an RPG-shaped retrieval-eval corpus (theme-spanning ground-truth queries).
+5. **Campaign/scene lifecycle** — `Participant` workflows, resume, curated
+   tone/crunch rule-pack presets.
+6. **Epistemic model** — canonical truth vs character belief vs player knowledge
+   vs narration-revealed; required BEFORE NPC cognition, else retrieval produces
+   spoilers and omniscient NPCs.
+7. **NPC cognition + cost governance** — tiered NPCs, decision/voice split,
+   admission-gate LOD (needs the upstream governance engine ask).
+8. **Deferred**: human-GM editing surface, sandboxed user-authored rules, hosting,
+   federation, multi-tenancy, detailed inventory/economy. The hosted cost model in
+   the founding doc is an assumptions register, not validated economics.
 
 ## Standing Technical Conventions
 

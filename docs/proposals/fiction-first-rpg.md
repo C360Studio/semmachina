@@ -7,6 +7,21 @@ original pitch was dropped and must not be reintroduced).
 **Date:** 2026-07-26. **Origin:** external LLM product pitch, reviewed and re-grounded against the
 actual stack in-session.
 
+> **Post-import corrections (2026-07-28, verified against the semstreams repo).** The body below is
+> preserved as written; two of its upstream assumptions have since moved:
+>
+> 1. **ADR-047 is superseded by ADR-049** (lifecycle harness as schema-and-discipline over
+>    `ENTITY_STATES`). Every concept this doc relies on (Participant, phase graphs, operator-writable
+>    patch = GM override, restart recovery) carries forward — and phases now land as graph triples,
+>    so rules can match lifecycle state directly.
+> 2. **Epic B is closed, and the B2 framing here is stale.** The B2 co-location experiment closed
+>    NEGATIVE (ADR-086: thematic recall flat at 0.85 in both arms — partition was never the
+>    bottleneck); the recall ceiling was fixed by thematic-synthesis context work (0.85 → 0.95,
+>    PR #702). Read this doc's "B2 quality is load-bearing" as: **retrieval/context quality is
+>    load-bearing**, and the "second co-location corpus when B2's gate lands" de-risk becomes: an
+>    RPG-shaped corpus is valuable as a general retrieval-evaluation corpus (theme-spanning
+>    ground-truth queries over heterogeneous types), not as an instrument for a closed experiment.
+
 ## The idea
 
 A fiction-first AI RPG (PbtA-style: narrative positioning dictates mechanics) where semstreams is
