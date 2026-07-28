@@ -10,7 +10,11 @@ that moves through `accepted → adjudicating → resolving → applying → nar
 lane (`graph.mutation.entity.update_with_triples`) — the triple-add lanes append, so a
 duplicate stage trigger through them leaves a turn holding two phases with no error, and
 the phase predicate stops being an idempotency guard. Verdict, roll, effect-batch, and
-narration references SHALL land as triples on the turn entity as they are produced. Every
+narration references SHALL land as triples on the turn entity as they are produced. The
+action payload SHALL be durably stored and referenced from the turn's birth record, written
+before the action is acknowledged, so a turn that survives a crash can still be adjudicated:
+the action's free text is fiction and exceeds the triple object budget, so it reaches the
+graph only as a reference. Every
 predicate the engine writes SHALL be a canonical three-segment lower-kebab identity
 (`domain.category.property`) — the graph write gate rejects any other shape.
 

@@ -375,11 +375,25 @@ assembled context is scene-bounded regardless of world size.
 But `turn.action.scene` accumulates on the scene's incoming index: one edge per turn ever
 taken there. The assembler filters them out, so *context* stays bounded, while the incoming
 *query* returns O(campaign history) edges every turn. Per-turn token cost is flat; per-turn
-retrieval transport is not. It scales with campaign length rather than world size, so it is
-not urgent — but it is exactly the kind of asymmetry the cost pins should be honest about,
-and it is a reminder that "bounded context" and "bounded retrieval" are different claims.
-Stage 2's place ontology dissolves it: turns point at the scene, members point at the
-location, and the two indexes stop sharing a key.
+retrieval transport is not. "Bounded context" and "bounded retrieval" are different claims,
+and only the first is currently true.
+
+**And the curve is a cliff, not a slope.** The index reply is a single NATS message, so at
+roughly 100 bytes per entry the default 1 MB `max_payload` is reached near ten thousand
+accumulated edges — after which the membership read fails outright and **the scene becomes
+unassemblable**. Not "slower": unplayable, in the scene the campaign has used most.
+
+Stage 2's place ontology reduces it rather than dissolving it: if scenes are durable
+entities carrying a place reference, the location's incoming index accumulates one edge per
+scene ever played there — the same shape at coarser granularity, per-scene instead of
+per-turn. Note also that dissolving it requires **the assembler to re-key its membership
+read onto the location**; adding a membership predicate alone changes nothing while the
+reverse lookup is still keyed on the scene.
+
+The structural fix is available now and is an engine ask (M6), not a local workaround: the
+incoming index key is a fixed-position layout and the underlying key filter supports
+positional wildcards, so a **predicate filter on the incoming query** is expressible — which
+would bound the wire payload by membership instead of by campaign history.
 
 ### F16 — A runtime gate over proposals is not an authoring gate over data
 

@@ -265,8 +265,11 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       by the member (`world.location.current` → scene), so "who is here" is a reverse lookup
       the assembler answers via the incoming index rather than by scanning the world. Its
       readiness gate matters: a mid-build index returns a partial keyset, which reads as a
-      smaller scene rather than an error, so boot must wait on it the same way it waits on
-      the import-completion marker; `RegisterPayloads` called at every binary's bootstrap
+      smaller scene rather than an error. **Gate on a positive readback — poll the incoming
+      query until the imported membership edges actually appear — never on the absence of
+      `ErrIndexNotReady`**, which is inert in exactly that window: the index latches ready
+      when the target count is zero and enumeration completes, so on a fresh
+      instance-per-world boot it reports ready *before the import writes anything*; `RegisterPayloads` called at every binary's bootstrap
       (grep-check across `cmd/`). **Guard instantiation: import only when the world instance
       does not already exist** — a boot-time import into a live campaign resets every
       template-declared fact and drops play-created relationships, which is the exact
