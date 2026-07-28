@@ -27,14 +27,19 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 
 ## 2. Vocabulary and payloads
 
-- [ ] 2.1 Create the `vocabulary` package: plausibility, risk, consequence classes,
-      outcome bands, effect types, status enums, `requires_roll` mapping (D7); table-driven
-      tests that every rule-matched constant set is closed and enumerable
-- [ ] 2.2 Implement the five payload types (`PlayerAction`, `Verdict` with banded effect
-      intents, `RollResult`, `EffectBatch`, `TurnManifest`) per the `new-payload` skill:
-      explicit `RegisterPayloads(reg)` (the `init()` singleton was retired upstream in
-      beta.18), alias-based `MarshalJSON` that does not wrap `BaseMessage`,
-      production-decoder round-trip tests over fully-populated fixtures
+- [x] 2.1 `internal/vocabulary`: 13 closed sets, 29 predicate constants, attribute-bounds
+      registry (overridable per D-note, engine numbers as defaults), relation→predicate map,
+      `BandForTotal`, and the now-advisory `RequiresRoll` mapping (D12). Closure proven by
+      an AST scan, not convention; every predicate constant is proven acceptable by
+      semstreams' own `vocabulary.ParsePredicate`, with an anti-vacuity test asserting that
+      parser rejects the nine shapes F2 names
+- [x] 2.2 `internal/payload`: all five types with explicit `RegisterPayloads(reg)` (the
+      `init()` singleton was retired upstream in beta.18 — skill and reviewer contract
+      corrected), alias-based `MarshalJSON` that does not wrap `BaseMessage`, and
+      round-trip tests through `message.NewDecoder` over fully-populated fixtures. F6 is
+      structural: `VerdictScalars` is its own type, so `Triples()` cannot grow to include a
+      band. Identity fields gated as entity-ID segments (review HIGH-1: `action_id` becomes
+      the turn entity's instance segment, so a bad one was a poison-message loop)
 
 ## 3. World loading
 
