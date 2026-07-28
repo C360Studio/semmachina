@@ -1,0 +1,462 @@
+package turn
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
+
+	"github.com/c360studio/semmachina/internal/graphio"
+	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/vocabulary"
+)
+
+// Source is the triple Source stamped on every phase fact the recorder writes.
+const Source = "turn-recorder"
+
+// EntityMessageType is the provenance envelope stamped on a turn entity.
+//
+// It is stamped explicitly because an entity with a zero envelope is
+// indistinguishable from a referential stub to graph.EntityState.IsStub, and the
+// turn entity is precisely the thing every stage guard asks about. No message of
+// this type is ever published — the turn is created through the atomic mutation
+// lane and advanced through the merge lane — so it is deliberately absent from
+// the payload registry.
+var EntityMessageType = message.Type{
+	Domain:   payload.Domain,
+	Category: payload.CategoryTurnState,
+	Version:  payload.SchemaVersion,
+}
+
+// Store is the graph surface the recorder needs.
+//
+// The write methods are the atomic-create lane and the merge lane, and nothing
+// else. There is no seam here for triple.add or .add_batch: the phase is
+// single-valued, and a phase committed through an appending lane leaves a turn
+// holding two phases with a success response and no error anywhere.
+type Store interface {
+	// CreateEntity performs an atomic create-or-fail, reporting a taken key as
+	// graphio.ErrEntityExists.
+	CreateEntity(ctx context.Context, entity *graph.EntityState) (graphio.CreateResult, error)
+	// GetEntity reads one entity, reporting an absent one as
+	// graphio.ErrEntityNotFound rather than as an empty state.
+	GetEntity(ctx context.Context, id string) (*graph.EntityState, error)
+	// MergeTriples writes one entity's triples with replace-by-predicate
+	// semantics.
+	MergeTriples(
+		ctx context.Context,
+		entityID string,
+		triples []message.Triple,
+		opts ...graphio.MergeOption,
+	) (*graph.EntityState, error)
+}
+
+// The claim above, enforced by the compiler rather than by a doc comment.
+var _ Store = (*graphio.Store)(nil)
+
+// Recorder owns the turn entity: its creation, its phase, and its explicit
+// failure.
+type Recorder struct {
+	store    Store
+	identity Identity
+	now      func() time.Time
+}
+
+// Option configures a Recorder.
+type Option func(*Recorder)
+
+// WithClock overrides the recorder's clock. Tests use it so a recorded phase's
+// timestamp is an assertable value rather than whatever time it happened to be,
+// and so an arbitrarily long gap between turns can be exercised without waiting
+// for one.
+func WithClock(now func() time.Time) Option {
+	return func(r *Recorder) { r.now = now }
+}
+
+// NewRecorder builds a recorder for one world instance.
+func NewRecorder(store Store, identity Identity, opts ...Option) (*Recorder, error) {
+	if store == nil {
+		return nil, errors.New("turn recorder requires a graph store")
+	}
+	if err := identity.Validate(); err != nil {
+		return nil, err
+	}
+	recorder := &Recorder{store: store, identity: identity, now: time.Now}
+	for _, opt := range opts {
+		opt(recorder)
+	}
+	if recorder.now == nil {
+		return nil, errors.New("turn recorder requires a clock")
+	}
+	return recorder, nil
+}
+
+// Acceptance is one accept attempt's result.
+type Acceptance struct {
+	// TurnID is the turn identity derived from the action.
+	TurnID string
+	// TurnEntityID is the turn's six-part entity ID; TurnID is its instance
+	// segment.
+	TurnEntityID string
+	// Created reports that THIS call brought the turn into existence. False
+	// means the action had already been accepted — a duplicate delivery or a
+	// crash between the create and the acknowledgment — and nothing was written.
+	Created bool
+	// Phase is the turn's phase as of this call. On a duplicate it is whatever
+	// the turn has since advanced to, which is the point: an accepted action
+	// that is already narrating must not be reset to accepted.
+	Phase vocabulary.TurnPhase
+}
+
+// Accept creates the turn entity for an action, in phase accepted.
+//
+// The create is ATOMIC, and that is the entire duplicate-delivery guard. An
+// exists-check followed by a create has a window in which two deliveries both
+// find the turn absent and both create it; create-or-fail has exactly one
+// winner, and every loser learns the turn was already accepted. There is no read
+// on the winning path at all, so there is no read-then-write race to lose.
+//
+// The caller acknowledges the action only after this returns without error. That
+// ordering is the guarantee: a crash before it redelivers the action, a crash
+// after it redelivers the action into an existing turn, and neither loses the
+// player's move.
+//
+// A create that reports Degraded is a COMMITTED write whose read-back failed. It
+// is a success, and must not be retried — a retry would come back as
+// entity_already_exists and a caller reading that as "somebody else got here
+// first" would draw exactly the wrong conclusion about a turn it just created.
+func (r *Recorder) Accept(ctx context.Context, action *payload.PlayerAction) (Acceptance, error) {
+	if action == nil {
+		return Acceptance{}, errors.New("accept requires a player action")
+	}
+	if err := action.Validate(); err != nil {
+		return Acceptance{}, &RejectedActionError{ActionID: action.ActionID, Err: err}
+	}
+	turnID, turnEntityID, err := r.identity.EntityIDForAction(action.ActionID)
+	if err != nil {
+		return Acceptance{}, &RejectedActionError{ActionID: action.ActionID, Err: err}
+	}
+
+	entity, err := r.acceptedEntity(turnID, turnEntityID, action)
+	if err != nil {
+		return Acceptance{}, &RejectedActionError{ActionID: action.ActionID, Err: err}
+	}
+
+	result, err := r.store.CreateEntity(ctx, entity)
+	switch {
+	case err == nil:
+		// Degraded means the write committed and only the read-back failed, so
+		// there is nothing to confirm and nothing to retry. Otherwise the
+		// read-back is checked: a create that succeeded while the phase triple
+		// was dropped would leave a turn every later guard refuses to read, and
+		// a wedged turn that reports itself as accepted is the worst of both.
+		if !result.Degraded {
+			if err := confirmAccepted(result.Entity, turnEntityID); err != nil {
+				return Acceptance{}, err
+			}
+		}
+		return Acceptance{
+			TurnID: turnID, TurnEntityID: turnEntityID,
+			Created: true, Phase: vocabulary.PhaseAccepted,
+		}, nil
+
+	case errors.Is(err, graphio.ErrEntityExists):
+		// The action was accepted before. Read the phase rather than assuming
+		// `accepted`: a redelivery can arrive at any point in a turn's life, and
+		// reporting a narrating turn as freshly accepted would invite a caller
+		// to start it over.
+		phase, phaseErr := r.Current(ctx, turnEntityID)
+		if phaseErr != nil {
+			return Acceptance{}, phaseErr
+		}
+		return Acceptance{TurnID: turnID, TurnEntityID: turnEntityID, Phase: phase}, nil
+
+	default:
+		return Acceptance{}, fmt.Errorf("create turn %s: %w", turnEntityID, err)
+	}
+}
+
+// acceptedEntity builds the turn's birth record.
+func (r *Recorder) acceptedEntity(
+	turnID, turnEntityID string,
+	action *payload.PlayerAction,
+) (*graph.EntityState, error) {
+	at := r.now().UTC()
+	state := &payload.TurnState{
+		TurnID:   turnID,
+		Phase:    vocabulary.PhaseAccepted,
+		PlayerID: action.PlayerID,
+		SceneID:  action.SceneID,
+	}
+	triples, err := state.Triples(turnEntityID, "", Source, at)
+	if err != nil {
+		return nil, err
+	}
+	return &graph.EntityState{
+		ID:          turnEntityID,
+		MessageType: EntityMessageType,
+		Version:     1,
+		UpdatedAt:   at,
+		Triples:     triples,
+	}, nil
+}
+
+// confirmAccepted checks a created turn read back in the phase it was born in.
+func confirmAccepted(stored *graph.EntityState, turnEntityID string) error {
+	phase, err := phaseOf(stored, turnEntityID)
+	if err != nil {
+		return fmt.Errorf("turn %s was created but its phase did not store: %w", turnEntityID, err)
+	}
+	if phase != vocabulary.PhaseAccepted {
+		return &RecordError{TurnEntityID: turnEntityID, Err: fmt.Errorf(
+			"was created in phase %q, not %q", phase, vocabulary.PhaseAccepted)}
+	}
+	return nil
+}
+
+// Current reads the turn's recorded phase.
+//
+// Every anomaly is an error rather than a shrug, because this answer decides
+// whether a stage runs. A turn holding two phases is the signature of a write
+// that took an appending lane, and a reader taking the first value it found
+// would be reading a coin flip; a turn holding none is a half-created record; a
+// turn that is only a referential stub is queryable and factless, so "no phase
+// recorded" read off one would be a false negative.
+func (r *Recorder) Current(ctx context.Context, turnEntityID string) (vocabulary.TurnPhase, error) {
+	state, err := r.store.GetEntity(ctx, turnEntityID)
+	if err != nil {
+		return "", fmt.Errorf("read turn entity %s: %w", turnEntityID, err)
+	}
+	return phaseOf(state, turnEntityID)
+}
+
+func phaseOf(state *graph.EntityState, turnEntityID string) (vocabulary.TurnPhase, error) {
+	if state == nil {
+		return "", &RecordError{TurnEntityID: turnEntityID, Err: errors.New("read back as nil")}
+	}
+	if state.IsStub() {
+		return "", &RecordError{TurnEntityID: turnEntityID, Err: errors.New(
+			"is a referential stub: it holds no facts, so its phase is unknown")}
+	}
+
+	var objects []any
+	for _, triple := range state.Triples {
+		if triple.Predicate == vocabulary.TurnPhaseCurrent.String() {
+			objects = append(objects, triple.Object)
+		}
+	}
+	switch len(objects) {
+	case 0:
+		return "", &RecordError{TurnEntityID: turnEntityID, Err: fmt.Errorf(
+			"carries no %s triple; a turn without a phase cannot be resumed or diagnosed",
+			vocabulary.TurnPhaseCurrent)}
+	case 1:
+	default:
+		return "", &RecordError{TurnEntityID: turnEntityID, Err: fmt.Errorf(
+			"holds %d values for the single-valued %s; a phase written on an appending lane leaves the "+
+				"guard reading a coin flip", len(objects), vocabulary.TurnPhaseCurrent)}
+	}
+
+	value, ok := objects[0].(string)
+	if !ok {
+		return "", &RecordError{TurnEntityID: turnEntityID, Err: fmt.Errorf(
+			"records a %T phase, want a string", objects[0])}
+	}
+	phase, err := vocabulary.ParseTurnPhase(value)
+	if err != nil {
+		return "", &RecordError{TurnEntityID: turnEntityID, Err: err}
+	}
+	return phase, nil
+}
+
+// Outcome is what a transition attempt did. It never reaches the graph — the
+// graph records phases, not attempts — so it is an in-process answer, not
+// vocabulary.
+type Outcome string
+
+// The three answers a guarded transition can give.
+const (
+	// OutcomeAdvanced means this call moved the turn into the target phase and
+	// the caller owns the stage.
+	OutcomeAdvanced Outcome = "advanced"
+	// OutcomeResumed means the turn was ALREADY in the target phase: an
+	// interrupted stage re-entering itself after a crash, or a second trigger
+	// arriving while the first is in flight. Nothing was written, because the
+	// fact is already stated. The stage may run — it was never recorded as
+	// finished — and every stage under the guard is idempotent by construction.
+	OutcomeResumed Outcome = "resumed"
+	// OutcomeDeclined means the turn has moved PAST this stage. The trigger is
+	// stale, and a completed stage must not re-run. Nothing was written.
+	OutcomeDeclined Outcome = "declined"
+)
+
+// Transition is one guarded phase write's result.
+type Transition struct {
+	// Previous is the phase the turn was recorded in when the guard read it.
+	Previous vocabulary.TurnPhase
+	// Phase is the turn's phase after this call — equal to Previous whenever
+	// the outcome is not Advanced.
+	Phase vocabulary.TurnPhase
+	// Outcome is what this call did.
+	Outcome Outcome
+}
+
+// Advance moves the turn into a phase, guarded by the phase it is recorded in.
+//
+// The guard is the FSM table in internal/vocabulary, and it answers three
+// different questions with three different outcomes:
+//
+//   - The recorded phase is a legal predecessor → Advanced. The phase is written
+//     on the merge lane, replacing its own prior value.
+//   - The recorded phase IS the target → Resumed. Nothing is written; the fact
+//     is already stated, and rewriting it would only churn the timestamp.
+//   - The turn has moved past this stage (or ended) → Declined. Nothing is
+//     written. This is what at-least-once delivery produces, and doing nothing is
+//     the correct response.
+//
+// Anything else is an IllegalTransitionError, because a hop that skips a stage
+// is a wiring bug rather than a duplicate, and a turn that advanced without
+// running a stage is worse than a turn that stalled.
+//
+// The two phases Advance refuses OUTRIGHT are refused as that same type, and
+// carry their own faults. They are a wiring bug of exactly the same class — a
+// caller reaching for the wrong lane — and a plain error for them would put two
+// members of the class outside every `errors.As` a caller writes to catch it.
+// Both are decided from the target alone, before the turn's phase is read: where
+// the turn is has no bearing on whether Advance may write those phases at all.
+//
+// The read and the write are two round trips, which is a window: two writers
+// that read the same phase both pass the guard. Closing it needs a
+// compare-and-swap on the read revision, and the entity query surface returns no
+// revision to swap on. Nothing here works around that — see the package doc for
+// why this slice does not need it and where the upgrade goes.
+func (r *Recorder) Advance(
+	ctx context.Context,
+	turnID, turnEntityID string,
+	to vocabulary.TurnPhase,
+) (Transition, error) {
+	switch to {
+	case vocabulary.PhaseAccepted:
+		return Transition{}, &IllegalTransitionError{
+			TurnEntityID: turnEntityID, To: to, Fault: FaultCreatedNotAdvanced}
+	case vocabulary.PhaseFailed:
+		return Transition{}, &IllegalTransitionError{
+			TurnEntityID: turnEntityID, To: to, Fault: FaultFailureNeedsReason}
+	}
+	return r.transition(ctx, turnID, turnEntityID, to, "", "")
+}
+
+// Fail ends the turn explicitly, recording a closed reason.
+//
+// reason MUST be a member of the closed vocabulary. That check is the whole
+// point of this method existing separately from Advance: the reason lands on the
+// turn entity, which is rule-matching surface, and the shared triple projection
+// gates an object's SHAPE but not its CLOSURE — so a sentence composed at the
+// call site would pass every gate on the way to the graph.
+//
+// detailRef is an optional reference to stored detail (the refused batch, the
+// exhausted loop). Detail reaches the graph as a reference or not at all.
+//
+// A turn that has already ended DECLINES rather than being overwritten, so the
+// first recorded reason is the one that actually happened. A second failure
+// arriving later is a stale trigger, and a completed turn is not failed after
+// the fact.
+func (r *Recorder) Fail(
+	ctx context.Context,
+	turnID, turnEntityID string,
+	reason vocabulary.FailureReason,
+	detailRef string,
+) (Transition, error) {
+	if _, err := vocabulary.ParseFailureReason(string(reason)); err != nil {
+		return Transition{}, fmt.Errorf(
+			"refusing to record a turn failure: %w; the reason lands on rule-matching surface, so it is a "+
+				"code and never a sentence", err)
+	}
+	return r.transition(ctx, turnID, turnEntityID, vocabulary.PhaseFailed, reason, detailRef)
+}
+
+// transition is the one guarded write both Advance and Fail run through.
+func (r *Recorder) transition(
+	ctx context.Context,
+	turnID, turnEntityID string,
+	to vocabulary.TurnPhase,
+	reason vocabulary.FailureReason,
+	detailRef string,
+) (Transition, error) {
+	// The entity and the turn id are one turn wearing two shapes, and this is
+	// the pairing seam: a stage handed turn A's entity with turn B's id would
+	// advance a turn nobody is running and strand the one that is. The
+	// projection checks it again on the way to the graph; checking it here means
+	// a mismatch is refused before a read is even issued.
+	if err := payload.RequireTurnEntityID(turnID, turnEntityID); err != nil {
+		return Transition{}, err
+	}
+
+	previous, err := r.Current(ctx, turnEntityID)
+	if err != nil {
+		return Transition{}, err
+	}
+
+	outcome, fault := classify(previous, to)
+	if fault != "" {
+		return Transition{}, &IllegalTransitionError{
+			TurnEntityID: turnEntityID, From: previous, To: to, Fault: fault}
+	}
+	if outcome != OutcomeAdvanced {
+		return Transition{Previous: previous, Phase: previous, Outcome: outcome}, nil
+	}
+
+	state := &payload.TurnState{TurnID: turnID, Phase: to, Reason: reason}
+	triples, err := state.Triples(turnEntityID, detailRef, Source, r.now().UTC())
+	if err != nil {
+		return Transition{}, err
+	}
+	if _, err := r.store.MergeTriples(ctx, turnEntityID, triples); err != nil {
+		return Transition{}, fmt.Errorf("record phase %q on turn %s: %w", to, turnEntityID, err)
+	}
+	return Transition{Previous: previous, Phase: to, Outcome: OutcomeAdvanced}, nil
+}
+
+// classify decides what a proposed transition means. A non-empty fault means the
+// transition is refused and the Outcome is meaningless.
+//
+// Order matters. Knownness is checked FIRST because every answer below it is
+// read off the FSM table, and a phase the table does not contain gets the same
+// answers as one it does: an unknown target has rank zero, so a terminal turn
+// asked to move to a misspelled phase would be told "declined" — a benign no-op
+// — for what is a typo the caller needs to hear about.
+//
+// The terminal check comes before the equality check, and those two were
+// originally the other way round. A TERMINAL turn declines everything, including
+// a repeat of its own ending: a second failure arriving at an already-failed
+// turn is a stale trigger, not a stage resuming, and calling it a resume would
+// tell the caller to run something. Re-entry only means "resume" while the turn
+// is still running.
+//
+// After those, the legal-predecessor set decides, and only then does rank
+// separate "you are late" (decline, ordinary) from "you skipped a stage" (a
+// wiring bug).
+func classify(previous, to vocabulary.TurnPhase) (Outcome, TransitionFault) {
+	previousRank, previousKnown := vocabulary.PhaseRank(previous)
+	toRank, toKnown := vocabulary.PhaseRank(to)
+	if !previousKnown || !toKnown {
+		return "", FaultUnknownPhase
+	}
+
+	if previous.IsTerminal() {
+		return OutcomeDeclined, ""
+	}
+	if previous == to {
+		return OutcomeResumed, ""
+	}
+	if vocabulary.PhaseFollows(previous, to) {
+		return OutcomeAdvanced, ""
+	}
+	if previousRank > toRank {
+		return OutcomeDeclined, ""
+	}
+	return "", FaultSkippedStage
+}

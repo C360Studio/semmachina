@@ -111,7 +111,7 @@ func (b *EffectBatch) Triples(turnEntityID, batchRef, source string, at time.Tim
 	return tripleProjection{
 		payload: b,
 		subject: turnEntityID,
-		context: b.TurnID,
+		turnID:  b.TurnID,
 		source:  source,
 		at:      at,
 

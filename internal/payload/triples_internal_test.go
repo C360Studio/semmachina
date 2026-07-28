@@ -43,7 +43,7 @@ func validProjection() tripleProjection {
 	return tripleProjection{
 		payload:    &projectionTestPayload{},
 		subject:    projTurnEntity,
-		context:    projTurnID,
+		turnID:     projTurnID,
 		source:     "dice",
 		at:         projTime,
 		registered: []vocabulary.Predicate{vocabulary.TurnRollBand, vocabulary.TurnRollTotal},
@@ -230,6 +230,21 @@ func TestTripleProjection_RejectsEveryWayToBreakTheDiscipline(t *testing.T) {
 			mutate:  func(p *tripleProjection) { p.registered = nil; p.objects = nil },
 			wantErr: "registers no predicates",
 		},
+		{
+			name:    "a turn entity that addresses a different turn",
+			mutate:  func(p *tripleProjection) { p.turnID = "turn-act-2" },
+			wantErr: "the two name one turn or neither does",
+		},
+		{
+			name:    "no turn id at all",
+			mutate:  func(p *tripleProjection) { p.turnID = "" },
+			wantErr: "turn_id",
+		},
+		{
+			name:    "reference-less and still carrying a reference",
+			mutate:  func(p *tripleProjection) { p.refless = true },
+			wantErr: "either has a bulky half",
+		},
 	}
 
 	for _, tc := range cases {
@@ -243,6 +258,90 @@ func TestTripleProjection_RejectsEveryWayToBreakTheDiscipline(t *testing.T) {
 			}
 			if triples != nil {
 				t.Fatalf("a refused projection returned %d triples; a partial set is a half-written entity", len(triples))
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("rejection reason %q does not mention %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+// reflessProjection is a projection whose payload genuinely has no bulky half:
+// every fact it carries is closed-vocabulary rule-matching surface.
+func reflessProjection() tripleProjection {
+	return tripleProjection{
+		payload:    &projectionTestPayload{},
+		subject:    projTurnEntity,
+		turnID:     projTurnID,
+		source:     "turn-recorder",
+		at:         projTime,
+		registered: []vocabulary.Predicate{vocabulary.TurnPhaseCurrent},
+		objects: map[vocabulary.Predicate]any{
+			vocabulary.TurnPhaseCurrent: string(vocabulary.PhaseApplying),
+		},
+		refless: true,
+	}
+}
+
+func TestTripleProjection_ReflessShapeEmitsTheRegisteredSetAndNothingElse(t *testing.T) {
+	triples, err := reflessProjection().build()
+	if err != nil {
+		t.Fatalf("the reference-less fixture was rejected: %v", err)
+	}
+	if len(triples) != 1 {
+		t.Fatalf("emitted %d triples, want exactly the one registered predicate: %+v", len(triples), triples)
+	}
+	if triples[0].Predicate != vocabulary.TurnPhaseCurrent.String() {
+		t.Fatalf("emitted %q, want %q", triples[0].Predicate, vocabulary.TurnPhaseCurrent)
+	}
+	if triples[0].Context != projTurnID {
+		t.Fatalf("triple carries context %q, want the turn id %q", triples[0].Context, projTurnID)
+	}
+}
+
+// The extension must not open a hole: a reference-BEARING projection that
+// forgets its reference is still the same rejection it always was, and every
+// object gate still applies to a reference-less one.
+func TestTripleProjection_ReflessShapeKeepsEveryOtherGate(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*tripleProjection)
+		wantErr string
+	}{
+		{
+			name:    "a forgotten reference is still an error, not a refless projection",
+			mutate:  func(p *tripleProjection) { p.refless = false },
+			wantErr: "no reference predicate",
+		},
+		{
+			name: "an unregistered predicate",
+			mutate: func(p *tripleProjection) {
+				p.objects[vocabulary.TurnFailureReason] = "effect-invalid"
+			},
+			wantErr: "must travel by reference",
+		},
+		{
+			name: "a non-scalar object",
+			mutate: func(p *tripleProjection) {
+				p.objects[vocabulary.TurnPhaseCurrent] = []string{"applying"}
+			},
+			wantErr: "travel by reference",
+		},
+		{
+			name:    "a mismatched turn entity",
+			mutate:  func(p *tripleProjection) { p.subject = "c360.semmachina.world1.starter.turn.turn-act-9" },
+			wantErr: "the two name one turn or neither does",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			projection := reflessProjection()
+			tc.mutate(&projection)
+
+			triples, err := projection.build()
+			if err == nil {
+				t.Fatalf("the reference-less projection accepted %s and emitted %d triples", tc.name, len(triples))
 			}
 			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("rejection reason %q does not mention %q", err.Error(), tc.wantErr)

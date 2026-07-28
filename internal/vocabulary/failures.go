@@ -11,8 +11,9 @@ package vocabulary
 // Explanatory detail belongs behind a reference; the graph gets the code.
 //
 // The set is seeded by the capability that produces each member, the same way
-// every other vocabulary here is seeded. These four are the effect applier's;
-// persona cap-exhaustion and intake reasons join them when those stages land.
+// every other vocabulary here is seeded. Four are the effect applier's and one
+// is the bounded-cognition guarantee's; further reasons join them as the stages
+// that produce them land.
 type FailureReason string
 
 // The closed failure-reason set.
@@ -38,11 +39,21 @@ const (
 	// committed; the turn fails naming the target that did not land, and
 	// recovery is idempotent re-application, never a partial-batch repair.
 	FailureEffectCommitIncomplete FailureReason = "effect-commit-incomplete"
+	// FailurePersonaCapExhausted reports a persona loop that reached its
+	// MaxIterations cap without a terminal exit.
+	//
+	// It is the bounded-cognition guarantee made observable. Cap exhaustion with
+	// no recorded outcome is a turn that stalls silently and a player who waits
+	// forever, so the cap has an explicit fallback: the turn ends, on the record,
+	// with this code. Any detail about WHICH loop and how far it got rides behind
+	// TurnFailureRef.
+	FailurePersonaCapExhausted FailureReason = "persona-cap-exhausted"
 )
 
 var failureReasonEnum = newEnum(KindFailureReason,
 	FailureEffectInvalid, FailureEffectEntityMissing,
-	FailureEffectEntityKind, FailureEffectCommitIncomplete)
+	FailureEffectEntityKind, FailureEffectCommitIncomplete,
+	FailurePersonaCapExhausted)
 
 // FailureReasons returns the closed failure-reason set.
 func FailureReasons() []FailureReason { return failureReasonEnum.all() }

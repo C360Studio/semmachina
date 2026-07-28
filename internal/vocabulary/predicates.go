@@ -66,8 +66,33 @@ const (
 	// correctness bug, an unreferenced orphan object is only garbage.
 	TurnNarrationRef Predicate = "turn.narration.ref"
 
-	// TurnFailureReason records why a turn entered the failed phase.
+	// TurnFailureReason records why a turn entered the failed phase. Its object
+	// is a closed FailureReason code, never a sentence: the turn entity is
+	// rule-matching surface, and the shared triple projection gates an object's
+	// SHAPE but not its CLOSURE, so an applier- or persona-authored explanation
+	// would pass every gate and land free text where rules match.
 	TurnFailureReason Predicate = "turn.failure.reason"
+	// TurnFailureRef references stored detail about a failure — the effect
+	// batch that was refused, the loop that exhausted its cap.
+	//
+	// It exists so the closed reason code stays survivable. A code alone
+	// sometimes cannot answer "which intent?", and the only place that answer
+	// could otherwise go is the reason itself; a predicate whose object is a
+	// reference gives the detail somewhere to live that is not the rule-matching
+	// surface. Written only alongside a failed phase, and only when the caller
+	// actually holds a durable reference.
+	//
+	// The `.ref` suffix is load-bearing, not cosmetic. Predicate registration
+	// sorts this engine's surface into two branches — `*.ref` predicates stay
+	// rule-matchable because a reference is a structural pointer, and predicates
+	// whose object is fiction are marked rule-opaque — and a name matching
+	// neither branch has no home in that rule. It is also the predicate most
+	// likely to be handed an explanation instead of a pointer: a sentence passes
+	// the reason parse it never has to face, passes the projection's scalar size
+	// gate, and lands free text on rule-matching surface — the exact hole the
+	// closed reason code exists to close, relocated one predicate over. The name
+	// says what the object must be.
+	TurnFailureRef Predicate = "turn.failure.ref"
 )
 
 // Campaign-entity predicates.
@@ -172,6 +197,7 @@ var allPredicates = []Predicate{
 	TurnEffectsRef,
 	TurnNarrationRef,
 	TurnFailureReason,
+	TurnFailureRef,
 	CampaignSeedValue,
 	WorldEntityName,
 	WorldEntityKind,
@@ -245,6 +271,50 @@ var effectScalarPredicates = []Predicate{
 // EffectScalarPredicates returns the predicates an applied effect batch is
 // allowed to write as triples on the turn entity.
 func EffectScalarPredicates() []Predicate { return slices.Clone(effectScalarPredicates) }
+
+// The turn entity's OWN state, in the three shapes it is ever written in.
+//
+// Three lists rather than one because the shapes carry different facts, and a
+// single list would force every write to restate facts it has no business
+// restating: a phase transition that had to resend the player and scene could
+// rewrite them, and a transition that had to send a failure reason would need
+// one for a turn that did not fail.
+//
+// None of the three carries a reference predicate, which is why the shared
+// projection had to learn a REF-LESS shape rather than being handed a token ref
+// to satisfy it. The turn's state has no bulky half at all — a phase, a player,
+// a scene, and a closed failure code are the whole record — and inventing a
+// reference so the gate would accept it would have made the gate a formality.
+var (
+	// turnAcceptedPredicates is the turn's birth record: the phase it is
+	// created in, plus the two entity references every later stage needs to
+	// find the turn's player and its scene. It is written exactly once, by the
+	// atomic create, and never again.
+	turnAcceptedPredicates = []Predicate{
+		TurnPhaseCurrent,
+		TurnActionPlayer,
+		TurnActionScene,
+	}
+
+	// turnPhasePredicates is an ordinary phase transition: one single-valued
+	// fact, replacing its own prior value.
+	turnPhasePredicates = []Predicate{TurnPhaseCurrent}
+
+	// turnFailurePredicates is a terminal failure: the phase and the closed
+	// reason land in ONE write, because a crash between two writes would leave
+	// either a failed turn nobody can explain or a reason on a turn that is
+	// still reported as running.
+	turnFailurePredicates = []Predicate{TurnPhaseCurrent, TurnFailureReason}
+)
+
+// TurnAcceptedPredicates returns the predicates the turn's birth record writes.
+func TurnAcceptedPredicates() []Predicate { return slices.Clone(turnAcceptedPredicates) }
+
+// TurnPhasePredicates returns the predicates an ordinary phase transition writes.
+func TurnPhasePredicates() []Predicate { return slices.Clone(turnPhasePredicates) }
+
+// TurnFailurePredicates returns the predicates a terminal failure writes.
+func TurnFailurePredicates() []Predicate { return slices.Clone(turnFailurePredicates) }
 
 // ValidatePredicate delegates to the semstreams predicate contract — the same
 // parser the ENTITY_STATES write gate runs. Callers get the identical

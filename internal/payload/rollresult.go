@@ -156,7 +156,7 @@ func (r *RollResult) Triples(turnEntityID, rollRef, source string, at time.Time)
 	return tripleProjection{
 		payload: r,
 		subject: turnEntityID,
-		context: r.TurnID,
+		turnID:  r.TurnID,
 		source:  source,
 		at:      at,
 

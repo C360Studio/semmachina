@@ -252,7 +252,7 @@ func (v *Verdict) Triples(turnEntityID, verdictRef, source string, at time.Time)
 	return tripleProjection{
 		payload: v,
 		subject: turnEntityID,
-		context: v.TurnID,
+		turnID:  v.TurnID,
 		source:  source,
 		at:      at,
 

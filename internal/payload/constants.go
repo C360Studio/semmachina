@@ -32,6 +32,14 @@ const (
 	// remains the sole ENTITY_STATES writer.
 	CategoryWorldEntity = "world_entity"
 
+	// CategoryTurnState is the turn entity's own state record, and like
+	// CategoryCampaignEntity it is deliberately NOT registered: no TurnState
+	// message is ever published. The turn entity is created through the atomic
+	// mutation lane and advanced through the merge lane, so its state travels as
+	// triples, never as a decodable wire type. Registering it would advertise a
+	// message shape nothing sends and nothing reads.
+	CategoryTurnState = "turn_state"
+
 	// CategoryCampaignEntity is the campaign entity's provenance envelope, and
 	// it is deliberately NOT registered: no message of this type is ever
 	// published, because the campaign entity is created through the atomic

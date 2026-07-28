@@ -45,8 +45,14 @@ type tripleProjection struct {
 	payload message.Payload
 	// subject is the entity the triples land on (the turn entity).
 	subject string
-	// context is the correlation value stamped on every triple (the turn id).
-	context string
+	// turnID is the turn these triples describe. It is stamped on every triple
+	// as the correlation context AND checked against subject, because the two
+	// are one fact wearing two shapes — turn_id is the instance segment of the
+	// turn entity's id — and every per-turn stage receives them as two
+	// independent arguments. Checking the pairing here rather than per caller is
+	// what makes a stage handed turn A's entity with turn B's payload a refusal
+	// instead of a world change filed under the wrong turn's paperwork.
+	turnID string
 	// source names the producing component.
 	source string
 	// at stamps every triple. Passed in rather than read from the clock so a
@@ -69,6 +75,21 @@ type tripleProjection struct {
 	refPredicate vocabulary.Predicate
 	refName      string
 	ref          string
+	// refless DECLARES that this payload has no bulky half, so there is nothing
+	// for a reference to point at.
+	//
+	// It is an explicit claim rather than an inferred one, and that distinction
+	// is the whole reason it is a field. The turn's own state — a phase, a
+	// player, a scene, a closed failure code — is entirely rule-matching surface
+	// with no stored payload behind it, and forcing it to invent a reference
+	// would have turned the gate into a formality. But relaxing "a projection
+	// must carry a reference" into "a projection may carry one" would make a
+	// FORGOTTEN reference indistinguishable from a deliberate absence, which is
+	// exactly how the discipline this gate exists to hold gets lost. So the two
+	// shapes are mutually exclusive and both are checked: refless with a
+	// reference set is a contradiction, and reference-bearing with no reference
+	// predicate is still the same error it always was.
+	refless bool
 }
 
 // build runs the discipline and returns the triples, or the first violation.
@@ -79,10 +100,7 @@ func (p tripleProjection) build() ([]message.Triple, error) {
 	if err := p.payload.Validate(); err != nil {
 		return nil, err
 	}
-	if err := requireEntityID("turn entity id", p.subject); err != nil {
-		return nil, err
-	}
-	if err := requireNonEmpty(p.refName, p.ref); err != nil {
+	if err := RequireTurnEntityID(p.turnID, p.subject); err != nil {
 		return nil, err
 	}
 	if err := requireNonEmpty("triple source", p.source); err != nil {
@@ -91,8 +109,18 @@ func (p tripleProjection) build() ([]message.Triple, error) {
 	if p.at.IsZero() {
 		return nil, fmt.Errorf("triple projection requires a timestamp")
 	}
+	// The predicate-set contract runs BEFORE the reference value is checked,
+	// because it is what decides whether a reference is expected at all. The
+	// other order reported a missing reference by its (also missing) field name,
+	// so a projection that forgot its reference entirely was rejected as
+	// " is required" — true, and useless.
 	if err := p.checkPredicateSet(); err != nil {
 		return nil, err
+	}
+	if !p.refless {
+		if err := requireNonEmpty(p.refName, p.ref); err != nil {
+			return nil, err
+		}
 	}
 
 	triples := make([]message.Triple, 0, len(p.registered)+1)
@@ -102,6 +130,9 @@ func (p tripleProjection) build() ([]message.Triple, error) {
 			return nil, err
 		}
 		triples = append(triples, p.triple(predicate, object))
+	}
+	if p.refless {
+		return triples, nil
 	}
 	if err := checkTripleObject(p.refPredicate, p.ref); err != nil {
 		return nil, err
@@ -126,11 +157,27 @@ func (p tripleProjection) checkPredicateSet() error {
 			return fmt.Errorf("no field supplies registered predicate %q", predicate)
 		}
 	}
-	if p.refPredicate == "" {
-		return fmt.Errorf("triple projection has no reference predicate")
-	}
-	if seen[p.refPredicate] {
-		return fmt.Errorf("reference predicate %q is also a scalar predicate", p.refPredicate)
+	if p.refless {
+		// A refless projection that also names a reference is a contradiction,
+		// and the one that matters: it would emit the reference triple's
+		// predicate nowhere while looking, at the call site, like it had.
+		if p.refPredicate != "" || p.ref != "" || p.refName != "" {
+			return fmt.Errorf(
+				"triple projection declares itself reference-less and still carries reference %q/%q; "+
+					"a payload either has a bulky half that travels by reference or it does not",
+				p.refPredicate, p.ref)
+		}
+	} else {
+		if p.refPredicate == "" {
+			return fmt.Errorf("triple projection has no reference predicate")
+		}
+		if p.refName == "" {
+			return fmt.Errorf("reference predicate %q has no field name to report a missing reference by",
+				p.refPredicate)
+		}
+		if seen[p.refPredicate] {
+			return fmt.Errorf("reference predicate %q is also a scalar predicate", p.refPredicate)
+		}
 	}
 	// Ranging the map only to report, and only after every registered
 	// predicate is accounted for, so the message is deterministic: an
@@ -160,7 +207,7 @@ func (p tripleProjection) triple(predicate vocabulary.Predicate, object any) mes
 		// Everything projected here is a structured exit the engine recorded
 		// as stated, never an inference about the world.
 		Confidence: 1.0,
-		Context:    p.context,
+		Context:    p.turnID,
 	}
 }
 

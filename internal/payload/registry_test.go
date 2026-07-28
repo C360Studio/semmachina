@@ -154,12 +154,18 @@ func TestRegisterPayloads_ComposesWithTheFrameworkBuiltins(t *testing.T) {
 // under those coordinates would put a decodable type and an entity's provenance
 // on the same (domain, category, version), and the collision has no other
 // reporter.
-func TestCategoryCampaignEntity_IsDeliberatelyUnregistered(t *testing.T) {
+func TestEntityOnlyCategories_AreDeliberatelyUnregistered(t *testing.T) {
 	reg := testRegistry(t)
-	if created := reg.Create(payload.Domain, payload.CategoryCampaignEntity, payload.SchemaVersion); created != nil {
-		t.Fatalf("%s/%s/%s has a registered factory producing %T; that category is the campaign entity's "+
-			"provenance envelope and must not also name a decodable wire payload",
-			payload.Domain, payload.CategoryCampaignEntity, payload.SchemaVersion, created)
+
+	// Both categories name entity state that reaches the graph through the
+	// mutation lane, never through the fact lane. Neither is a wire type, and a
+	// registered factory would advertise a message shape nothing sends.
+	for _, category := range []string{payload.CategoryCampaignEntity, payload.CategoryTurnState} {
+		if created := reg.Create(payload.Domain, category, payload.SchemaVersion); created != nil {
+			t.Fatalf("%s/%s/%s has a registered factory producing %T; that category names entity state "+
+				"written through the mutation lane and must not also name a decodable wire payload",
+				payload.Domain, category, payload.SchemaVersion, created)
+		}
 	}
 
 	// Anti-vacuity: the same lookup against a category that IS registered must
