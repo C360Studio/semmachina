@@ -352,3 +352,87 @@ func TestPlayerAction_BoundsActionTextAtTheContractBoundary(t *testing.T) {
 		t.Fatal("a text of MaxActionTextBytes multi-byte runes was accepted; the bound is not counting bytes")
 	}
 }
+
+// turn_id IS the instance segment of the turn entity's six-part ID. Any stage
+// handed both as independent arguments can be wired to pair turn A's entity
+// with turn B's payload, and every guard downstream reads exactly one of them:
+// the applier's idempotency marker lands on the entity while its identity is
+// derived from the payload, so a mismatch commits real world changes, poisons
+// the entity it wrote to (a later legitimate batch derives a different id and
+// is refused as "already records batch X"), and leaves the other turn unmarked.
+func TestRequireTurnEntityID_BindsTheEntityToTheTurnItAddresses(t *testing.T) {
+	const turnID = "turn-act-1"
+	entityID := testTurnEntityPrefix + turnID
+
+	if err := payload.RequireTurnEntityID(turnID, entityID); err != nil {
+		t.Fatalf("the entity addressing its own turn was refused: %v", err)
+	}
+
+	cases := map[string]struct {
+		turnID   string
+		entityID string
+		names    string
+	}{
+		"another turn's entity": {
+			turnID:   turnID,
+			entityID: testTurnEntityPrefix + "turn-act-9",
+			names:    "turn-act-9",
+		},
+		"a turn entity from another world": {
+			// Same instance segment, different namespace: still the wrong
+			// entity, and the segment comparison alone would pass it.
+			turnID:   turnID,
+			entityID: "c360.semmachina.world2.starter.turn." + turnID,
+			names:    "",
+		},
+		"an id that is not six parts": {
+			turnID:   turnID,
+			entityID: "not-an-entity",
+			names:    "canonical",
+		},
+		"an empty turn id": {
+			turnID:   "",
+			entityID: entityID,
+			names:    "turn_id",
+		},
+		"a dotted turn id": {
+			turnID:   "a.b",
+			entityID: entityID,
+			names:    "turn_id",
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := payload.RequireTurnEntityID(tc.turnID, tc.entityID)
+			if name == "a turn entity from another world" {
+				// Documented limitation, asserted rather than assumed: the
+				// binding is over the instance segment, so a same-named turn in
+				// another world namespace is indistinguishable here. Campaign
+				// scoping is resolved at the process boundary (instance-per-
+				// world), which is what makes that acceptable.
+				if err != nil {
+					t.Fatalf("the segment binding rejected a same-turn id from another namespace: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("a turn entity that does not address this turn was accepted")
+			}
+			if tc.names != "" && !strings.Contains(err.Error(), tc.names) {
+				t.Fatalf("rejection reason %q does not name %q", err, tc.names)
+			}
+		})
+	}
+}
+
+// The binding is the derivation, so it must hold for every action id the
+// intake boundary accepts — not just for the shapes a test happens to pick.
+func TestRequireTurnEntityID_HoldsForEveryDerivedTurnID(t *testing.T) {
+	for _, actionID := range []string{"a", "1699999999-000100", "CAFE_beef", "msg-42"} {
+		turnID := payload.TurnIDForAction(actionID)
+		if err := payload.RequireTurnEntityID(turnID, testTurnEntityPrefix+turnID); err != nil {
+			t.Fatalf("action %q derives turn %q, whose own entity id was refused: %v", actionID, turnID, err)
+		}
+	}
+}

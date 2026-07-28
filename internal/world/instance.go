@@ -153,7 +153,7 @@ func (p *Package) Resolve(inst InstanceConfig) (*Plan, error) {
 	for _, entity := range p.Entities {
 		facts := make([]payload.WorldFact, 0, len(entity.Facts))
 		for _, fact := range entity.Facts {
-			resolved, err := resolveFact(entity, fact, mapped)
+			resolved, err := resolveFact(entity, fact, mapped, kinds)
 			if err != nil {
 				return nil, &LineError{File: EntitiesFile, Line: entity.Line, Err: err}
 			}
@@ -182,10 +182,28 @@ func (p *Package) Resolve(inst InstanceConfig) (*Plan, error) {
 	}, nil
 }
 
+// resolveFact rewrites one authored fact into instance identity.
+//
+// The object-KIND check is the reason this needs the kind map and not just the
+// id map. A reference that resolves can still point at the wrong sort of thing —
+// a character standing inside a crowbar, a character carried like an item — and
+// resolution alone would import both. The rule has exactly one other
+// enforcement path, the effect applier, and letting a bad object in here does
+// not merely delay the rejection: the applier seeds a multi-valued write from
+// the entity's CURRENT set, so the next `add_relationship` puts the imported
+// sibling back on the wire as part of the complete set the merge lane demands.
+// The runtime gate would re-assert, in a write of its own that succeeds, the
+// exact fact it would have refused as an intent. Stating the rule once
+// (vocabulary.AllowsObjectKind) is the whole point of registering it there.
+//
+// It runs at RESOLVE rather than at parse because kinds are a whole-package
+// fact: a reference may name a later line, so the object's kind is unknown
+// while parsing the line that points at it.
 func resolveFact(
 	entity TemplateEntity,
 	fact TemplateFact,
 	mapped map[string]string,
+	kinds map[string]vocabulary.EntityKind,
 ) (payload.WorldFact, error) {
 	if !fact.IsReference() {
 		return payload.WorldFact{Predicate: fact.Predicate, Object: fact.Literal}, nil
@@ -200,6 +218,12 @@ func resolveFact(
 	if fact.LocalRef == entity.LocalID {
 		return payload.WorldFact{}, fmt.Errorf(
 			"entity %q references itself via %q", entity.LocalID, fact.Predicate)
+	}
+	if kind := kinds[fact.LocalRef]; !vocabulary.AllowsObjectKind(fact.Predicate, kind) {
+		allowed, _ := vocabulary.ObjectKindsFor(fact.Predicate)
+		return payload.WorldFact{}, fmt.Errorf(
+			"entity %q points %q at %q, which is a %q (allowed kinds: %v)",
+			entity.LocalID, fact.Predicate, LocalRefPrefix+fact.LocalRef, kind, allowed)
 	}
 	return payload.WorldFact{Predicate: fact.Predicate, Object: target, Reference: true}, nil
 }
@@ -228,10 +252,15 @@ func planPlayerEntity(
 			"instance player character %q names no entity in template %q",
 			inst.Player.Character, pkg.Manifest.ID)
 	}
-	if kinds[local] != vocabulary.EntityKindCharacter {
+	// Same rule as every other entity-valued reference, asked the same way. A
+	// hand-rolled `!= EntityKindCharacter` here read identically and was a
+	// SECOND statement of the object-kind rule — the exact divergence
+	// referenceObjectKinds exists to prevent.
+	if kind := kinds[local]; !vocabulary.AllowsObjectKind(vocabulary.PlayerCharacterCurrent, kind) {
+		allowed, _ := vocabulary.ObjectKindsFor(vocabulary.PlayerCharacterCurrent)
 		return PlannedEntity{}, fmt.Errorf(
-			"instance player character %q is a %q, not a %q",
-			inst.Player.Character, kinds[local], vocabulary.EntityKindCharacter)
+			"instance player character %q is a %q; %q points at %v",
+			inst.Player.Character, kind, vocabulary.PlayerCharacterCurrent, allowed)
 	}
 	if _, taken := mapped[inst.Player.LocalID]; taken {
 		return PlannedEntity{}, fmt.Errorf(

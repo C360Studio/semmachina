@@ -125,6 +125,7 @@ func enumerations() map[string][]string {
 		"ChannelAdapter":   sets[vocabulary.KindChannelAdapter],
 		"Mechanic":         sets[vocabulary.KindMechanic],
 		"RNG":              sets[vocabulary.KindRNG],
+		"FailureReason":    sets[vocabulary.KindFailureReason],
 		"Predicate":        strs(vocabulary.AllPredicates()),
 		// Kind names the sets; it is not itself a rule-matched value set.
 		"Kind": nil,

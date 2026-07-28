@@ -312,7 +312,7 @@ func (e *WorldEntity) validateFacts() error {
 
 		seen[fact.Predicate]++
 		if seen[fact.Predicate] > 1 {
-			if _, multiValued := vocabulary.RelationForPredicate(fact.Predicate); !multiValued {
+			if !vocabulary.IsMultiValued(fact.Predicate) {
 				return fmt.Errorf(
 					"fact %d repeats single-valued predicate %q; the graph would replace one with the other "+
 						"and neither value would be wrong", index, fact.Predicate)

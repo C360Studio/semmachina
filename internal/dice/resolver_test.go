@@ -355,6 +355,30 @@ func TestResolve_RefusesAnAbsentTurnEntity(t *testing.T) {
 	}
 }
 
+// The verdict and the turn entity arrive as independent arguments, and the
+// resolver reads one of each: the roll is re-derived from the VERDICT's turn id
+// while the at-most-one guard reads the ENTITY's recorded roll. A mismatched
+// pair therefore defeats the guard in both directions — the entity's own turn
+// gets a roll derived from somebody else's inputs, and the verdict's turn is
+// free to roll again through its own entity.
+func TestResolve_RefusesAVerdictPairedWithAnotherTurnsEntity(t *testing.T) {
+	foreign := "c360.semmachina.world1.starter.turn.turn-act-9"
+	reader := newReader()
+	reader.entities[foreign] = &graph.EntityState{
+		ID:          foreign,
+		MessageType: message.Type{Domain: payload.Domain, Category: "turn_entity", Version: payload.SchemaVersion},
+		UpdatedAt:   resolveTime,
+	}
+
+	_, err := newResolver(t, reader, seedOf(0x05)).Resolve(t.Context(), rollingVerdict(), foreign)
+	if err == nil {
+		t.Fatal("a verdict was rolled against another turn's entity")
+	}
+	if !strings.Contains(err.Error(), testTurnID) || !strings.Contains(err.Error(), "turn-act-9") {
+		t.Fatalf("failure %q does not name both turns", err)
+	}
+}
+
 func TestResolve_RefusesAnInvalidVerdict(t *testing.T) {
 	reader := newReader()
 	reader.entities[testTurnEntity] = turnEntity()

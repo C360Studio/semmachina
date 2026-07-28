@@ -42,23 +42,39 @@ recorded reason.
   reason is retrievable from the turn entity
 
 ### Requirement: Partial commits are detected, never mistaken for success
-The applier SHALL treat a batch mutation response as successful only when it reports no
-failed subjects; a response naming any failed subject SHALL move the turn to phase `failed`
-with the failed subjects recorded, even though the transport returns no error. Batch
-mutations are atomic per entity, not across entities, so a multi-entity batch can commit
-some subjects and roll back others; recovery is idempotent re-application under the
-`turn_id` batch identity, never a partial-batch repair.
+The applier SHALL treat a batch as applied only when every per-entity merge succeeded; when
+any merge fails, the turn SHALL move to phase `failed` recording the failed target and the
+targets already committed. Each per-entity merge returns its own classified error — the
+merge lane carries no aggregate failed-subject list — so a batch touching N targets can
+commit some and fail others. Recovery is idempotent re-application under the `turn_id`
+batch identity, never a partial-batch repair.
 
-#### Scenario: Response with failed subjects is a failure
-- **WHEN** a batch mutation returns a success-shaped response that names one or more failed
-  subjects
-- **THEN** the turn moves to phase `failed` with those subjects recorded, and the turn is
-  never reported as applied
+#### Scenario: A failing merge fails the turn
+- **WHEN** a batch's Nth per-entity merge fails after N−1 have committed
+- **THEN** the turn moves to phase `failed` naming the failed target and recording the
+  committed ones, and the turn is never reported as applied
 
 #### Scenario: Re-application after a partial commit converges
 - **WHEN** a batch partially committed and the apply stage runs again for the same turn
 - **THEN** re-application under the same `turn_id` batch identity converges the world to
   the full intended batch state, with already-committed subjects unchanged by replacement
+
+### Requirement: Multi-valued predicates are written as complete sets
+A write to a multi-valued predicate SHALL publish the predicate's full intended value set,
+because the merge lane replaces a predicate's whole set and silently drops any sibling
+omitted from the write. Adding one relationship therefore SHALL read the current set and
+publish the result, never the new value alone. Emptying a multi-valued predicate SHALL use
+an explicit predicate removal, because a write that simply omits the predicate leaves it
+untouched.
+
+#### Scenario: Adding a relationship keeps its siblings
+- **WHEN** a character already carrying two items gains a third through an
+  `add_relationship` effect
+- **THEN** the character carries all three afterwards, not only the newly added one
+
+#### Scenario: Removing the last value clears the predicate
+- **WHEN** a `remove_relationship` effect removes a character's only remaining carried item
+- **THEN** the predicate is empty afterwards, not left holding the removed value
 
 ### Requirement: Idempotent application
 The applier SHALL derive its batch identity from `turn_id` and SHALL NOT re-apply a batch

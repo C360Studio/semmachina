@@ -102,11 +102,24 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 
 ## 5. Effect applier
 
-- [ ] 5.1 Implement deterministic validation of the five effect types (vocabulary
-      membership, per-type bounds, target existence, and target-*type* compatibility —
-      `character.attribute.health` must not land on a scene entity); rejection tests for
-      each failure class per effect-application spec
-- [ ] 5.2 Implement whole-batch commit via `graph.mutation.*` with replace semantics and
+- [x] 5.1 `internal/effect/plan.go`: per intent, `EffectIntent.Mutation()` (vocabulary,
+      field shape, bounds — one call, no parallel switch), then target existence via
+      `EntityState.IsStub()` so a referenced-but-unborn entity cannot satisfy it (F11), then
+      target-kind compatibility, then the same two checks on every referenced *object*.
+      Rejection tests per failure class; no agentic or model package in the dependency tree
+      (`go list -deps` verified)
+- [x] 5.2 `internal/effect/applier.go`: idempotency guard on `turn.effects.batch`, full plan
+      built before the first write, N merges (one per target, first-touch order), turn marker
+      last. `EffectBatch` fits the shared projection unchanged — one scalar, one ref, no
+      weakening. Multi-valued writes publish the complete set and removals use explicit
+      predicate deletion (F14's third face). Seven integration tests against a real graph,
+      including single-valued-applied-twice-leaves-one-value, add-relationship-keeps-
+      siblings, remove-last-clears, and partial-commit-then-converge.
+      **Carried to 6.2/6.3:** the applier *classifies* failures into closed
+      `vocabulary.FailureReason` codes but does not write `turn.phase.current = failed` —
+      the projection extension for phase writes is reserved for 6.2, so the
+      effect-application spec's "rejected batch moves the turn to failed" is satisfied there,
+      not here. Original text: implement whole-batch commit via `graph.mutation.*` with
       batch identity derived from `turn_id`; validate every intent before issuing any
       write. Commit through the entity merge lane, **never `triple.add_batch`, which
       appends (F14)**. The merge lane is per-entity and has no `FailedSubjects` field: a
@@ -117,8 +130,10 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       recovery is idempotent re-application keyed on `turn_id` under replace semantics (D2).
       `graphio.Store.MergeTriples` already refuses a foreign subject locally — rely on that,
       never on graph-ingest to route one for you;
-      tests: validation rejection leaves world unchanged, failed-subjects response fails
-      the turn, idempotent re-application converges, committed effects graph-visible
+      tests: validation rejection leaves the world unchanged, a failing per-entity merge
+      fails the turn with the target named, re-application converges, committed effects
+      graph-visible, and a single-valued effect applied twice leaves one value (the F14
+      regression guard, against a real graph)
 
 ## 6. Turn intake and phase management
 

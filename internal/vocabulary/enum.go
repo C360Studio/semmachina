@@ -44,6 +44,8 @@ const (
 	KindMechanic Kind = "mechanic"
 	// KindRNG is the versioned pseudo-random generator.
 	KindRNG Kind = "rng"
+	// KindFailureReason is the machine-readable reason a turn failed.
+	KindFailureReason Kind = "failure_reason"
 )
 
 // UnknownValueError reports a value outside a closed set. Every Parse* helper
@@ -123,6 +125,7 @@ var registeredEnums = []enumSet{
 	channelAdapterEnum,
 	mechanicEnum,
 	rngEnum,
+	failureReasonEnum,
 }
 
 // Sets returns every closed value set keyed by kind. This is the projection

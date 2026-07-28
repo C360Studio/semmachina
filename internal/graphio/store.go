@@ -222,6 +222,25 @@ func (s *Store) GetEntity(ctx context.Context, id string) (*graph.EntityState, e
 	return &state, nil
 }
 
+// MergeOption adjusts one merge request.
+type MergeOption func(*graph.UpdateEntityWithTriplesRequest)
+
+// WithClearedPredicates deletes every value of the named predicates before the
+// merge applies.
+//
+// It exists for the one thing the merge lane cannot otherwise express: an EMPTY
+// value set. AddTriples replaces a predicate's values with the ones it carries,
+// so carrying none leaves the predicate exactly as it was — which means "the
+// character put down the last thing they were carrying" would silently commit
+// as "the character is still carrying it", with a success response. Upstream
+// applies removals BEFORE the merge, so clearing and re-adding in one request is
+// well defined.
+func WithClearedPredicates(predicates ...string) MergeOption {
+	return func(request *graph.UpdateEntityWithTriplesRequest) {
+		request.RemoveTriples = append(request.RemoveTriples, predicates...)
+	}
+}
+
 // MergeTriples writes triples with REPLACE-by-(subject, predicate) semantics on
 // an entity that must already exist.
 //
@@ -231,36 +250,61 @@ func (s *Store) GetEntity(ctx context.Context, id string) (*graph.EntityState, e
 // silent divergence at-most-one-roll-per-turn exists to prevent. Choosing
 // between the two lanes is not a performance decision.
 //
+// Replace is per (subject, predicate), which makes it a trap for a MULTI-valued
+// predicate as surely as it is the right lane for a single-valued one. Upstream
+// states it plainly (graph.UpdateEntityWithTriplesRequest.AddTriples): "For a
+// MULTI-valued predicate, send the FULL desired set — a partial set drops the
+// omitted siblings." So adding one carried item while sending only the new one
+// deletes every other carried item and returns success. This client is
+// deliberately vocabulary-agnostic — it cannot know which of a caller's
+// predicates are multi-valued — so knowing the difference is the caller's job,
+// and WithClearedPredicates is the only way to say "this set is now empty".
+//
 // The request carries a bare EntityState{ID}: MessageType, Version, and
 // StorageRef are preserve-when-zero upstream, so sending zeroes keeps the stored
 // envelope instead of erasing the entity's provenance and its indexing profile.
 //
 // Every triple must target entityID. A foreign subject would not fail — it would
-// be split off and routed onto its own entity — so a typo would file a turn's
-// roll on some other entity and report success.
+// be split off and routed onto its own entity, on the APPENDING lane, with the
+// failure logged and not returned — so a typo would file a turn's roll on some
+// other entity and report success. The merge lane is per-entity: a write
+// touching N entities is N calls, each with its own classified error.
 func (s *Store) MergeTriples(
 	ctx context.Context,
 	entityID string,
 	triples []message.Triple,
+	opts ...MergeOption,
 ) (*graph.EntityState, error) {
 	if entityID == "" {
 		return nil, errors.New("merge requires an entity id")
 	}
-	if len(triples) == 0 {
-		return nil, fmt.Errorf("merge into %s carries no triples", entityID)
-	}
-	for idx := range triples {
-		if triples[idx].Subject != entityID {
-			return nil, fmt.Errorf(
-				"triple %d targets %q, not %q; a foreign subject is routed to its own entity rather than rejected",
-				idx, triples[idx].Subject, entityID)
-		}
-	}
 
-	request, err := json.Marshal(graph.UpdateEntityWithTriplesRequest{
+	body := graph.UpdateEntityWithTriplesRequest{
 		Entity:     &graph.EntityState{ID: entityID},
 		AddTriples: triples,
-	})
+	}
+	for _, opt := range opts {
+		opt(&body)
+	}
+	// Both checks run AFTER the options, over the request as it will actually
+	// travel. Validating the triples parameter instead would validate a
+	// different value than it transmits — an option appending to AddTriples
+	// would walk straight past a guard whose whole reason for existing is that
+	// the failure it prevents is silent. And a clear-only merge carries no
+	// triples and is a legitimate write, while a request that neither adds nor
+	// clears is a round trip whose success proves nothing.
+	for idx := range body.AddTriples {
+		if body.AddTriples[idx].Subject != entityID {
+			return nil, fmt.Errorf(
+				"triple %d targets %q, not %q; a foreign subject is routed to its own entity rather than rejected",
+				idx, body.AddTriples[idx].Subject, entityID)
+		}
+	}
+	if len(body.AddTriples) == 0 && len(body.RemoveTriples) == 0 {
+		return nil, fmt.Errorf("merge into %s carries no triples and clears no predicates", entityID)
+	}
+
+	request, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("encode merge request for %s: %w", entityID, err)
 	}

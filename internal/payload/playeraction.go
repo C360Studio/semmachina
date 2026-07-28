@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/message"
@@ -139,4 +140,45 @@ func TurnIDForAction(actionID string) string {
 		return ""
 	}
 	return TurnIDPrefix + actionID
+}
+
+// RequireTurnEntityID asserts that a turn entity ID addresses the turn a
+// payload claims.
+//
+// It exists because turn_id and the turn entity ID are ONE fact wearing two
+// shapes — turn_id is the instance segment of the six-part ID — while every
+// per-turn stage receives them as two independent arguments. That is a wiring
+// seam, and a stage handed turn A's entity with turn B's payload reads one of
+// them per guard: the effect applier derives its batch identity from the
+// payload and writes the marker on the entity, so a mismatched pair commits
+// real world changes, permanently poisons the entity it marked (a later
+// legitimate batch derives a different identity and is refused as "already
+// records batch X"), and leaves the other turn unmarked. The dice resolver has
+// the same shape — it re-derives a roll from the payload's turn id and reads
+// the recorded roll off the entity — so the assertion is stated here, once, and
+// consumed by both.
+//
+// The binding it can check is the instance segment: two campaigns from one
+// template are disjoint in the DOMAIN position, so a same-named turn in another
+// world namespace is not distinguishable from this fact alone. That is
+// acceptable only because the MVP resolves campaign isolation at the process
+// boundary (instance-per-world); revisit this line, not the call sites, if a
+// process ever serves two namespaces.
+func RequireTurnEntityID(turnID, turnEntityID string) error {
+	if err := requireIDSegment("turn_id", turnID); err != nil {
+		return err
+	}
+	if err := requireEntityID("turn entity id", turnEntityID); err != nil {
+		return err
+	}
+
+	parts := strings.Split(turnEntityID, ".")
+	instance := parts[len(parts)-1]
+	if instance != turnID {
+		return fmt.Errorf(
+			"turn entity id %q addresses turn %q, but this payload is turn %q; "+
+				"turn_id is the instance segment of the turn entity's id, so the two name one turn or neither does",
+			turnEntityID, instance, turnID)
+	}
+	return nil
 }

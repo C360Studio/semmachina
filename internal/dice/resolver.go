@@ -101,6 +101,13 @@ func (r *Resolver) Resolve(
 	if err := verdict.Validate(); err != nil {
 		return Resolution{}, err
 	}
+	// The verdict and the entity are one turn wearing two shapes, and this
+	// method reads one of each: the roll is re-derived from the VERDICT's turn
+	// id while the at-most-one guard reads the ENTITY's recorded roll. A
+	// mismatched pair defeats the guard in both directions at once.
+	if err := payload.RequireTurnEntityID(verdict.TurnID, turnEntityID); err != nil {
+		return Resolution{}, err
+	}
 	if !verdict.Scalars.RequiresRoll {
 		return Resolution{}, fmt.Errorf("turn %s: %w", verdict.TurnID, ErrNoRollRequired)
 	}

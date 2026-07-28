@@ -67,11 +67,18 @@ type AttributeBounds struct {
 // constant compiled into it: a grim survival world wants health 0-4 and a
 // heroic one wants 0-40, and neither should require an engine change.
 //
-// Nothing is world-scoped yet. Every caller today (EffectIntent.Validate, the
-// applier) goes through the package-level AttributeSpecFor and
-// CheckAttributeValue, which read DefaultAttributeSpecs. Loading a world's set
-// is world-loading's job (task group 3); this type exists so that arrives as
-// wiring rather than as a rewrite of the bounds contract.
+// The two components that gate on bounds — the world loader and the effect
+// applier — each TAKE a set (world.LoadOptions.AttributeSpecs,
+// effect.WithAttributeSpecs), both defaulting to DefaultAttributeSpecs. So
+// handing a campaign its own numbers is a wiring change at two call sites, not
+// a rewrite of the contract. What still reads the package-level
+// CheckAttributeValue is EffectIntent.Validate, deliberately: that is the
+// world-blind floor a PERSONA's proposal must clear at the payload boundary,
+// where no world is in scope. It is the engine defaults today, so a world set
+// narrower than the defaults is already enforced by the applier and a wider one
+// would still be stopped at the payload gate — when a world first declares
+// wider bounds, that gate becomes shape-only and the applier's set is the sole
+// bounds authority.
 type AttributeSpecSet struct {
 	specs map[Attribute]AttributeSpec
 }
@@ -141,6 +148,15 @@ func DefaultAttributeSpecs() AttributeSpecSet {
 }
 
 var engineAttributeSpecs = DefaultAttributeSpecs()
+
+// IsZero reports whether s carries no contracts at all.
+//
+// The zero AttributeSpecSet is a legal Go value and an illegal bounds contract:
+// its map is nil, so Check answers "unknown attribute" for every registered
+// attribute. A component that accepted one would reject every set_attribute
+// effect in the game and blame the vocabulary, so the constructors that take a
+// set refuse it here instead.
+func (s AttributeSpecSet) IsZero() bool { return len(s.specs) == 0 }
 
 // For returns this set's contract for a. The bool is false for any attribute
 // outside the closed set.

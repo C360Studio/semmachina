@@ -1,6 +1,7 @@
 package world_test
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -192,6 +193,113 @@ func TestResolve_ResolvesForwardReferences(t *testing.T) {
 	object := plan.Entities[0].Facts[0].Object
 	if object != "c360.semmachina.world1.starter.item.crowbar" {
 		t.Fatalf("forward reference resolved to %v", object)
+	}
+}
+
+// A reference that RESOLVES can still point at the wrong kind of thing, and
+// resolution is the only thing the import path used to check. The object-kind
+// rule has one enforcement path — the effect applier — so a template could
+// author a character standing inside a crowbar, import cleanly, and then have
+// the applier REPUBLISH that fact as part of the complete value set the merge
+// lane demands: the runtime gate stamping its own provenance on state it would
+// have rejected as an intent.
+func TestResolve_RejectsAReferenceAtTheWrongKindOfEntity(t *testing.T) {
+	crowbarLine := `{"local_id":"crowbar","type":"item","triples":[` +
+		`{"predicate":"world.entity.name","object":"A bent crowbar"}]}`
+	wrenLine := `{"local_id":"wren","type":"character","triples":[` +
+		`{"predicate":"world.entity.name","object":"Wren"}]}`
+
+	cases := map[string]struct {
+		rook  string
+		extra string
+		names string
+	}{
+		"a character located inside an item": {
+			rook: `{"local_id":"rook","type":"character","triples":[` +
+				`{"predicate":"world.location.current","object":"local:crowbar"}]}`,
+			extra: crowbarLine,
+			names: "local:crowbar",
+		},
+		"a character carrying another character": {
+			rook: `{"local_id":"rook","type":"character","triples":[` +
+				`{"predicate":"world.relation.carries","object":"local:wren"}]}`,
+			extra: wrenLine,
+			names: "local:wren",
+		},
+		"an alliance with a scene": {
+			rook: `{"local_id":"rook","type":"character","triples":[` +
+				`{"predicate":"world.relation.allied-with","object":"local:gatehouse"}]}`,
+			extra: gatehouseLine,
+			names: "local:gatehouse",
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := testPackage(t, tc.rook, tc.extra).Resolve(testInstance())
+			if err == nil {
+				t.Fatal("Resolve accepted a reference the effect applier would have rejected at runtime")
+			}
+			if !strings.Contains(err.Error(), tc.names) {
+				t.Fatalf("rejection reason %q does not name the offending reference", err)
+			}
+
+			// The author has to be told WHICH LINE, the same way every other
+			// package fault names one.
+			var lineError *world.LineError
+			if !errorAs(err, &lineError) {
+				t.Fatalf("expected a *world.LineError so the author can find the line, got %T", err)
+			}
+			if lineError.Line != 1 {
+				t.Fatalf("error names line %d, want 1", lineError.Line)
+			}
+		})
+	}
+}
+
+// The import path and the runtime path must apply ONE statement of the
+// object-kind rule. This asserts the coupling directly: every entity-valued
+// predicate the vocabulary registers is refused at import for every kind the
+// vocabulary does not allow as its object.
+func TestResolve_RefusesEveryObjectKindTheVocabularyRefuses(t *testing.T) {
+	// One declared entity per kind, so any (predicate, kind) pair is expressible.
+	byKind := map[vocabulary.EntityKind]string{
+		vocabulary.EntityKindCharacter: "wren",
+		vocabulary.EntityKindItem:      "crowbar",
+		vocabulary.EntityKindScene:     "gatehouse",
+	}
+	lines := []string{
+		`{"local_id":"wren","type":"character","triples":[{"predicate":"world.entity.name","object":"Wren"}]}`,
+		`{"local_id":"crowbar","type":"item","triples":[{"predicate":"world.entity.name","object":"A crowbar"}]}`,
+		gatehouseLine,
+	}
+
+	var checked int
+	for _, predicate := range vocabulary.WorldFactPredicates() {
+		if !vocabulary.IsEntityReference(predicate) {
+			continue
+		}
+		// The subject is always Rook, so a predicate a character may not carry
+		// (player.character.current) is not expressible here and is covered by
+		// the player-binding path instead.
+		if !vocabulary.AllowsSubjectKind(predicate, vocabulary.EntityKindCharacter) {
+			continue
+		}
+		for kind, local := range byKind {
+			if vocabulary.AllowsObjectKind(predicate, kind) {
+				continue
+			}
+			checked++
+			rook := fmt.Sprintf(
+				`{"local_id":"rook","type":"character","triples":[{"predicate":%q,"object":"local:%s"}]}`,
+				predicate, local)
+			if _, err := testPackage(t, append([]string{rook}, lines...)...).Resolve(testInstance()); err == nil {
+				t.Fatalf("Resolve accepted %s pointing at a %q, which the vocabulary refuses", predicate, kind)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no disallowed pairs were exercised; the test proves nothing")
 	}
 }
 

@@ -3,6 +3,7 @@ package payload
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/c360studio/semstreams/message"
 
@@ -85,4 +86,42 @@ func (b *EffectBatch) MarshalJSON() ([]byte, error) {
 func (b *EffectBatch) UnmarshalJSON(data []byte) error {
 	type Alias EffectBatch
 	return json.Unmarshal(data, (*Alias)(b))
+}
+
+// Triples returns the batch's rule-matched projection as triples on the turn
+// entity, plus one reference to the stored batch payload.
+//
+// The batch identity is the only scalar. It is what the applier's own
+// idempotency guard reads and what a rule chains on ("effects landed →
+// narrate"); the intent list is bulky, is consumed only by the applier and the
+// ledger, and carries the adjudicator's PROPOSALS rather than the world's facts.
+// The committed changes are on the target entities themselves — a reader asking
+// what the world looks like should be reading the world, not the turn's
+// paperwork.
+//
+// Same shared projection as the verdict and the roll, so the rule that keeps
+// bulky and LLM-authored content off the graph's rule-matching surface is
+// enforced once rather than remembered three times.
+//
+// These triples MUST be committed on the entity merge lane
+// (entity.update_with_triples). The triple-add lanes append: a duplicate apply
+// trigger through them would leave a turn holding two batch identities, and the
+// guard that reads one would be reading a coin flip.
+func (b *EffectBatch) Triples(turnEntityID, batchRef, source string, at time.Time) ([]message.Triple, error) {
+	return tripleProjection{
+		payload: b,
+		subject: turnEntityID,
+		context: b.TurnID,
+		source:  source,
+		at:      at,
+
+		registered: vocabulary.EffectScalarPredicates(),
+		objects: map[vocabulary.Predicate]any{
+			vocabulary.TurnEffectsBatch: b.BatchID,
+		},
+
+		refPredicate: vocabulary.TurnEffectsRef,
+		refName:      "effect batch ref",
+		ref:          batchRef,
+	}.build()
 }

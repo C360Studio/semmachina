@@ -136,6 +136,19 @@ func closedSets() []closedSet {
 			nearMiss:  []string{"pcg", "pcg/v2", "mt19937", "crypto/rand", "PCG/V1"},
 			sampleBad: "pcg/v2",
 		},
+		{
+			kind:    vocabulary.KindFailureReason,
+			members: strs(vocabulary.FailureReasons()),
+			parse:   asStringParser(vocabulary.ParseFailureReason),
+			// The near-misses that matter here are PROSE: a reason recorded as a
+			// sentence would pass the projection's shape gate and land free text
+			// on the graph's rule-matching surface.
+			nearMiss: []string{
+				"effect_invalid", "Effect-Invalid", "invalid",
+				"the target entity does not exist", "rejected",
+			},
+			sampleBad: "the target entity does not exist",
+		},
 	}
 }
 

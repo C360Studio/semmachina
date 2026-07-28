@@ -265,6 +265,34 @@ func TestMergeTriples_RejectsAForeignSubject(t *testing.T) {
 	}
 }
 
+// The guard has to validate what is SENT, not what was passed. Options mutate
+// the request after the parameter list is read, so a guard that ran first would
+// check one value and transmit another — and the value graph-ingest answers a
+// foreign subject with is silence: it splits the triple off and routes it onto
+// the APPENDING lane, logging the failure without returning it.
+func TestMergeTriples_RejectsAForeignSubjectAnOptionAdded(t *testing.T) {
+	requester := &fakeRequester{}
+	own := []message.Triple{
+		{Subject: testEntityID, Predicate: "turn.roll.band", Object: "partial", Confidence: 1.0},
+	}
+	smuggle := func(request *graph.UpdateEntityWithTriplesRequest) {
+		request.AddTriples = append(request.AddTriples, message.Triple{
+			Subject: otherEntity, Predicate: "turn.roll.total", Object: 8, Confidence: 1.0,
+		})
+	}
+
+	_, err := newStore(t, requester).MergeTriples(t.Context(), testEntityID, own, smuggle)
+	if err == nil {
+		t.Fatal("an option appended a triple for another entity and it was sent")
+	}
+	if !strings.Contains(err.Error(), otherEntity) {
+		t.Fatalf("failure reason %q does not name the foreign subject", err.Error())
+	}
+	if requester.requests != 0 {
+		t.Fatal("the store issued a request that would have filed a fact on the wrong entity")
+	}
+}
+
 func TestMergeTriples_RejectsAnEmptyWrite(t *testing.T) {
 	requester := &fakeRequester{}
 
@@ -366,5 +394,51 @@ func TestNewStore_RequiresARequesterAndAPositiveTimeout(t *testing.T) {
 	}
 	if _, err := graphio.NewStore(&fakeRequester{}, graphio.WithTimeout(-time.Second)); err == nil {
 		t.Fatal("a store was built with a negative timeout")
+	}
+}
+
+// A predicate's value set can legitimately become EMPTY — the last carried item
+// is put down, the last alliance is broken. AddTriples cannot express that: it
+// replaces a predicate's values with the ones it carries, and carrying none
+// leaves the predicate untouched. So clearing needs the request's removal list,
+// which upstream applies BEFORE the merge.
+func TestMergeTriples_ClearsAPredicateThroughTheRemovalList(t *testing.T) {
+	body, err := json.Marshal(graph.UpdateEntityWithTriplesResponse{Entity: validEntity()})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	requester := &fakeRequester{reply: body}
+
+	if _, err := newStore(t, requester).MergeTriples(t.Context(), testEntityID, nil,
+		graphio.WithClearedPredicates("world.relation.carries")); err != nil {
+		t.Fatalf("MergeTriples: %v", err)
+	}
+
+	var sent graph.UpdateEntityWithTriplesRequest
+	if err := json.Unmarshal(requester.request, &sent); err != nil {
+		t.Fatalf("decode sent request: %v", err)
+	}
+	if len(sent.RemoveTriples) != 1 || sent.RemoveTriples[0] != "world.relation.carries" {
+		t.Fatalf("sent removals %v, want the one cleared predicate", sent.RemoveTriples)
+	}
+	if len(sent.AddTriples) != 0 {
+		t.Fatalf("a clear-only merge sent %d triples to add", len(sent.AddTriples))
+	}
+}
+
+// A merge that neither adds nor clears anything is a no-op round trip, and a
+// no-op that reports success is indistinguishable from a write that landed.
+func TestMergeTriples_StillRejectsAWriteThatChangesNothing(t *testing.T) {
+	requester := &fakeRequester{}
+
+	if _, err := newStore(t, requester).MergeTriples(t.Context(), testEntityID, nil); err == nil {
+		t.Fatal("a merge carrying neither triples nor removals was sent")
+	}
+	if _, err := newStore(t, requester).MergeTriples(t.Context(), testEntityID, nil,
+		graphio.WithClearedPredicates()); err == nil {
+		t.Fatal("an empty removal list was treated as a write")
+	}
+	if requester.requests != 0 {
+		t.Fatal("the store issued an empty request")
 	}
 }

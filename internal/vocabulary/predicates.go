@@ -228,6 +228,24 @@ var rollScalarPredicates = []Predicate{
 // write as triples.
 func RollScalarPredicates() []Predicate { return slices.Clone(rollScalarPredicates) }
 
+// effectScalarPredicates is the rule-matched projection of an applied effect
+// batch: the batch identity, and nothing else.
+//
+// The identity is what the applier's own idempotency guard reads and what a
+// rule chains on ("effects landed → narrate"). The intent list is bulky, is
+// consumed only by the applier and the ledger, and carries the adjudicator's
+// proposals rather than the world's facts — so it rides behind TurnEffectsRef,
+// the same discipline the verdict's bands and the roll's dice follow. The
+// COMMITTED changes are on the target entities themselves, which is where a
+// reader asking what the world looks like should be looking anyway.
+var effectScalarPredicates = []Predicate{
+	TurnEffectsBatch,
+}
+
+// EffectScalarPredicates returns the predicates an applied effect batch is
+// allowed to write as triples on the turn entity.
+func EffectScalarPredicates() []Predicate { return slices.Clone(effectScalarPredicates) }
+
 // ValidatePredicate delegates to the semstreams predicate contract — the same
 // parser the ENTITY_STATES write gate runs. Callers get the identical
 // accept/reject decision the graph will make, before issuing a write.

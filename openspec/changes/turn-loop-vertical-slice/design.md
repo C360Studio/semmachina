@@ -354,6 +354,43 @@ distinct rules — `types.ValidateEntityID` for mapped IDs, `vocabulary.ParsePre
 every predicate in `entities.jsonl` — and must reject bad predicates at import time with a
 reason naming the offending line, rather than letting them fail later at materialization.
 
+### F16 — A runtime gate over proposals is not an authoring gate over data
+
+`vocabulary.AllowsObjectKind` was registered so two consumers could share one rule, and for
+a while had exactly one caller: the effect applier. The importer never consulted it, so a
+template could author `world.location.current: local:crowbar` — a character located *inside
+an item* — and import cleanly. The applier validates *proposed intents*; it has no opinion
+about facts that arrived as authored data.
+
+The failure mode is worse than "unenforced". For a multi-valued predicate the applier seeds
+each write from the entity's current objects, so an invalid sibling is republished as part
+of the complete set the merge lane demands — a write the applier issues and is told
+succeeded, carrying a fact it would have refused as an intent. For a single-valued
+predicate it is never republished at all: it simply sits in `ENTITY_STATES` as an invalid
+fact that retrieval, the map view (stage 3), and the continuity checker (stage 5) all read
+as truth. Neither shape is caught by the runtime gate, and only the import gate fixes both.
+
+The general rule, which matters increasingly as user-authored content lands: **every
+constraint on world data needs an enforcement point at authoring time, and a runtime
+validator over persona output is not it.** Our own comment on the rule said it — "a rule
+that important, re-derived per consumer, is a rule that ends up enforced on one path and
+not the other" — while describing itself.
+
+### F15 — KV revision is unreachable from the query surface, so the multi-valued fold has no CAS
+
+Writing a multi-valued predicate requires read-modify-write (F14's third face), and that
+fold is unprotected against a concurrent writer of the same predicate. The mutation request
+supports `ExpectedRevision` for single-pass CAS-on-condition, but the entity query surface
+never returns a revision to supply: `handleQueryEntityNATS` reads `entry.Revision` for its
+own validation and discards it, and no query response type carries it
+(`processor/graph-ingest/query.go`).
+
+Not a problem in this slice — one player, one turn at a time, stage-guarded by the turn
+phase — so nothing here works around it. It becomes real the moment two writers touch one
+entity's relation set (NPC cognition, stage 9, is the obvious arrival). **This is an engine
+ask, not a local retry loop** (M6): the fix is exposing the read revision on the query
+response so an RMW caller can close the loop with the CAS the mutation side already offers.
+
 ### F14 — The triple-add lane APPENDS; only the entity lane replaces (corrects F7)
 
 F7 established that `graph.mutation.triple.add_batch` is atomic per entity and surfaces
@@ -379,6 +416,18 @@ So: **single-valued writes go through the entity merge lane
 add lane remains correct for genuinely multi-valued accumulation, of which this slice has
 none. Note the merge lane replaces a multi-valued predicate as a whole set (gh#466), so a
 writer owning a multi-valued predicate must publish the complete set per write.
+
+**F14's third face is silent data loss, and the starter world reaches it.** The merge lane
+replaces a predicate's **whole value set**: upstream states it outright — *"For a
+MULTI-valued predicate, send the FULL desired set — a partial set drops the omitted
+siblings"* (`graph/mutation_requests.go`). Rook carries a crowbar and a lantern; an
+`add_relationship` that merges only the new object leaves him carrying only that object,
+with a success response and no error. So a multi-valued write reads the current set and
+publishes the complete result. The mirror case: *"Predicates absent from AddTriples are
+untouched"*, so emptying a predicate needs an explicit removal — "put down the last thing
+you were carrying" committed as an add-list omission would commit as "still carrying it".
+Proven by mutation against the live broker: the naive merge left `[rations]` where
+`[crowbar lantern rations]` was intended, deleting two items.
 
 **The merge lane is per-entity, and its multi-entity behavior is the same trap wearing a
 different hat.** `UpdateEntityWithTriplesResponse` carries no `FailedSubjects` — that field

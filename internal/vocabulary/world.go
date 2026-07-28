@@ -93,6 +93,36 @@ var worldFactSubjectKinds = map[Predicate][]EntityKind{
 	WorldRelationOwesDebt:   {EntityKindCharacter},
 }
 
+// referenceObjectKinds records which entity kinds may be the OBJECT of each
+// entity-valued world predicate.
+//
+// It is the object-side twin of worldFactSubjectKinds, and it exists for the
+// same reason: the predicate alone does not say that a character is moved into
+// a scene rather than into a crowbar, or that `carries` points at an item while
+// `knows` points at a character. Without a registered rule the effect applier —
+// the runtime gate against an LLM-proposed intent — would accept any entity on
+// the far end of a reference, and the resulting world would be well-formed and
+// nonsense.
+//
+// Membership in this map is also the definition of "entity-valued": a predicate
+// here takes a six-part entity ID as its object, and one absent from it takes a
+// literal. The two facts are the same fact, so they are stated once.
+var referenceObjectKinds = map[Predicate][]EntityKind{
+	// A scene doubles as the place entities occupy in this slice; when place
+	// becomes first-class (roadmap stage 2) this is the line that changes.
+	WorldLocationCurrent: {EntityKindScene},
+
+	PlayerCharacterCurrent: {EntityKindCharacter},
+
+	// Relationships between actors point at actors; possession points at a
+	// thing. "Rook carries Wren" is not a v1 sentence.
+	WorldRelationAlliedWith: {EntityKindCharacter},
+	WorldRelationHostileTo:  {EntityKindCharacter},
+	WorldRelationKnows:      {EntityKindCharacter},
+	WorldRelationCarries:    {EntityKindItem},
+	WorldRelationOwesDebt:   {EntityKindCharacter},
+}
+
 // SubjectKindsFor returns the entity kinds that may carry p as a fact. The
 // bool is false for any predicate that is not a world fact.
 func SubjectKindsFor(p Predicate) ([]EntityKind, bool) {
@@ -101,6 +131,44 @@ func SubjectKindsFor(p Predicate) ([]EntityKind, bool) {
 		return nil, false
 	}
 	return slices.Clone(kinds), true
+}
+
+// ObjectKindsFor returns the entity kinds that may be the object of p. The bool
+// is false for any predicate whose object is a literal rather than a reference.
+func ObjectKindsFor(p Predicate) ([]EntityKind, bool) {
+	kinds, ok := referenceObjectKinds[p]
+	if !ok {
+		return nil, false
+	}
+	return slices.Clone(kinds), true
+}
+
+// AllowsObjectKind reports whether an entity of kind k may be the object of p.
+func AllowsObjectKind(p Predicate, k EntityKind) bool {
+	return slices.Contains(referenceObjectKinds[p], k)
+}
+
+// IsEntityReference reports whether p's object is a six-part entity ID rather
+// than a literal value.
+func IsEntityReference(p Predicate) bool {
+	_, ok := referenceObjectKinds[p]
+	return ok
+}
+
+// IsMultiValued reports whether p may hold more than one object on one entity.
+//
+// This is not a cosmetic distinction. The graph's merge lane replaces a
+// predicate's WHOLE value set per write, so a writer that treats a multi-valued
+// predicate as single-valued deletes every sibling value and gets a success
+// response: adding a second carried item would drop the first. A writer owning a
+// multi-valued predicate must publish the complete desired set.
+//
+// The relations are exactly the multi-valued predicates in v1 — a character
+// carries several things and knows several people, while health, status, and
+// location each hold one value by definition.
+func IsMultiValued(p Predicate) bool {
+	_, ok := RelationForPredicate(p)
+	return ok
 }
 
 // WorldFactPredicates returns every predicate that describes a world entity,

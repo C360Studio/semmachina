@@ -30,17 +30,21 @@ const (
 )
 
 // ObjectShapeFor returns the object shape a template author must write for p,
-// or ShapeNone when p is not author-writable.
+// or ShapeNone when p has no registered shape.
+//
+// The reference case delegates to vocabulary.IsEntityReference rather than
+// listing the entity-valued predicates again. "Which predicates take an entity
+// ID as their object" is one question with one answer, and the vocabulary owns
+// it — the effect applier asks the same question at runtime, and a second list
+// here would be a second chance for the two to disagree.
 func ObjectShapeFor(p vocabulary.Predicate) ObjectShape {
 	if _, ok := vocabulary.AttributeForPredicate(p); ok {
 		return ShapeAttribute
 	}
-	if _, ok := vocabulary.RelationForPredicate(p); ok {
+	if vocabulary.IsEntityReference(p) {
 		return ShapeReference
 	}
 	switch p {
-	case vocabulary.WorldLocationCurrent:
-		return ShapeReference
 	case vocabulary.CharacterStatusCurrent:
 		return ShapeStatus
 	case vocabulary.WorldEntityName, vocabulary.WorldEntityDescription:

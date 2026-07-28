@@ -178,6 +178,27 @@ func TestDefaultAttributeSpecs_AreWhatThePackageLevelHelpersEnforce(t *testing.T
 	}
 }
 
+// The zero AttributeSpecSet is a legal Go value and an illegal bounds
+// contract, and the difference is invisible at a call site that only ever runs
+// Check: it answers "unknown attribute" for everything, so a component holding
+// one would refuse every set_attribute effect in the game and blame the
+// vocabulary. IsZero is how a constructor refuses it at the seam instead.
+func TestAttributeSpecSet_TheZeroValueIsRecognizableAsNoContractAtAll(t *testing.T) {
+	var zero vocabulary.AttributeSpecSet
+	if !zero.IsZero() {
+		t.Fatal("the zero set does not report itself as empty")
+	}
+	for _, attr := range vocabulary.Attributes() {
+		if err := zero.Check(attr, 1); err == nil {
+			t.Fatalf("the zero set accepted a value for %q; it holds no bounds to accept it against", attr)
+		}
+	}
+
+	if vocabulary.DefaultAttributeSpecs().IsZero() {
+		t.Fatal("the engine defaults report themselves as empty")
+	}
+}
+
 func TestNewAttributeSpecSet_IsFailClosed(t *testing.T) {
 	complete := func() map[vocabulary.Attribute]vocabulary.AttributeBounds {
 		bounds := make(map[vocabulary.Attribute]vocabulary.AttributeBounds)

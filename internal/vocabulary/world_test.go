@@ -300,3 +300,142 @@ func TestComposeEntityID_ValidatesTheComposedResult(t *testing.T) {
 		})
 	}
 }
+
+// The subject rule ("health does not land on a scene") has an object-side twin
+// that is just as easy to get wrong: nothing in the predicate itself says a
+// character may be moved into a scene and not into a crowbar, or that `carries`
+// points at an item while `knows` points at a character. The applier is the
+// runtime gate against an LLM-proposed intent, so the rule has to be a
+// registered value it can consult rather than an assumption it makes.
+func TestObjectKindsFor_CoversEveryReferenceValuedPredicate(t *testing.T) {
+	// Every relation predicate is entity-valued by construction, and so is the
+	// location predicate. If one grows without an object rule, the applier would
+	// accept any kind on the far end of it.
+	entityValued := []vocabulary.Predicate{vocabulary.WorldLocationCurrent, vocabulary.PlayerCharacterCurrent}
+	for _, r := range vocabulary.Relations() {
+		p, ok := vocabulary.RelationPredicate(r)
+		if !ok {
+			t.Fatalf("relation %q has no registered predicate", r)
+		}
+		entityValued = append(entityValued, p)
+	}
+
+	for _, p := range entityValued {
+		kinds, ok := vocabulary.ObjectKindsFor(p)
+		if !ok {
+			t.Fatalf("predicate %q takes an entity object but registers no object kinds; "+
+				"the applier would accept any entity on the far end of it", p)
+		}
+		if len(kinds) == 0 {
+			t.Fatalf("predicate %q registers an empty object-kind list, which no entity can satisfy", p)
+		}
+		for _, k := range kinds {
+			if !k.Valid() {
+				t.Fatalf("predicate %q allows object kind %q, which is not a registered entity kind", p, k)
+			}
+		}
+		if !vocabulary.IsEntityReference(p) {
+			t.Fatalf("predicate %q registers object kinds but does not report as entity-valued", p)
+		}
+	}
+}
+
+// A literal-valued predicate must NOT claim object kinds: reporting one would
+// make the applier check an attribute's integer against the entity-kind set.
+func TestObjectKindsFor_ExcludesLiteralValuedPredicates(t *testing.T) {
+	for _, p := range []vocabulary.Predicate{
+		vocabulary.CharacterAttributeHealth,
+		vocabulary.CharacterStatusCurrent,
+		vocabulary.WorldEntityName,
+		vocabulary.WorldEntityDescription,
+		vocabulary.WorldEntityKind,
+	} {
+		if _, ok := vocabulary.ObjectKindsFor(p); ok {
+			t.Fatalf("literal-valued predicate %q registers object kinds", p)
+		}
+		if vocabulary.IsEntityReference(p) {
+			t.Fatalf("literal-valued predicate %q reports as entity-valued", p)
+		}
+	}
+}
+
+func TestAllowsObjectKind_EnforcesTheRegisteredRule(t *testing.T) {
+	cases := []struct {
+		predicate vocabulary.Predicate
+		kind      vocabulary.EntityKind
+		want      bool
+	}{
+		{vocabulary.WorldLocationCurrent, vocabulary.EntityKindScene, true},
+		{vocabulary.WorldLocationCurrent, vocabulary.EntityKindItem, false},
+		{vocabulary.WorldRelationCarries, vocabulary.EntityKindItem, true},
+		{vocabulary.WorldRelationCarries, vocabulary.EntityKindCharacter, false},
+		{vocabulary.WorldRelationKnows, vocabulary.EntityKindCharacter, true},
+		{vocabulary.WorldRelationKnows, vocabulary.EntityKindItem, false},
+		{vocabulary.PlayerCharacterCurrent, vocabulary.EntityKindCharacter, true},
+		{vocabulary.CharacterAttributeHealth, vocabulary.EntityKindCharacter, false},
+	}
+	for _, tc := range cases {
+		if got := vocabulary.AllowsObjectKind(tc.predicate, tc.kind); got != tc.want {
+			t.Fatalf("AllowsObjectKind(%q, %q) = %v, want %v", tc.predicate, tc.kind, got, tc.want)
+		}
+	}
+}
+
+// The multi-valued question decides how a write is composed, not how it is
+// styled: the merge lane replaces a predicate's WHOLE value set, so a writer
+// that treats `carries` as single-valued deletes every other carried item and
+// reports success. One home for the answer, or the callers disagree.
+func TestIsMultiValued_IsExactlyTheRelationPredicates(t *testing.T) {
+	multi := make(map[vocabulary.Predicate]bool)
+	for _, r := range vocabulary.Relations() {
+		p, _ := vocabulary.RelationPredicate(r)
+		multi[p] = true
+	}
+	for _, p := range vocabulary.AllPredicates() {
+		if got := vocabulary.IsMultiValued(p); got != multi[p] {
+			t.Fatalf("IsMultiValued(%q) = %v, want %v", p, got, multi[p])
+		}
+	}
+}
+
+// The applier's own projection: the batch identity is the rule-matched scalar
+// and the payload rides behind the reference, same as the verdict and the roll.
+func TestEffectScalarPredicates_AreRegisteredAndExcludeTheReference(t *testing.T) {
+	registered := make(map[vocabulary.Predicate]bool)
+	for _, p := range vocabulary.AllPredicates() {
+		registered[p] = true
+	}
+	scalars := vocabulary.EffectScalarPredicates()
+	if len(scalars) == 0 {
+		t.Fatal("EffectScalarPredicates() is empty; the applier would project nothing rule-matchable")
+	}
+	for _, p := range scalars {
+		if !registered[p] {
+			t.Fatalf("effect scalar %q is not in AllPredicates()", p)
+		}
+		if p == vocabulary.TurnEffectsRef {
+			t.Fatal("the effect reference is listed as a scalar predicate; it is the reference, not the surface")
+		}
+	}
+}
+
+// Failure reasons land on the graph, where rules match. A sentence would pass
+// the projection's shape gate and put free text on the rule-matching surface,
+// so the closed set is the enforcement.
+func TestFailureReasons_AreClosedAndLowerKebab(t *testing.T) {
+	reasons := vocabulary.FailureReasons()
+	if len(reasons) == 0 {
+		t.Fatal("FailureReasons() is empty")
+	}
+	for _, r := range reasons {
+		if strings.ContainsAny(string(r), " ._") || strings.ToLower(string(r)) != string(r) {
+			t.Fatalf("failure reason %q is not a lower-kebab code", r)
+		}
+		if !r.Valid() {
+			t.Fatalf("failure reason %q is not reported valid by its own set", r)
+		}
+	}
+	if _, err := vocabulary.ParseFailureReason("the adjudicator proposed something odd"); err == nil {
+		t.Fatal("ParseFailureReason accepted a sentence; the reason on the graph must be a code")
+	}
+}

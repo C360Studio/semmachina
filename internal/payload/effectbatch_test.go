@@ -122,3 +122,67 @@ func TestEffectBatch_AcceptsEveryBandIncludingAuto(t *testing.T) {
 		}
 	}
 }
+
+// The applied batch reaches the turn entity through the SAME projection the
+// verdict and the roll use: one rule-matched scalar — the batch identity the
+// applier's idempotency guard reads — plus one reference to the payload. The
+// intent list never becomes triples; the committed changes live on the target
+// entities, which is where a reader asking what the world looks like belongs.
+func TestEffectBatch_TriplesProjectTheIdentityAndTheReference(t *testing.T) {
+	const ref = "obj://effects/batch-turn-act-1"
+	batch := validEffectBatch()
+
+	triples, err := batch.Triples(testTurnEntity, ref, "effect-applier", testTime)
+	if err != nil {
+		t.Fatalf("Triples: %v", err)
+	}
+	if len(triples) != len(vocabulary.EffectScalarPredicates())+1 {
+		t.Fatalf("projected %d triples, want %d scalars plus one reference",
+			len(triples), len(vocabulary.EffectScalarPredicates()))
+	}
+
+	got := make(map[string]any, len(triples))
+	for _, triple := range triples {
+		if triple.Subject != testTurnEntity {
+			t.Fatalf("triple %q has subject %q, want the turn entity", triple.Predicate, triple.Subject)
+		}
+		if triple.Context != batch.TurnID {
+			t.Fatalf("triple %q carries context %q, want the turn id", triple.Predicate, triple.Context)
+		}
+		if !triple.Timestamp.Equal(testTime) {
+			t.Fatalf("triple %q is stamped %v, want %v", triple.Predicate, triple.Timestamp, testTime)
+		}
+		got[triple.Predicate] = triple.Object
+	}
+
+	if got[vocabulary.TurnEffectsBatch.String()] != batch.BatchID {
+		t.Fatalf("batch identity triple = %v, want %q", got[vocabulary.TurnEffectsBatch.String()], batch.BatchID)
+	}
+	if got[vocabulary.TurnEffectsRef.String()] != ref {
+		t.Fatalf("reference triple = %v, want %q", got[vocabulary.TurnEffectsRef.String()], ref)
+	}
+	for predicate := range got {
+		switch predicate {
+		case vocabulary.TurnEffectsBatch.String(), vocabulary.TurnEffectsRef.String():
+		default:
+			t.Fatalf("the projection wrote %q; the intent list must ride behind the reference", predicate)
+		}
+	}
+}
+
+// An invalid batch must not reach the graph in fragments: the projection
+// validates the whole payload before it emits a single triple.
+func TestEffectBatch_TriplesRefuseAnInvalidBatchAndAMissingReference(t *testing.T) {
+	broken := validEffectBatch()
+	broken.Intents[0].Value = intPtr(9999)
+	if _, err := broken.Triples(testTurnEntity, "obj://x", "effect-applier", testTime); err == nil {
+		t.Fatal("an out-of-bounds intent was projected into triples")
+	}
+
+	if _, err := validEffectBatch().Triples(testTurnEntity, "", "effect-applier", testTime); err == nil {
+		t.Fatal("a batch with no stored reference was projected; the payload would be unreachable")
+	}
+	if _, err := validEffectBatch().Triples("not-an-entity", "obj://x", "effect-applier", testTime); err == nil {
+		t.Fatal("a non-canonical turn entity id was accepted as a triple subject")
+	}
+}
