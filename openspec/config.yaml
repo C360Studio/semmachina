@@ -36,5 +36,5 @@ rules:
     - Always include a "## Non-goals" section (boundary discipline).
     - Classify the work — game-repo (personas/rule packs/components/lifecycle)
       vs SemStreams engine ask; engine asks are filed upstream, not built here.
-  spec:
+  specs:
     - Specs describe CURRENT behavior verified against code, not aspirations.
