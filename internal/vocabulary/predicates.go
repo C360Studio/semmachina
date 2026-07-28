@@ -209,6 +209,25 @@ var verdictScalarPredicates = []Predicate{
 // write as triples. Anything not in this list must travel by reference.
 func VerdictScalarPredicates() []Predicate { return slices.Clone(verdictScalarPredicates) }
 
+// rollScalarPredicates is the rule-matched projection of a roll result: the
+// band the rule pack routes on and the total a threshold rule can compare.
+//
+// The mechanic version, the RNG version, the seed derivation inputs, the raw
+// dice, and the modifier list are all RECORDED — on the RollResult payload,
+// which is what makes a roll byte-identically replayable — and none of them are
+// rule-matching surface. They reach the graph as TurnRollRef, following the
+// same reference discipline the verdict's banded intents follow. A rule that
+// needed the dice values would be a rule re-deriving the band, which the
+// component already decided.
+var rollScalarPredicates = []Predicate{
+	TurnRollBand,
+	TurnRollTotal,
+}
+
+// RollScalarPredicates returns the predicates a roll result is allowed to
+// write as triples.
+func RollScalarPredicates() []Predicate { return slices.Clone(rollScalarPredicates) }
+
 // ValidatePredicate delegates to the semstreams predicate contract — the same
 // parser the ENTITY_STATES write gate runs. Callers get the identical
 // accept/reject decision the graph will make, before issuing a write.

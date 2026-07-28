@@ -1,8 +1,11 @@
 package payload_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
+
+	ssvocab "github.com/c360studio/semstreams/vocabulary"
 
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/vocabulary"
@@ -158,10 +161,132 @@ func TestRollResult_AcceptsEveryBandAtItsBoundary(t *testing.T) {
 			if err := roll.Validate(); err != nil {
 				t.Fatalf("a consistent roll at the %q boundary was rejected: %v", tc.wantBand, err)
 			}
-			if got := vocabulary.BandForTotal(roll.Total); got != tc.wantBand {
+			if got := mechanicSpec(t).BandForTotal(roll.Total); got != tc.wantBand {
 				t.Fatalf("total %d bands as %q, expected %q", roll.Total, got, tc.wantBand)
 			}
 		})
+	}
+}
+
+// The roll's F6 split: band and total are what rules route and threshold on;
+// mechanic version, RNG version, seed inputs, dice, and modifiers are RECORDED
+// on the payload behind the reference, because replay needs them and no rule
+// does.
+func TestRollResultTriples_EmitOnlyTheRuleMatchedScalarsPlusOneReference(t *testing.T) {
+	roll := validRollResult()
+	const rollRef = "obj://rolls/turn-act-1"
+
+	triples, err := roll.Triples(testTurnEntity, rollRef, "dice", testTime)
+	if err != nil {
+		t.Fatalf("Triples: %v", err)
+	}
+
+	want := map[string]any{
+		vocabulary.TurnRollBand.String():  string(roll.Band),
+		vocabulary.TurnRollTotal.String(): roll.Total,
+		vocabulary.TurnRollRef.String():   rollRef,
+	}
+	if len(triples) != len(want) {
+		t.Fatalf("emitted %d triples, want exactly %d", len(triples), len(want))
+	}
+
+	seen := make(map[string]bool, len(triples))
+	for _, triple := range triples {
+		expected, registered := want[triple.Predicate]
+		if !registered {
+			t.Fatalf("roll emitted unexpected predicate %q; everything replay needs rides behind the reference",
+				triple.Predicate)
+		}
+		if seen[triple.Predicate] {
+			t.Fatalf("predicate %q emitted twice; single-valued predicates must replace, not accumulate", triple.Predicate)
+		}
+		seen[triple.Predicate] = true
+
+		if triple.Object != expected {
+			t.Fatalf("predicate %q object = %#v, want %#v", triple.Predicate, triple.Object, expected)
+		}
+		if triple.Subject != testTurnEntity {
+			t.Fatalf("predicate %q lands on %q, want the turn entity %q", triple.Predicate, triple.Subject, testTurnEntity)
+		}
+		if triple.Context != roll.TurnID {
+			t.Fatalf("predicate %q carries context %q, want the turn id %q", triple.Predicate, triple.Context, roll.TurnID)
+		}
+		if _, parseErr := ssvocab.ParsePredicate(triple.Predicate); parseErr != nil {
+			t.Fatalf("the write gate would reject emitted predicate %q: %v", triple.Predicate, parseErr)
+		}
+	}
+}
+
+// The total must reach the graph as a number so the rule engine's numeric
+// comparison operators can branch on it; the band must reach it as a string so
+// eq/in can. A total emitted as "9" would still write, and every threshold rule
+// over it would quietly never fire.
+func TestRollResultTriples_TotalIsNumericAndBandIsAString(t *testing.T) {
+	triples, err := validRollResult().Triples(testTurnEntity, "obj://rolls/x", "dice", testTime)
+	if err != nil {
+		t.Fatalf("Triples: %v", err)
+	}
+
+	for _, triple := range triples {
+		switch triple.Predicate {
+		case vocabulary.TurnRollTotal.String():
+			if _, ok := triple.Object.(int); !ok {
+				t.Fatalf("total object is %T, want int", triple.Object)
+			}
+		case vocabulary.TurnRollBand.String():
+			if _, ok := triple.Object.(string); !ok {
+				t.Fatalf("band object is %T, want string", triple.Object)
+			}
+		}
+	}
+}
+
+// Rule-opaque free text must have no path into the graph's rule-matching
+// surface, even from a payload small enough that carrying it would be cheap.
+func TestRollResultTriples_CarryNoRuleOpaqueContent(t *testing.T) {
+	roll := validRollResult()
+	triples, err := roll.Triples(testTurnEntity, "obj://rolls/turn-act-1", "dice", testTime)
+	if err != nil {
+		t.Fatalf("Triples: %v", err)
+	}
+
+	serialized, err := json.Marshal(triples)
+	if err != nil {
+		t.Fatalf("marshal triples: %v", err)
+	}
+	note := roll.Modifiers[0].Note
+	if note == "" {
+		t.Fatal("the fixture has no modifier note; this check would be vacuous")
+	}
+	if strings.Contains(string(serialized), note) {
+		t.Fatalf("roll triples leak the modifier note %q into the graph: %s", note, serialized)
+	}
+}
+
+// A roll record that contradicts itself must produce no triples at all: a
+// partial set is a half-written turn entity, and the projection has no error
+// channel once the triples are in the caller's hands.
+func TestRollResultTriples_RefuseToEmitAnInvalidRoll(t *testing.T) {
+	roll := validRollResult()
+	roll.Band = vocabulary.BandFull // its total of 9 is a partial
+
+	triples, err := roll.Triples(testTurnEntity, "obj://rolls/x", "dice", testTime)
+	if err == nil {
+		t.Fatal("a roll whose band contradicts its total produced triples")
+	}
+	if triples != nil {
+		t.Fatalf("a refused projection returned %d triples", len(triples))
+	}
+}
+
+func TestRollResultTriples_RequireATurnEntityAndAReference(t *testing.T) {
+	roll := validRollResult()
+
+	if _, err := roll.Triples("not-an-entity-id", "obj://rolls/x", "dice", testTime); err == nil {
+		t.Fatal("triples must not be emitted onto a non-canonical subject")
+	}
+	if _, err := roll.Triples(testTurnEntity, "", "dice", testTime); err == nil {
+		t.Fatal("the recorded roll must always be reachable; an empty reference loses it")
 	}
 }
 

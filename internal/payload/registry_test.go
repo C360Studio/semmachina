@@ -147,6 +147,28 @@ func TestRegisterPayloads_ComposesWithTheFrameworkBuiltins(t *testing.T) {
 	}
 }
 
+// The campaign entity's category is a provenance envelope, never a wire
+// payload — the campaign entity is created through the atomic mutation lane, so
+// nothing ever publishes or decodes one. Its absence from RegisterPayloads is
+// therefore a decision, and this is what keeps it one: registering a payload
+// under those coordinates would put a decodable type and an entity's provenance
+// on the same (domain, category, version), and the collision has no other
+// reporter.
+func TestCategoryCampaignEntity_IsDeliberatelyUnregistered(t *testing.T) {
+	reg := testRegistry(t)
+	if created := reg.Create(payload.Domain, payload.CategoryCampaignEntity, payload.SchemaVersion); created != nil {
+		t.Fatalf("%s/%s/%s has a registered factory producing %T; that category is the campaign entity's "+
+			"provenance envelope and must not also name a decodable wire payload",
+			payload.Domain, payload.CategoryCampaignEntity, payload.SchemaVersion, created)
+	}
+
+	// Anti-vacuity: the same lookup against a category that IS registered must
+	// return something, or the assertion above would pass for any typo.
+	if reg.Create(payload.Domain, payload.CategoryVerdict, payload.SchemaVersion) == nil {
+		t.Fatal("the registry has no factory for a registered category; the unregistered check proves nothing")
+	}
+}
+
 func TestRegisterPayloads_IsNotIdempotentAndSaysSo(t *testing.T) {
 	reg := testRegistry(t)
 	if err := payload.RegisterPayloads(reg); err == nil {

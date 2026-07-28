@@ -18,11 +18,17 @@ import (
 // actually matters is REACHABILITY: with modifier sum s the possible totals
 // are [2+s, 12+s], and all three bands stay reachable exactly when
 //
-//	2+s <= MaxMissTotal (6)  and  12+s >= MaxPartialTotal+1 (10)
+//	MinDiceTotal+s <= MaxMissTotal  and  MaxDiceTotal+s > MaxPartialTotal
 //
-// which is s ∈ [-2, +4]. Bounding the sum is therefore the real constraint;
-// the per-modifier bound stays because it keeps any single declared
-// justification proportionate and readable on the resolution card.
+// which is s ∈ [-2, +4] for 2d6-pbta/v1's registered spec. Bounding the sum is
+// therefore the real constraint; the per-modifier bound stays because it keeps
+// any single declared justification proportionate and readable on the
+// resolution card.
+//
+// These numbers are the ONE mechanic's numbers, worked out by hand and locked
+// by a test that recomputes reachability from the registered
+// vocabulary.MechanicSpec — so adding a second mechanic with different dice
+// fails that test rather than silently inheriting 2d6's window.
 const (
 	// MinModifierValue is the most negative a single modifier may be.
 	MinModifierValue = -3
@@ -39,17 +45,37 @@ const (
 	MaxModifierTotal = 4
 )
 
+// MaxModifierNoteBytes bounds a modifier's free-text justification.
+//
+// The note is LLM-authored and rule-opaque — no projection turns it into a
+// triple, and no rule or component may branch on it. That bounds what it can
+// INFLUENCE; it says nothing about how large it can be. The note rides on the
+// Verdict and on every RollResult that preserves the verdict's modifiers, so
+// unbounded it is unbounded bytes on two stored payloads per turn, and the
+// first thing that would stop a runaway one is NATS's 1 MB max payload: a
+// transport failure, opaque, after the tokens are already spent, and far from
+// the boundary that owns the contract. Same argument as MaxActionTextBytes at
+// the other end of the loop.
+//
+// 256 bytes is a clause — "already wounded from the fall" — which is all the
+// resolution card can show beside a single ±3, and MaxModifiers caps how many
+// of them one turn can carry. Bytes rather than runes, because the transport
+// limit and the spend it stands in for are both byte-shaped.
+const MaxModifierNoteBytes = 256
+
 // Modifier is one typed adjustment to a resolution roll. The source is a
 // closed vocabulary value so the resolution card can explain the roll and so
-// the adjudicator cannot invent justification categories. Note is free text
-// and is rule-opaque: no rule or component may branch on it.
+// the adjudicator cannot invent justification categories. Note is free text,
+// rule-opaque (no rule or component may branch on it) and bounded by
+// MaxModifierNoteBytes — the two are separate properties and it needs both.
 type Modifier struct {
 	Source vocabulary.ModifierSource `json:"source"`
 	Value  int                       `json:"value"`
 	Note   string                    `json:"note,omitempty"`
 }
 
-// Validate checks source membership and the per-modifier bound.
+// Validate checks source membership, the per-modifier bound, and the note
+// budget.
 func (m *Modifier) Validate() error {
 	if _, err := vocabulary.ParseModifierSource(string(m.Source)); err != nil {
 		return err
@@ -57,6 +83,10 @@ func (m *Modifier) Validate() error {
 	if m.Value < MinModifierValue || m.Value > MaxModifierValue {
 		return fmt.Errorf("modifier %q value %d is outside [%d, %d]",
 			m.Source, m.Value, MinModifierValue, MaxModifierValue)
+	}
+	if len(m.Note) > MaxModifierNoteBytes {
+		return fmt.Errorf("modifier %q note is %d bytes, which exceeds the %d-byte note budget",
+			m.Source, len(m.Note), MaxModifierNoteBytes)
 	}
 	return nil
 }

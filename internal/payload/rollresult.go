@@ -3,17 +3,12 @@ package payload
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/c360studio/semstreams/message"
 
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
-
-// DiceCount is how many dice mechanic 2d6-pbta/v1 rolls.
-const DiceCount = 2
-
-// DieFaces is the number of faces on each die under 2d6-pbta/v1.
-const DieFaces = 6
 
 // SeedSource records what the per-roll seed was derived from, not the seed
 // itself. The campaign seed is stored exactly once, on the campaign entity;
@@ -69,11 +64,17 @@ func (r *RollResult) Schema() message.Type {
 // Validate implements message.Payload. It recomputes the arithmetic and the
 // banding rather than trusting them, so a roll record can never claim a band
 // its own dice and modifiers do not produce.
+//
+// Every dice-shaped check reads the spec registered for the record's OWN
+// mechanic. That is what stops a future `2d6-pbta/v2` record — different dice,
+// different thresholds — from being validated, and silently re-banded, under
+// v1's numbers.
 func (r *RollResult) Validate() error {
 	if err := requireIDSegment("turn_id", r.TurnID); err != nil {
 		return err
 	}
-	if _, err := vocabulary.ParseMechanic(string(r.Mechanic)); err != nil {
+	spec, err := vocabulary.MechanicSpecFor(r.Mechanic)
+	if err != nil {
 		return err
 	}
 	if _, err := vocabulary.ParseRNG(string(r.RNGVersion)); err != nil {
@@ -86,13 +87,13 @@ func (r *RollResult) Validate() error {
 		return fmt.Errorf("seed.turn_id %q does not match turn_id %q", r.Seed.TurnID, r.TurnID)
 	}
 
-	if len(r.Dice) != DiceCount {
-		return fmt.Errorf("mechanic %s rolls %d dice, got %d", r.Mechanic, DiceCount, len(r.Dice))
+	if len(r.Dice) != spec.Dice {
+		return fmt.Errorf("mechanic %s rolls %d dice, got %d", r.Mechanic, spec.Dice, len(r.Dice))
 	}
 	diceTotal := 0
 	for idx, die := range r.Dice {
-		if die < 1 || die > DieFaces {
-			return fmt.Errorf("die %d value %d is outside [1, %d]", idx, die, DieFaces)
+		if !spec.ValidDie(die) {
+			return fmt.Errorf("die %d value %d is outside [1, %d]", idx, die, spec.Faces)
 		}
 		diceTotal += die
 	}
@@ -117,8 +118,9 @@ func (r *RollResult) Validate() error {
 	if !r.Band.IsRollBand() {
 		return fmt.Errorf("band %q is not selectable by a roll", r.Band)
 	}
-	if want := vocabulary.BandForTotal(r.Total); want != r.Band {
-		return fmt.Errorf("band %q does not match total %d (expected %q)", r.Band, r.Total, want)
+	if want := spec.BandForTotal(r.Total); want != r.Band {
+		return fmt.Errorf("band %q does not match total %d under mechanic %s (expected %q)",
+			r.Band, r.Total, r.Mechanic, want)
 	}
 	return nil
 }
@@ -134,4 +136,38 @@ func (r *RollResult) MarshalJSON() ([]byte, error) {
 func (r *RollResult) UnmarshalJSON(data []byte) error {
 	type Alias RollResult
 	return json.Unmarshal(data, (*Alias)(r))
+}
+
+// Triples returns the roll's rule-matched projection as triples on the turn
+// entity, plus one reference to the stored roll-result payload.
+//
+// Band and total are what the rule pack routes and threshold-compares on. The
+// mechanic version, RNG version, seed inputs, dice, and modifiers are recorded
+// on the payload behind rollRef — everything replay needs, none of it rule
+// surface. Same discipline as the verdict, enforced by the same projection
+// rather than by two authors remembering the same rule.
+//
+// Writing these triples MUST use the graph's replace lane
+// (entity.update_with_triples, which merges by subject+predicate), never
+// triple.add / triple.add_batch, which append: band and total are single-valued
+// and a duplicate roll trigger that appended would leave a turn with two bands
+// and no error.
+func (r *RollResult) Triples(turnEntityID, rollRef, source string, at time.Time) ([]message.Triple, error) {
+	return tripleProjection{
+		payload: r,
+		subject: turnEntityID,
+		context: r.TurnID,
+		source:  source,
+		at:      at,
+
+		registered: vocabulary.RollScalarPredicates(),
+		objects: map[vocabulary.Predicate]any{
+			vocabulary.TurnRollBand:  string(r.Band),
+			vocabulary.TurnRollTotal: r.Total,
+		},
+
+		refPredicate: vocabulary.TurnRollRef,
+		refName:      "roll ref",
+		ref:          rollRef,
+	}.build()
 }

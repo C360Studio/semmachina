@@ -10,6 +10,22 @@ import (
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
+// MaxRationaleBytes bounds the adjudicator's free-text reasoning.
+//
+// The rationale is the largest LLM-authored string on the verdict and carries
+// the same argument as MaxModifierNoteBytes: rule-opaque bounds what it can
+// influence, not how big it can be, and the only thing that would eventually
+// stop a runaway one is NATS's 1 MB max payload — long after the tokens were
+// spent. It is also a spend signal in its own right: a persona writing an essay
+// per turn is a prompt-and-completion cost curve, and cost is a policy rather
+// than a forecast.
+//
+// 2 KiB is roughly 350 words: a paragraph of reasoning for the resolution card
+// and the chronicler, not a transcript. A persona whose reasoning genuinely
+// needs more room is producing prose, and prose has a home already — ObjectStore
+// behind a ref-triple.
+const MaxRationaleBytes = 2 * 1024
+
 // VerdictScalars is the rule-matched projection of a verdict: the four small,
 // closed-vocabulary values that become triples on the turn entity. Nothing
 // else in a Verdict is ever rule-matched.
@@ -175,9 +191,9 @@ type Verdict struct {
 	// rule-matched, never a triple; carried by reference.
 	Bands EffectBands `json:"bands"`
 
-	// Rationale is the adjudicator's free-text reasoning. Rule-opaque: it
+	// Rationale is the adjudicator's free-text reasoning. Rule-opaque — it
 	// exists for the resolution card and the chronicler, and no rule or
-	// component may branch on it.
+	// component may branch on it — and bounded by MaxRationaleBytes.
 	Rationale string `json:"rationale,omitempty"`
 }
 
@@ -203,6 +219,10 @@ func (v *Verdict) Validate() error {
 	if err := validateModifiers(v.Modifiers); err != nil {
 		return err
 	}
+	if len(v.Rationale) > MaxRationaleBytes {
+		return fmt.Errorf("rationale is %d bytes, which exceeds the %d-byte rationale budget",
+			len(v.Rationale), MaxRationaleBytes)
+	}
 	return v.Bands.Validate(v.Scalars.RequiresRoll)
 }
 
@@ -222,57 +242,30 @@ func (v *Verdict) UnmarshalJSON(data []byte) error {
 // Triples returns the verdict's rule-matched projection as triples on the
 // turn entity, plus one reference to the stored verdict payload.
 //
-// This is the whole F6 discipline in one method: four scalars land where
-// rules can match them, and the banded intent set — which only the applier
-// reads — stays behind verdictRef. Adding a band, a modifier note, or the
-// rationale to this list would put LLM-authored bulk into the graph's
-// rule-matching surface.
+// This is the whole F6 discipline: four scalars land where rules can match
+// them, and the banded intent set — which only the applier reads — stays behind
+// verdictRef. Adding a band, a modifier note, or the rationale would put
+// LLM-authored bulk into the graph's rule-matching surface, and the shared
+// projection refuses it: the predicate list is vocabulary's, and a non-scalar
+// object has no case in the shape gate.
 func (v *Verdict) Triples(turnEntityID, verdictRef, source string, at time.Time) ([]message.Triple, error) {
-	if err := v.Validate(); err != nil {
-		return nil, err
-	}
-	if err := requireEntityID("turn entity id", turnEntityID); err != nil {
-		return nil, err
-	}
-	if err := requireNonEmpty("verdict ref", verdictRef); err != nil {
-		return nil, err
-	}
+	return tripleProjection{
+		payload: v,
+		subject: turnEntityID,
+		context: v.TurnID,
+		source:  source,
+		at:      at,
 
-	objects := map[vocabulary.Predicate]any{
-		vocabulary.TurnVerdictPlausibility: string(v.Scalars.Plausibility),
-		vocabulary.TurnVerdictRisk:         string(v.Scalars.Risk),
-		vocabulary.TurnVerdictConsequence:  string(v.Scalars.Consequence),
-		vocabulary.TurnVerdictRequiresRoll: v.Scalars.RequiresRoll,
-	}
+		registered: vocabulary.VerdictScalarPredicates(),
+		objects: map[vocabulary.Predicate]any{
+			vocabulary.TurnVerdictPlausibility: string(v.Scalars.Plausibility),
+			vocabulary.TurnVerdictRisk:         string(v.Scalars.Risk),
+			vocabulary.TurnVerdictConsequence:  string(v.Scalars.Consequence),
+			vocabulary.TurnVerdictRequiresRoll: v.Scalars.RequiresRoll,
+		},
 
-	triples := make([]message.Triple, 0, len(objects)+1)
-	for _, predicate := range vocabulary.VerdictScalarPredicates() {
-		object, ok := objects[predicate]
-		if !ok {
-			return nil, fmt.Errorf("no verdict scalar supplies registered predicate %q", predicate)
-		}
-		triples = append(triples, v.triple(turnEntityID, predicate, object, source, at))
-	}
-	triples = append(triples, v.triple(turnEntityID, vocabulary.TurnVerdictRef, verdictRef, source, at))
-	return triples, nil
-}
-
-func (v *Verdict) triple(
-	subject string,
-	predicate vocabulary.Predicate,
-	object any,
-	source string,
-	at time.Time,
-) message.Triple {
-	return message.Triple{
-		Subject:   subject,
-		Predicate: predicate.String(),
-		Object:    object,
-		Source:    source,
-		Timestamp: at,
-		// The verdict is the adjudicator's explicit structured exit, not an
-		// inference about the world, so it is recorded as stated.
-		Confidence: 1.0,
-		Context:    v.TurnID,
-	}
+		refPredicate: vocabulary.TurnVerdictRef,
+		refName:      "verdict ref",
+		ref:          verdictRef,
+	}.build()
 }

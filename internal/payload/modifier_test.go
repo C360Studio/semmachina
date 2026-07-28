@@ -4,18 +4,46 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/c360studio/semstreams/message"
+
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
-// reachableBands returns every band a 2d6 roll can still land in once the
-// modifier total is applied.
-func reachableBands(modifierTotal int) map[vocabulary.OutcomeBand]bool {
+// mechanicSpec is the registered contract for the mechanic under test. The
+// reachability argument the modifier bounds encode is a property OF a mechanic
+// (how many dice, how many faces, where the thresholds fall), so the tests read
+// the same registry the validator reads instead of restating 2d6's numbers.
+func mechanicSpec(t *testing.T) vocabulary.MechanicSpec {
+	t.Helper()
+	spec, err := vocabulary.MechanicSpecFor(vocabulary.Mechanic2d6PbtaV1)
+	if err != nil {
+		t.Fatalf("MechanicSpecFor: %v", err)
+	}
+	return spec
+}
+
+// registeredSpecs returns every registered mechanic contract, refusing an empty
+// registry. Both bound tests below are loops over this slice, and a loop over
+// nothing passes while proving nothing.
+func registeredSpecs(t *testing.T) []vocabulary.MechanicSpec {
+	t.Helper()
+	specs := vocabulary.MechanicSpecs()
+	if len(specs) == 0 {
+		t.Fatal("no registered mechanics; the modifier-bound tests would be vacuous")
+	}
+	return specs
+}
+
+// reachableBands returns every band a roll under spec can still land in once
+// the modifier total is applied.
+//
+// It walks the total RANGE rather than enumerating face combinations, which is
+// equivalent: the sums of N dice with F ≥ 2 faces cover [N, N*F] contiguously.
+func reachableBands(spec vocabulary.MechanicSpec, modifierTotal int) map[vocabulary.OutcomeBand]bool {
 	reachable := make(map[vocabulary.OutcomeBand]bool, len(vocabulary.RollBands()))
-	for first := 1; first <= payload.DieFaces; first++ {
-		for second := 1; second <= payload.DieFaces; second++ {
-			reachable[vocabulary.BandForTotal(first+second+modifierTotal)] = true
-		}
+	for total := spec.MinDiceTotal() + modifierTotal; total <= spec.MaxDiceTotal()+modifierTotal; total++ {
+		reachable[spec.BandForTotal(total)] = true
 	}
 	return reachable
 }
@@ -25,12 +53,21 @@ func reachableBands(modifierTotal int) map[vocabulary.OutcomeBand]bool {
 // must remain reachable. The per-modifier cap alone does not deliver this —
 // three legal +3s sum to +9 and put a miss out of reach — which is why the
 // bound is on the sum.
-func TestModifierTotalBounds_KeepEveryBandReachable(t *testing.T) {
-	for total := payload.MinModifierTotal; total <= payload.MaxModifierTotal; total++ {
-		reachable := reachableBands(total)
-		for _, band := range vocabulary.RollBands() {
-			if !reachable[band] {
-				t.Fatalf("modifier total %d puts band %q out of reach; the dice stopped deciding", total, band)
+//
+// It runs over EVERY registered mechanic. The bounds are package constants
+// worked out for 2d6-pbta/v1, so a second mechanic with different dice would
+// silently inherit a window that does not fit it; this fails instead, which is
+// the reminder that the bounds have to become mechanic-keyed at that point.
+func TestModifierTotalBounds_KeepEveryBandReachableUnderEveryRegisteredMechanic(t *testing.T) {
+	for _, spec := range registeredSpecs(t) {
+		for total := payload.MinModifierTotal; total <= payload.MaxModifierTotal; total++ {
+			reachable := reachableBands(spec, total)
+			for _, band := range vocabulary.RollBands() {
+				if !reachable[band] {
+					t.Fatalf("under %s, modifier total %d puts band %q out of reach; the dice stopped deciding. "+
+						"If a new mechanic was added, the modifier bounds now need to be keyed by mechanic too.",
+						spec.Mechanic, total, band)
+				}
 			}
 		}
 	}
@@ -39,17 +76,32 @@ func TestModifierTotalBounds_KeepEveryBandReachable(t *testing.T) {
 // And the bound is tight, not merely safe: one step outside it in either
 // direction, a band becomes unreachable. A looser assertion would pass for a
 // bound of zero.
-func TestModifierTotalBounds_AreTight(t *testing.T) {
-	for _, total := range []int{payload.MinModifierTotal - 1, payload.MaxModifierTotal + 1} {
-		reachable := reachableBands(total)
-		unreachable := 0
-		for _, band := range vocabulary.RollBands() {
-			if !reachable[band] {
-				unreachable++
+//
+// This runs over every registered mechanic for the same reason the reachability
+// test does, read from the other side. Reachability catches a window too WIDE
+// for a new mechanic — the dice stop deciding, which is the loud failure.
+// Tightness catches one too NARROW, which is the quiet one: under a
+// hypothetical 3d6 spec (range 3–18, miss ≤9, partial ≤12) every band stays
+// reachable at both -2 and +4, so the reachability test says nothing while
+// [-2, +4] refuses modifier totals that mechanic supports and Roller.Roll
+// rejects verdicts that were legal under their own mechanic. Both directions
+// have the same remedy: key the bounds by mechanic.
+func TestModifierTotalBounds_AreTightUnderEveryRegisteredMechanic(t *testing.T) {
+	for _, spec := range registeredSpecs(t) {
+		for _, total := range []int{payload.MinModifierTotal - 1, payload.MaxModifierTotal + 1} {
+			reachable := reachableBands(spec, total)
+			unreachable := 0
+			for _, band := range vocabulary.RollBands() {
+				if !reachable[band] {
+					unreachable++
+				}
 			}
-		}
-		if unreachable == 0 {
-			t.Fatalf("modifier total %d still reaches every band, so the bound is tighter than it needs to be", total)
+			if unreachable == 0 {
+				t.Fatalf("under %s, modifier total %d still reaches every band, so the bound is tighter than that "+
+					"mechanic needs and legal modifiers would be refused at the roller. "+
+					"If a new mechanic was added, the modifier bounds now need to be keyed by mechanic too.",
+					spec.Mechanic, total)
+			}
 		}
 	}
 }
@@ -120,7 +172,7 @@ func TestRollResult_RejectsAModifierTotalThatCouldNotReachEveryBand(t *testing.T
 	}
 	roll.ModifierTotal = payload.SumModifiers(roll.Modifiers)
 	roll.Total = roll.Dice[0] + roll.Dice[1] + roll.ModifierTotal
-	roll.Band = vocabulary.BandForTotal(roll.Total)
+	roll.Band = mechanicSpec(t).BandForTotal(roll.Total)
 
 	// The record is internally consistent — it fails only on the bound.
 	decoded := decode(t, publishUnvalidated(t, roll))
@@ -136,6 +188,7 @@ func TestRollResult_RejectsAModifierTotalThatCouldNotReachEveryBand(t *testing.T
 // Legal totals must still be accepted end to end, or the bound is just a
 // stricter way of rejecting everything.
 func TestRollResult_AcceptsEveryLegalModifierTotal(t *testing.T) {
+	spec := mechanicSpec(t)
 	for total := payload.MinModifierTotal; total <= payload.MaxModifierTotal; total++ {
 		roll := validRollResult()
 		roll.Modifiers = nil
@@ -148,11 +201,65 @@ func TestRollResult_AcceptsEveryLegalModifierTotal(t *testing.T) {
 		}
 		roll.ModifierTotal = total
 		roll.Total = roll.Dice[0] + roll.Dice[1] + total
-		roll.Band = vocabulary.BandForTotal(roll.Total)
+		roll.Band = spec.BandForTotal(roll.Total)
 
 		if err := roll.Validate(); err != nil {
 			t.Fatalf("a roll with the legal modifier total %d was rejected: %v", total, err)
 		}
+	}
+}
+
+// The note is LLM-authored free text, and rule-opaque is not the same as
+// bounded. It is correctly never projected into a triple, but it rides on the
+// Verdict and on every RollResult that preserves the verdict's modifiers, so
+// unbounded it is unbounded bytes on two stored payloads per turn. Authored
+// world text has a budget (MaxFactTextBytes) and player text has one
+// (MaxActionTextBytes); this is the third free-text source in the loop, and it
+// is checked on BOTH carriers because a bound enforced on one of them is a
+// bound the other silently does not have.
+func TestModifierNote_IsBoundedOnEveryPayloadThatCarriesIt(t *testing.T) {
+	oversized := strings.Repeat("a", payload.MaxModifierNoteBytes+1)
+
+	t.Run("verdict", func(t *testing.T) {
+		verdict := validVerdict()
+		verdict.Modifiers[0].Note = oversized
+		assertNoteRejected(t, decode(t, publishUnvalidated(t, verdict)))
+	})
+
+	t.Run("roll_result", func(t *testing.T) {
+		roll := validRollResult()
+		roll.Modifiers[0].Note = oversized
+		assertNoteRejected(t, decode(t, publishUnvalidated(t, roll)))
+	})
+}
+
+func assertNoteRejected(t *testing.T, decoded message.Payload) {
+	t.Helper()
+	err := decoded.Validate()
+	if err == nil {
+		t.Fatalf("a %T carrying an over-budget modifier note was accepted", decoded)
+	}
+	if !strings.Contains(err.Error(), "note") {
+		t.Fatalf("rejection reason %q does not name the note", err.Error())
+	}
+}
+
+// And the budget admits a note exactly at it. An off-by-one here rejects the
+// longest legal justification an adjudicator can write, which is a failure
+// nobody sees until a persona writes one.
+func TestModifierNote_AcceptsANoteExactlyAtTheBudget(t *testing.T) {
+	atBound := strings.Repeat("a", payload.MaxModifierNoteBytes)
+
+	verdict := validVerdict()
+	verdict.Modifiers[0].Note = atBound
+	if err := verdict.Validate(); err != nil {
+		t.Fatalf("a verdict note of exactly %d bytes was rejected: %v", payload.MaxModifierNoteBytes, err)
+	}
+
+	roll := validRollResult()
+	roll.Modifiers[0].Note = atBound
+	if err := roll.Validate(); err != nil {
+		t.Fatalf("a roll-record note of exactly %d bytes was rejected: %v", payload.MaxModifierNoteBytes, err)
 	}
 }
 

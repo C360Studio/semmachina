@@ -227,6 +227,12 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       crash-resume at each phase (kill between roll and apply at minimum); reconnect
       retrieval; email-cadence gap (clock-independent processing)
 - [ ] 10.4 CI workflow: lint (revive-clean), `go test -race ./...`, mock-LLM e2e; no live
-      inference anywhere in the gate
+      inference anywhere in the gate. Assert **zero skips** across the module — that count
+      is load-bearing now that missing infrastructure fails rather than skips, so a skip
+      creeping back in is a coverage regression the suite would otherwise report as `ok`.
+      Note `internal/vocabulary` trips revive's `max-public-structs` (a closed vocabulary is
+      exported types by construction — raise or disable it for that package rather than
+      contorting the vocabulary), and a few `t.Fatalf` calls with constant strings will want
+      `t.Fatal` once a linter lands
 - [ ] 10.5 Run `semmachina-reviewer` on the full slice pre-merge; resolve findings;
       update task truth conservatively with evidence

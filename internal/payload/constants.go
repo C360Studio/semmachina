@@ -31,6 +31,22 @@ const (
 	// package. It is the Graphable the importer publishes so graph-ingest
 	// remains the sole ENTITY_STATES writer.
 	CategoryWorldEntity = "world_entity"
+
+	// CategoryCampaignEntity is the campaign entity's provenance envelope, and
+	// it is deliberately NOT registered: no message of this type is ever
+	// published, because the campaign entity is created through the atomic
+	// mutation lane rather than the fact lane. It is entity provenance, not a
+	// decodable wire type.
+	//
+	// It lives beside the registered categories anyway, because the thing that
+	// must not happen is a future registered payload claiming the same
+	// coordinates. As a bare literal in another package that collision is
+	// invisible — two different things answer to one (domain, category,
+	// version), and the registry cannot report an overlap it never sees. Named
+	// here, the namespace has one home and
+	// TestCategoryCampaignEntity_IsDeliberatelyUnregistered keeps the
+	// non-registration a decision rather than an omission.
+	CategoryCampaignEntity = "campaign_entity"
 )
 
 // Bounds on the untrusted identifiers that become entity-ID segments.

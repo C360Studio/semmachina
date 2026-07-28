@@ -45,7 +45,7 @@ func TestIntegration_ImportIsGraphVisible(t *testing.T) {
 	plan := starterPlan(t, namespace)
 
 	stamp := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	importer, err := world.NewImporter(harness.client, world.WithClock(func() time.Time { return stamp }))
+	importer, err := world.NewImporter(harness.Client, world.WithClock(func() time.Time { return stamp }))
 	if err != nil {
 		t.Fatalf("NewImporter: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestIntegration_ImportIsGraphVisible(t *testing.T) {
 	}
 
 	for _, planned := range plan.Entities {
-		state := harness.awaitEntity(t, planned.ID)
+		state := harness.AwaitEntity(t, planned.ID)
 
 		if state.ID != planned.ID {
 			t.Fatalf("queried %s, got %s", planned.ID, state.ID)
@@ -113,7 +113,7 @@ func TestIntegration_ImportedEntitiesAreBornWithTheContentIndexingProfile(t *tes
 	harness := requireInfra(t)
 	plan := starterPlan(t, worldNamespace(t))
 
-	importer, err := world.NewImporter(harness.client)
+	importer, err := world.NewImporter(harness.Client)
 	if err != nil {
 		t.Fatalf("NewImporter: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestIntegration_ImportedEntitiesAreBornWithTheContentIndexingProfile(t *tes
 		t.Fatalf("Import: %v", err)
 	}
 
-	state := harness.awaitEntity(t, plan.Entities[0].ID)
+	state := harness.AwaitEntity(t, plan.Entities[0].ID)
 	if got := firstObject(state, "entity.indexing.profile"); got != "content" {
 		t.Fatalf("indexing profile = %v, want content; a world entity born under the "+
 			"control floor can never be embedded, and the profile is immutable", got)
@@ -143,7 +143,7 @@ func TestIntegration_ReimportConvergesToTheSameGraphState(t *testing.T) {
 	harness := requireInfra(t)
 	namespace := worldNamespace(t)
 
-	importer, err := world.NewImporter(harness.client)
+	importer, err := world.NewImporter(harness.Client)
 	if err != nil {
 		t.Fatalf("NewImporter: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestIntegration_ReimportConvergesToTheSameGraphState(t *testing.T) {
 
 	before := make(map[string]map[tripleKey]int, len(first.Entities))
 	for _, planned := range first.Entities {
-		before[planned.ID] = tripleSet(harness.awaitEntity(t, planned.ID))
+		before[planned.ID] = tripleSet(harness.AwaitEntity(t, planned.ID))
 	}
 
 	// Resolved independently, to prove convergence rests on deterministic
@@ -181,7 +181,7 @@ func TestIntegration_ReimportConvergesToTheSameGraphState(t *testing.T) {
 	awaitStreamDrained(t, harness)
 
 	for _, planned := range second.Entities {
-		after := tripleSet(harness.awaitEntity(t, planned.ID))
+		after := tripleSet(harness.AwaitEntity(t, planned.ID))
 		if !reflect.DeepEqual(before[planned.ID], after) {
 			t.Fatalf("entity %s changed across a re-import:\nbefore %v\nafter  %v",
 				planned.ID, before[planned.ID], after)
@@ -194,7 +194,7 @@ func TestIntegration_ReimportConvergesToTheSameGraphState(t *testing.T) {
 func TestIntegration_OneTemplateIntoTwoWorldsStaysDisjoint(t *testing.T) {
 	harness := requireInfra(t)
 
-	importer, err := world.NewImporter(harness.client)
+	importer, err := world.NewImporter(harness.Client)
 	if err != nil {
 		t.Fatalf("NewImporter: %v", err)
 	}
@@ -211,11 +211,11 @@ func TestIntegration_OneTemplateIntoTwoWorldsStaysDisjoint(t *testing.T) {
 
 	seen := make(map[string]bool, len(one.Entities))
 	for _, planned := range one.Entities {
-		state := harness.awaitEntity(t, planned.ID)
+		state := harness.AwaitEntity(t, planned.ID)
 		seen[state.ID] = true
 	}
 	for _, planned := range two.Entities {
-		state := harness.awaitEntity(t, planned.ID)
+		state := harness.AwaitEntity(t, planned.ID)
 		if seen[state.ID] {
 			t.Fatalf("entity %s belongs to both worlds", state.ID)
 		}
@@ -224,9 +224,9 @@ func TestIntegration_OneTemplateIntoTwoWorldsStaysDisjoint(t *testing.T) {
 	// Independently addressable also means independently MUTABLE identity: the
 	// two worlds' characters must reference their own scenes, not each other's.
 	locationOne := firstObject(
-		harness.awaitEntity(t, characterID(t, one)), vocabulary.WorldLocationCurrent.String())
+		harness.AwaitEntity(t, characterID(t, one)), vocabulary.WorldLocationCurrent.String())
 	locationTwo := firstObject(
-		harness.awaitEntity(t, characterID(t, two)), vocabulary.WorldLocationCurrent.String())
+		harness.AwaitEntity(t, characterID(t, two)), vocabulary.WorldLocationCurrent.String())
 	if locationOne == locationTwo {
 		t.Fatalf("both worlds' characters stand in the same scene %v", locationOne)
 	}
@@ -242,7 +242,7 @@ func TestIntegration_PlayerBindingMaterializesFromInstanceConfig(t *testing.T) {
 	harness := requireInfra(t)
 	plan := starterPlan(t, worldNamespace(t))
 
-	importer, err := world.NewImporter(harness.client)
+	importer, err := world.NewImporter(harness.Client)
 	if err != nil {
 		t.Fatalf("NewImporter: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestIntegration_PlayerBindingMaterializesFromInstanceConfig(t *testing.T) {
 	}
 
 	player := plan.Entities[len(plan.Entities)-1]
-	state := harness.awaitEntity(t, player.ID)
+	state := harness.AwaitEntity(t, player.ID)
 
 	if got := firstObject(state, vocabulary.WorldEntityKind.String()); got != string(vocabulary.EntityKindPlayer) {
 		t.Fatalf("player entity kind = %v", got)
@@ -263,7 +263,7 @@ func TestIntegration_PlayerBindingMaterializesFromInstanceConfig(t *testing.T) {
 
 	// The bound character must be a real, queryable entity of this world —
 	// a binding pointing at nothing would look identical in the payload.
-	bound := harness.awaitEntity(t, fmt.Sprint(character))
+	bound := harness.AwaitEntity(t, fmt.Sprint(character))
 	if got := firstObject(bound, vocabulary.WorldEntityKind.String()); got != string(vocabulary.EntityKindCharacter) {
 		t.Fatalf("the player is bound to a %v, not a character", got)
 	}
@@ -287,7 +287,7 @@ func awaitStreamDrained(t *testing.T, harness *testInfra) {
 	t.Helper()
 	ctx := t.Context()
 
-	js, err := harness.client.JetStream()
+	js, err := harness.Client.JetStream()
 	if err != nil {
 		t.Fatalf("JetStream: %v", err)
 	}

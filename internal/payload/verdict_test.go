@@ -116,6 +116,16 @@ func TestVerdict_RejectsOutOfContractExits(t *testing.T) {
 			wantErr: "cap",
 		},
 		{
+			// Same argument as the modifier note, on the larger field: the
+			// rationale is rule-opaque and never a triple, which bounds what it
+			// can INFLUENCE, not how big it can be.
+			name: "rationale beyond its budget",
+			mutate: func(v *payload.Verdict) {
+				v.Rationale = strings.Repeat("a", payload.MaxRationaleBytes+1)
+			},
+			wantErr: "rationale",
+		},
+		{
 			name:    "scene is not a canonical entity id",
 			mutate:  func(v *payload.Verdict) { v.SceneID = "gatehouse" },
 			wantErr: "scene_id",
@@ -141,6 +151,23 @@ func TestVerdict_RejectsOutOfContractExits(t *testing.T) {
 				t.Fatalf("rejection reason %q does not mention %q", err.Error(), tc.wantErr)
 			}
 		})
+	}
+}
+
+// The budget admits a rationale exactly at it, and admits an absent one: the
+// field is optional, and a bound that turned "no rationale" into a rejection
+// would make an omitted explanation cost the turn.
+func TestVerdictRationale_AcceptsTheBudgetExactlyAndAcceptsNone(t *testing.T) {
+	atBound := validVerdict()
+	atBound.Rationale = strings.Repeat("a", payload.MaxRationaleBytes)
+	if err := atBound.Validate(); err != nil {
+		t.Fatalf("a rationale of exactly %d bytes was rejected: %v", payload.MaxRationaleBytes, err)
+	}
+
+	none := validVerdict()
+	none.Rationale = ""
+	if err := none.Validate(); err != nil {
+		t.Fatalf("a verdict with no rationale was rejected: %v", err)
 	}
 }
 
