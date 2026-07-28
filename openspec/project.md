@@ -75,10 +75,19 @@ SemStreams repo review; read it before scoping anything).
   is unbounded — iteration caps, capped NPC cascades, and retrieval-bounded
   context are STRUCTURAL, and a budget dial on a runaway path is a fuse, not a
   dial. Published capacity envelopes are **measured from spend-ledger data on real
-  runs**, never estimated. **Infra follows the clock policy, not the world size:**
-  reactive play is zero-idle-cost on one box however large the map, while an
-  always-on ticking world with NPC life ticks is a different cost class and
-  possibly a different topology. Distinguish cheap dials from baked ones —
+  runs**, never estimated. **Three cost axes that scale differently — never
+  quote one as if it answered another:** *idle* cost follows the clock policy
+  (reactive burns nothing while nobody plays, however large the world); *per-turn*
+  cost follows the **cognitive population** — how many entities THINK per turn —
+  not the map size, because a thousand passive locations barely move a
+  scene-scoped retrieval while a thousand reasoning NPCs multiply calls directly;
+  and *capacity* is a wall rather than a bill — concurrent inference on one box
+  runs out long before the budget does, and that, not map size, is what forces a
+  cluster. Note the retrieval-bounded-context pin bounds **context depth per
+  call**, which is why a big map is cheap; bounding **calls per turn** is a
+  different mechanism (capped cascades + LOD tiers, stage 9). A 1,000-NPC
+  cognitive world is a different beast from a 10-NPC one even under identical
+  pacing and an identical map. Distinguish cheap dials from baked ones —
   index precision is re-derivable from `ENTITY_STATES` at any time, whereas a
   world's spatial scale is authored into an immutable content-addressed template.
 - **World time is a world fact, governed by policy.** The campaign clock is a
