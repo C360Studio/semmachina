@@ -3,6 +3,7 @@ package payload
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/c360studio/semstreams/message"
@@ -11,6 +12,67 @@ import (
 
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
+
+// The storage-reference grammar, stated where it is ENFORCED.
+//
+// vocabulary/references.go names the hazard exactly — "a sentence handed to
+// turn.failure.ref passes every shape gate on the way to the graph" — and until
+// now the only thing that actually stopped one was the content store, which
+// validates the references IT mints. That is a runtime validator over one caller,
+// not an enforcement point (F16): TurnState is a decodable wire payload, so a
+// decoded one could carry a sentence in action_ref, project it onto
+// turn.action.ref, and pass every gate between here and ENTITY_STATES.
+//
+// So the grammar lives here, in the package the projection is in, and the
+// projection applies it to every reference predicate. The content store consumes
+// it rather than restating it — one statement of "what a reference is", checked
+// on the way to the graph rather than only on the way out of a writer.
+//
+// It deliberately checks SHAPE and not resolvability: whether an object exists
+// behind a reference is a question for the store that holds it, and this layer
+// has no store. What it can prove is that the value is a pointer at all.
+const (
+	// RefScheme prefixes every storage reference the engine writes. It makes a
+	// reference recognizable on sight — in a triple, in a ledger manifest, in a
+	// log line — and makes anything else obviously not one.
+	RefScheme = "obj://"
+	// RefSeparator divides the storage instance from the key inside a reference.
+	// The key contains separators of its own, so the split is at the FIRST one.
+	//
+	// Exported alongside the scheme because a reference is COMPOSED by the store
+	// that mints it and CHECKED here: two separators would split a reference
+	// somewhere other than where it was joined, and the instance and key would
+	// come back subtly wrong rather than obviously so.
+	RefSeparator = "/"
+)
+
+// RequireStorageRef rejects anything that is not a storage reference.
+//
+// Exported because the content store's parser is the other half of this contract
+// and must not re-derive it: a writer that minted references by one grammar and a
+// projection that accepted another would disagree exactly where it costs the
+// most — a reference on the graph that nothing can resolve.
+func RequireStorageRef(field, value string) error {
+	rest, ok := strings.CutPrefix(value, RefScheme)
+	if !ok {
+		return fmt.Errorf(
+			"%s is %q, which is not a storage reference: it does not begin with %q. A reference predicate "+
+				"whose object is a sentence passes every shape gate on the way to the graph, so the scheme is "+
+				"the check that it is a pointer at all", field, value, RefScheme)
+	}
+	instance, key, found := strings.Cut(rest, RefSeparator)
+	if !found || key == "" {
+		return fmt.Errorf(
+			"%s is %q, which carries no key; a reference addresses ONE object inside a store, and one that "+
+				"names only the store addresses nothing", field, value)
+	}
+	if instance == "" {
+		return fmt.Errorf(
+			"%s is %q, which names no storage instance; a reference resolves through the instance that wrote "+
+				"it, so one without an instance resolves nowhere", field, value)
+	}
+	return nil
+}
 
 // MaxTripleObjectBytes bounds one triple object the engine writes.
 //
@@ -211,13 +273,23 @@ func (p tripleProjection) triple(predicate vocabulary.Predicate, object any) mes
 	}
 }
 
-// checkTripleObject is the shape gate: closed-vocabulary scalars only, bounded.
+// checkTripleObject is the shape gate: closed-vocabulary scalars only, bounded,
+// and a POINTER wherever the predicate says it points.
 //
 // The type switch is the structural half of "no bulky field reaches a triple".
 // A slice of effect intents, a band map, a modifier list, or a nested struct
 // cannot be projected at all — not because a reviewer noticed, but because
 // there is no case for it. The byte bound catches the remaining shape a bulky
 // field can wear: a long string.
+//
+// The reference check closes the hole those two leave open. A `*.ref` predicate
+// carries the engine's escape hatch from the triple budget, and a SHORT sentence
+// is a bounded scalar string: it passes the type switch, passes the byte bound,
+// and lands free text on the surface rules match — which is the exact failure the
+// closed failure code exists to prevent, relocated one predicate over. It is
+// applied to every projected predicate rather than only to the projection's
+// designated reference slot, because a reference predicate appearing in a
+// payload's registered list would otherwise skip it entirely.
 func checkTripleObject(predicate vocabulary.Predicate, object any) error {
 	if _, err := ssvocab.ParsePredicate(predicate.String()); err != nil {
 		return fmt.Errorf("predicate %q would be rejected by the graph write gate: %w", predicate, err)
@@ -232,8 +304,16 @@ func checkTripleObject(predicate vocabulary.Predicate, object any) error {
 			return fmt.Errorf("predicate %q carries a %d-byte object, which exceeds the %d-byte triple-object budget",
 				predicate, len(value), MaxTripleObjectBytes)
 		}
+		if vocabulary.IsStorageRef(predicate) {
+			return RequireStorageRef(fmt.Sprintf("the object of %s", predicate), value)
+		}
 		return nil
 	case bool, int:
+		if vocabulary.IsStorageRef(predicate) {
+			return fmt.Errorf(
+				"predicate %q carries a %T object; a storage reference is a %q pointer, and nothing else may "+
+					"be written there", predicate, object, RefScheme)
+		}
 		return nil
 	case nil:
 		return fmt.Errorf("predicate %q has no object", predicate)

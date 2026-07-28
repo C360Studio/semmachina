@@ -154,19 +154,46 @@ func TestKeyFor_WorstCaseReferenceFitsTheTripleBudget(t *testing.T) {
 	}
 	longestInstance := strings.Repeat("b", content.MaxInstanceNameBytes)
 
-	for _, predicate := range vocabulary.StorageRefPredicates() {
-		key, err := content.KeyFor(predicate, longestTurnID)
-		if err != nil {
-			t.Fatalf("KeyFor(%q): %v", predicate, err)
+	// Over every registered subject kind, not just the turn: the budget has to
+	// survive the LONGEST first segment the key shape can carry, or adding a
+	// subject kind would quietly shorten the id budget of every key under it.
+	for _, kind := range content.SubjectKinds() {
+		for _, predicate := range vocabulary.StorageRefPredicates() {
+			key, err := content.KeyFor(predicate, kind, longestTurnID)
+			if err != nil {
+				t.Fatalf("KeyFor(%q, %q): %v", predicate, kind, err)
+			}
+			ref := content.Ref{Instance: longestInstance, Key: key}
+			if err := ref.Validate(); err != nil {
+				t.Fatalf("the longest reference the engine can compose for %q/%q is invalid: %v",
+					kind, predicate, err)
+			}
+			if len(ref.String()) > payload.MaxTripleObjectBytes {
+				t.Fatalf("worst-case reference for %q/%q is %d bytes, over the %d-byte triple-object budget",
+					kind, predicate, len(ref.String()), payload.MaxTripleObjectBytes)
+			}
 		}
-		ref := content.Ref{Instance: longestInstance, Key: key}
-		if err := ref.Validate(); err != nil {
-			t.Fatalf("the longest reference the engine can compose for %q is invalid: %v", predicate, err)
-		}
-		if len(ref.String()) > payload.MaxTripleObjectBytes {
-			t.Fatalf("worst-case reference for %q is %d bytes, over the %d-byte triple-object budget",
-				predicate, len(ref.String()), payload.MaxTripleObjectBytes)
-		}
+	}
+}
+
+// The key names its SUBJECT, so the derivation a scene-scoped or arc-scoped
+// artifact needs is this one with a different first segment rather than a second
+// derivation beside it — and a second store one step behind that.
+//
+// The turn's keys are byte-identical to the ones this store has always written,
+// which is what makes the shape a pre-adaptation rather than a migration.
+func TestKeyFor_NamesTheSubjectAndLeavesTheTurnsKeysUnchanged(t *testing.T) {
+	key, err := content.KeyFor(vocabulary.TurnActionRef, content.SubjectTurn, "turn-act-1")
+	if err != nil {
+		t.Fatalf("KeyFor: %v", err)
+	}
+	if key != "turn/turn-act-1/action" {
+		t.Fatalf("a turn's action key is %q; every object already stored is at the old spelling", key)
+	}
+
+	if _, err := content.KeyFor(vocabulary.TurnActionRef, "scene", "gatehouse"); err == nil {
+		t.Fatal("an unregistered subject kind derived a key; artifacts would land in a namespace no reader " +
+			"looks in")
 	}
 }
 
@@ -175,7 +202,7 @@ func TestKeyFor_WorstCaseReferenceFitsTheTripleBudget(t *testing.T) {
 func TestKeyFor_DerivesOneKeyPerPredicatePerTurn(t *testing.T) {
 	seen := make(map[string]vocabulary.Predicate)
 	for _, predicate := range vocabulary.StorageRefPredicates() {
-		key, err := content.KeyFor(predicate, "turn-act-1")
+		key, err := content.KeyFor(predicate, content.SubjectTurn, "turn-act-1")
 		if err != nil {
 			t.Fatalf("KeyFor(%q): %v", predicate, err)
 		}
@@ -184,7 +211,7 @@ func TestKeyFor_DerivesOneKeyPerPredicatePerTurn(t *testing.T) {
 		}
 		seen[key] = predicate
 
-		again, err := content.KeyFor(predicate, "turn-act-1")
+		again, err := content.KeyFor(predicate, content.SubjectTurn, "turn-act-1")
 		if err != nil {
 			t.Fatalf("KeyFor(%q) second call: %v", predicate, err)
 		}
@@ -195,11 +222,11 @@ func TestKeyFor_DerivesOneKeyPerPredicatePerTurn(t *testing.T) {
 
 	// Different turns never share a key, or one turn's artifact would overwrite
 	// another's.
-	first, err := content.KeyFor(vocabulary.TurnActionRef, "turn-act-1")
+	first, err := content.KeyFor(vocabulary.TurnActionRef, content.SubjectTurn, "turn-act-1")
 	if err != nil {
 		t.Fatalf("KeyFor: %v", err)
 	}
-	second, err := content.KeyFor(vocabulary.TurnActionRef, "turn-act-2")
+	second, err := content.KeyFor(vocabulary.TurnActionRef, content.SubjectTurn, "turn-act-2")
 	if err != nil {
 		t.Fatalf("KeyFor: %v", err)
 	}
@@ -209,13 +236,13 @@ func TestKeyFor_DerivesOneKeyPerPredicatePerTurn(t *testing.T) {
 }
 
 func TestKeyFor_RefusesAPredicateWithNoArtifactAndATurnIDThatIsNotOne(t *testing.T) {
-	if key, err := content.KeyFor(vocabulary.TurnPhaseCurrent, "turn-act-1"); err == nil {
+	if key, err := content.KeyFor(vocabulary.TurnPhaseCurrent, content.SubjectTurn, "turn-act-1"); err == nil {
 		t.Fatalf("a value-bearing predicate derived key %q", key)
 	}
-	if key, err := content.KeyFor(vocabulary.TurnActionRef, "turn.act.1"); err == nil {
+	if key, err := content.KeyFor(vocabulary.TurnActionRef, content.SubjectTurn, "turn.act.1"); err == nil {
 		t.Fatalf("a dotted turn id derived key %q", key)
 	}
-	if key, err := content.KeyFor(vocabulary.TurnActionRef, ""); err == nil {
+	if key, err := content.KeyFor(vocabulary.TurnActionRef, content.SubjectTurn, ""); err == nil {
 		t.Fatalf("an empty turn id derived key %q", key)
 	}
 }
@@ -328,7 +355,7 @@ func TestPutAction_RefusesAnInvalidActionWithoutStoringIt(t *testing.T) {
 // rather than report a generic read fault it would retry forever.
 func TestGetAction_ReportsAMissingObjectAsSuchRatherThanAsAFault(t *testing.T) {
 	store, _ := newTestStore(t)
-	key, err := content.KeyFor(vocabulary.TurnActionRef, "turn-act-ghost")
+	key, err := content.KeyFor(vocabulary.TurnActionRef, content.SubjectTurn, "turn-act-ghost")
 	if err != nil {
 		t.Fatalf("KeyFor: %v", err)
 	}
@@ -387,7 +414,7 @@ func TestGet_RefusesAReferenceAddressingAnotherArtifactKind(t *testing.T) {
 // fact.
 func TestGetAction_RefusesStoredBytesThatDoNotSatisfyTheContract(t *testing.T) {
 	store, backend := newTestStore(t)
-	key, err := content.KeyFor(vocabulary.TurnActionRef, "turn-act-rot")
+	key, err := content.KeyFor(vocabulary.TurnActionRef, content.SubjectTurn, "turn-act-rot")
 	if err != nil {
 		t.Fatalf("KeyFor: %v", err)
 	}

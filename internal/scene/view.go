@@ -80,13 +80,74 @@ type Exclusion struct {
 	Reason ExclusionReason
 }
 
+// Actor is who is acting in the assembled scene, and whether the view could
+// PROVE they are in it.
+//
+// It exists because scene membership comes only from the edges pointing at the
+// scene, so the acting character reaches the view exclusively through the
+// incoming index. An index that has not applied that character's
+// world.location.current edge yet leaves the actor out of the room without ever
+// making them a candidate — and a candidate is the only thing an Exclusion can
+// name. The presence check is therefore a separate answer, carried here.
+//
+// A resolvable character who is not in the room is a refusal (AbsentActorError),
+// so a view that exists at all has either a verified actor or a stated Doubt.
+type Actor struct {
+	// PlayerID is the player entity the turn names. Always set: a turn that
+	// names no player is refused, because nothing else says who is acting.
+	PlayerID string
+	// CharacterID is the character that player is playing, read from the
+	// player's own player.character.current. Empty when Doubt is set.
+	CharacterID string
+	// Doubt names why presence could not be established, and is empty when it
+	// was. Empty is the only value a persona may be handed without degrading.
+	Doubt ActorDoubt
+}
+
+// Verified reports that the acting character was resolved AND found in the
+// scene's membership.
+func (a Actor) Verified() bool { return a.Doubt == "" && a.CharacterID != "" }
+
+// ActorDoubt names why an assembled view could not confirm who is acting.
+//
+// Every value here is a claim about the WORLD's data rather than about index
+// freshness: a lagging index produces a refusal, not a doubt. These are the
+// shapes where there is nothing to check against, so failing the turn would
+// report a broken campaign once per turn forever instead of once per view.
+type ActorDoubt string
+
+// The ways the acting character cannot be established.
+const (
+	// ActorPlayerAbsent is a player entity the view does not carry — a
+	// referential stub, an id the graph did not return (both of which Excluded
+	// also names), or a reference that is not entity-shaped and never became a
+	// candidate at all. This is what any of them MEANS for the turn.
+	ActorPlayerAbsent ActorDoubt = "player-absent"
+	// ActorBindingAbsent is a hydrated player carrying no
+	// player.character.current. Instance configuration writes that binding, so
+	// its absence is a campaign that was never fully set up.
+	ActorBindingAbsent ActorDoubt = "binding-absent"
+	// ActorBindingAmbiguous is a player holding more than one played character.
+	// The binding is single-valued, so this is an appending write on a lane that
+	// should have replaced — and picking one would pick an actor at random.
+	ActorBindingAmbiguous ActorDoubt = "binding-ambiguous"
+)
+
 // Size is the assembled context's measured weight.
 //
 // It exists so "how big was this context" is answerable after the fact, which
 // is what a flat per-turn cost claim needs in order to be checkable rather than
-// asserted. Bytes is a RETRIEVAL weight — the bytes of the facts retrieved —
-// and deliberately not a token count: tokens are a property of the prompt, and
-// the prompt does not exist yet at this layer.
+// asserted. Bytes is the weight of the ASSEMBLED CONTEXT — the registered facts
+// of the entities the view carries — and deliberately not a token count: tokens
+// are a property of the prompt, and the prompt does not exist yet at this layer.
+//
+// It is NOT a retrieval weight, and the difference is the one F17 is about. What
+// was retrieved to build this view is larger than what the view carries: the
+// projection drops every unregistered triple the batch reads returned, and the
+// membership read's reply — one entry per edge ever pointed at this scene,
+// including one per turn ever taken in it — is not counted here at all. Per-turn
+// CONTEXT is flat and this number shows it; per-turn RETRIEVAL is not, and this
+// number would hide that if it were read as an answer to it.
 type Size struct {
 	// Entities is how many entities the view carries, including the scene and
 	// the turn.
@@ -138,6 +199,8 @@ type View struct {
 	Neighbours []Entity
 	// Excluded names every candidate left out, with a reason.
 	Excluded []Exclusion
+	// Actor is who is acting, and whether this view proved they are in the room.
+	Actor Actor
 	// Size is this view's measured weight.
 	Size Size
 }
@@ -149,6 +212,26 @@ func (v *View) Entities() []Entity {
 	out = append(out, v.Turn, v.Scene)
 	out = append(out, v.Members...)
 	return append(out, v.Neighbours...)
+}
+
+// entity finds one hydrated entity in the view by id.
+func (v *View) entity(entityID string) (Entity, bool) {
+	for _, entity := range v.Entities() {
+		if entity.ID == entityID {
+			return entity, true
+		}
+	}
+	return Entity{}, false
+}
+
+// idsOf reduces entities to their ids, for a failure message that has to name
+// who WAS in the room.
+func idsOf(entities []Entity) []string {
+	out := make([]string, 0, len(entities))
+	for _, entity := range entities {
+		out = append(out, entity.ID)
+	}
+	return out
 }
 
 // project filters an entity's triples to the registered vocabulary and measures
@@ -174,7 +257,8 @@ var registered = func() map[vocabulary.Predicate]bool {
 	return set
 }()
 
-// measure sums a view's retrieval weight.
+// measure sums a view's assembled-context weight. See Size: this counts what the
+// view CARRIES, which is smaller than what was read to build it.
 func measure(entities []Entity) Size {
 	size := Size{Entities: len(entities)}
 	for _, entity := range entities {

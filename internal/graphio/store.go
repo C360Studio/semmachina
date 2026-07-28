@@ -292,10 +292,14 @@ func (s *Store) GetEntities(ctx context.Context, ids []string) (BatchResult, err
 	// The authoritative-state contract applies to every decoded entity, exactly
 	// as it does on the single read: poisoned stored bytes become a typed
 	// refusal here rather than half-usable state in a persona's context.
-	for idx := range response.Entities {
-		if err := graph.ValidateDecodedEntityState(&response.Entities[idx]); err != nil {
-			return BatchResult{}, fmt.Errorf("entity %s: %w", response.Entities[idx].ID, err)
-		}
+	//
+	// Upstream's aggregate validator rather than a local loop, because the
+	// failure it reports is one a local loop reports badly: the entity that
+	// poisons a reply is very often the one whose ID is missing, and "entity :
+	// ..." names nothing. The indexed wrapper names the POSITION in the reply,
+	// which is the only handle that always exists.
+	if err := graph.ValidateDecodedEntityStates(response.Entities); err != nil {
+		return BatchResult{}, err
 	}
 
 	// Reconcile CLIENT-side so the answer is total over the request. Upstream

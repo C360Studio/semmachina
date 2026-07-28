@@ -48,6 +48,16 @@ func id(t *testing.T, kind, instance string) string {
 type fakeGraph struct {
 	entities map[string]*graph.EntityState
 
+	// hidden names entities whose outgoing edges the incoming index does not
+	// report yet. It is how a LAGGING index is expressed: the fact is in
+	// ENTITY_STATES and the reverse lookup has not applied it, which is the one
+	// state a live index will not hold still in.
+	hidden map[string]bool
+	// remembered holds edges the index reports for entities the store no longer
+	// resolves, keyed by the entity they point AT — the opposite disagreement,
+	// and one a separate projection can genuinely hold.
+	remembered map[string][]graph.IncomingEntry
+
 	getErr      error
 	batchErr    error
 	incomingErr error
@@ -58,7 +68,22 @@ type fakeGraph struct {
 }
 
 func newFakeGraph() *fakeGraph {
-	return &fakeGraph{entities: map[string]*graph.EntityState{}}
+	return &fakeGraph{
+		entities:   map[string]*graph.EntityState{},
+		hidden:     map[string]bool{},
+		remembered: map[string][]graph.IncomingEntry{},
+	}
+}
+
+// hideFromIndex stops the incoming index from reporting an entity's edges while
+// leaving the entity and its facts exactly as they are.
+func (g *fakeGraph) hideFromIndex(entityID string) { g.hidden[entityID] = true }
+
+// rememberEdge makes the index report an edge independently of the entity that
+// asserted it, so the edge can outlive the entity's readability.
+func (g *fakeGraph) rememberEdge(from string, predicate vocabulary.Predicate, to string) {
+	g.remembered[to] = append(g.remembered[to],
+		graph.IncomingEntry{FromEntityID: from, Predicate: predicate.String()})
 }
 
 // put stores a real entity: an envelope plus its own facts.
@@ -136,8 +161,11 @@ func (g *fakeGraph) IncomingRelationships(_ context.Context, entityID string) ([
 	if g.incomingErr != nil {
 		return nil, g.incomingErr
 	}
-	var entries []graph.IncomingEntry
+	entries := append([]graph.IncomingEntry(nil), g.remembered[entityID]...)
 	for _, state := range g.entities {
+		if g.hidden[state.ID] {
+			continue
+		}
 		for _, triple := range state.Triples {
 			if object, ok := triple.Object.(string); ok && object == entityID {
 				entries = append(entries, graph.IncomingEntry{
@@ -296,6 +324,174 @@ func TestAssemble_CarriesThePlayerSoAPersonaKnowsWhoIsActing(t *testing.T) {
 			got[0] != id(t, "character", "rook") {
 			t.Fatalf("the player's played-character binding reads %v", got)
 		}
+	}
+}
+
+// ------------------------------------------------------------------ the actor
+
+// The view names who is acting and says it PROVED they are in the room. Both
+// halves matter: the id is what a prompt builder points at, and the absence of a
+// doubt is what says the room was checked rather than assumed.
+func TestAssemble_NamesTheActingCharacterItProvedIsInTheRoom(t *testing.T) {
+	view := assemble(t, gatehouse(t))
+
+	if view.Actor.PlayerID != id(t, "player", "p1") {
+		t.Fatalf("the view names player %q", view.Actor.PlayerID)
+	}
+	if view.Actor.CharacterID != id(t, "character", "rook") {
+		t.Fatalf("the view names acting character %q", view.Actor.CharacterID)
+	}
+	if !view.Actor.Verified() {
+		t.Fatalf("the actor is unverified (%q) in a room that holds them", view.Actor.Doubt)
+	}
+}
+
+// The hole membership cannot report. Scene membership comes only from the edges
+// pointing AT the scene, so a character whose world.location.current the index
+// has not applied yet is not a CANDIDATE — and a candidate is the only thing an
+// Exclusion can name. Without this check the adjudicator is handed a room that
+// does not contain the person acting, with no error and no exclusion.
+//
+// ErrIndexNotReady does not cover it: upstream's readiness latch flips as soon as
+// initial enumeration completes over an empty graph (target == 0 on a fresh
+// instance-per-world boot, before the world import writes anything), and the
+// query gate never fires on ordinary lag afterwards.
+func TestAssemble_RefusesARoomThatDoesNotHoldTheActingCharacter(t *testing.T) {
+	g := gatehouse(t)
+	rook := id(t, "character", "rook")
+
+	// Anti-vacuity: with the index caught up, this same fixture assembles and
+	// Rook is in the room.
+	if !slicesContain(ids(assemble(t, g).Members), rook) {
+		t.Fatal("the fixture does not put the acting character in the room; this test would prove nothing")
+	}
+
+	// The index has not applied Rook's membership edge yet. His facts are in
+	// ENTITY_STATES either way — this is lag, not absence.
+	g.hideFromIndex(rook)
+
+	_, err := newAssembler(t, g).Assemble(t.Context(), testTurnID, testTurnEntityID)
+	if err == nil {
+		t.Fatal("a room without the person acting in it was handed to a persona; nothing anywhere reports it")
+	}
+	var absent *scene.AbsentActorError
+	if !errors.As(err, &absent) {
+		t.Fatalf("refusal is a %T, want an AbsentActorError naming the actor and the scene", err)
+	}
+	if absent.CharacterID != rook || absent.SceneID != id(t, "scene", "gatehouse") {
+		t.Fatalf("the refusal names character %q in scene %q", absent.CharacterID, absent.SceneID)
+	}
+	if absent.PlayerID != id(t, "player", "p1") {
+		t.Fatalf("the refusal names player %q", absent.PlayerID)
+	}
+	if absent.Excluded != "" {
+		t.Fatalf("the refusal blames exclusion %q; this character was never a candidate at all, which is a "+
+			"different repair from one the assembler refused", absent.Excluded)
+	}
+}
+
+// The other way the actor goes missing, and the one with a different repair: the
+// index HAS the membership edge and the entity store does not return what it
+// points at. The index is a separate projection, so the two can disagree — and
+// reporting that as "the index is lagging" would send an operator to wait for
+// something that already finished.
+func TestAssemble_SaysSoWhenTheActingCharacterWasACandidateAndWasRefused(t *testing.T) {
+	g := gatehouse(t)
+	rook := id(t, "character", "rook")
+	// The edge survives in the index; the entity behind it does not resolve.
+	g.rememberEdge(rook, vocabulary.WorldLocationCurrent, id(t, "scene", "gatehouse"))
+	delete(g.entities, rook)
+
+	_, err := newAssembler(t, g).Assemble(t.Context(), testTurnID, testTurnEntityID)
+	var absent *scene.AbsentActorError
+	if !errors.As(err, &absent) {
+		t.Fatalf("assembling a room whose actor did not hydrate returned %v, want an AbsentActorError", err)
+	}
+	if absent.Excluded != scene.ExcludedMissing {
+		t.Fatalf("the refusal blames %q, want the exclusion the assembler actually made", absent.Excluded)
+	}
+}
+
+// Where the binding genuinely cannot be read, the view says so rather than
+// passing silently: an unverifiable actor is a fact about the world, and a
+// refusal there would fail every turn in a campaign whose player entity was
+// never written.
+func TestAssemble_ReportsAnUnverifiableActorRatherThanPassingSilently(t *testing.T) {
+	cases := map[string]struct {
+		arrange func(*testing.T, *fakeGraph)
+		want    scene.ActorDoubt
+	}{
+		"the player entity was never delivered": {
+			arrange: func(t *testing.T, g *fakeGraph) {
+				t.Helper()
+				g.putStub(id(t, "player", "p1"))
+			},
+			want: scene.ActorPlayerAbsent,
+		},
+		"the player plays nobody": {
+			arrange: func(t *testing.T, g *fakeGraph) {
+				t.Helper()
+				g.put(id(t, "player", "p1"))
+			},
+			want: scene.ActorBindingAbsent,
+		},
+		"the player plays two characters": {
+			arrange: func(t *testing.T, g *fakeGraph) {
+				t.Helper()
+				g.put(id(t, "player", "p1"),
+					fact(vocabulary.PlayerCharacterCurrent, id(t, "character", "rook")),
+					fact(vocabulary.PlayerCharacterCurrent, id(t, "character", "wren")),
+				)
+			},
+			want: scene.ActorBindingAmbiguous,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			g := gatehouse(t)
+			tc.arrange(t, g)
+
+			view := assemble(t, g)
+			if view.Actor.Doubt != tc.want {
+				t.Fatalf("the view reports doubt %q, want %q", view.Actor.Doubt, tc.want)
+			}
+			if view.Actor.Verified() {
+				t.Fatal("an actor nobody could resolve was reported as verified")
+			}
+			if view.Actor.PlayerID != id(t, "player", "p1") {
+				t.Fatalf("the view names player %q even so", view.Actor.PlayerID)
+			}
+		})
+	}
+}
+
+// The cross-check reads what the view already holds — the turn names the player,
+// the player is hydrated one hop out — so it must not cost a round trip. A
+// presence check that issued its own read would make the fixed query shape a
+// fixed-plus-one query shape.
+func TestAssemble_ChecksTheActorWithoutIssuingAnotherRead(t *testing.T) {
+	g := gatehouse(t)
+	assemble(t, g)
+
+	if g.gets != 2 || g.batches != 2 || g.incoming != 1 {
+		t.Fatalf("assembly issued %d single reads, %d batches, %d membership reads; the actor cross-check "+
+			"must be pure in-memory work over data the view already carries", g.gets, g.batches, g.incoming)
+	}
+}
+
+func TestAssemble_RefusesATurnThatNamesNoPlayer(t *testing.T) {
+	g := gatehouse(t)
+	sceneID := id(t, "scene", "gatehouse")
+	// A turn whose birth record established a scene and no player: nothing
+	// downstream can say which of the people in the room is acting.
+	g.put(testTurnEntityID,
+		fact(vocabulary.TurnPhaseCurrent, string(vocabulary.PhaseAdjudicating)),
+		fact(vocabulary.TurnActionScene, sceneID),
+	)
+
+	if _, err := newAssembler(t, g).Assemble(t.Context(), testTurnID, testTurnEntityID); err == nil {
+		t.Fatal("a context was assembled for a turn nobody is taking")
 	}
 }
 
@@ -528,6 +724,67 @@ func TestAssemble_RefusesAnOversizeSceneRatherThanTrimmingIt(t *testing.T) {
 	if g.batches != batchesBefore {
 		t.Fatalf("the oversized batch was issued anyway (%d reads); the cap has to be checked against the "+
 			"candidate count, not the result", g.batches-batchesBefore)
+	}
+}
+
+// The NEIGHBOUR stage is the one with fan-out: members are people in a room and
+// there are only so many, while one member carrying a satchel of things adds a
+// neighbour apiece. So the cap has to be checked again after the boundary is
+// known, and against the candidate count — not after hydrating it.
+func TestAssemble_RefusesWhenTheMembersFitAndTheirNeighboursDoNot(t *testing.T) {
+	g := gatehouse(t)
+	rook := id(t, "character", "rook")
+	for idx := range 5 {
+		item := id(t, "item", fmt.Sprintf("trinket%d", idx))
+		g.put(item, fact(vocabulary.WorldEntityName, "A trinket"))
+		g.entities[rook].Triples = append(g.entities[rook].Triples, message.Triple{
+			Subject: rook, Predicate: vocabulary.WorldRelationCarries.String(), Object: item,
+			Source: "test", Timestamp: testTime, Confidence: 1,
+		})
+	}
+
+	// Two members plus the scene and the turn is four; the boundary adds the
+	// player, the crowbar, and five trinkets.
+	assembler := newAssembler(t, g, scene.WithMaxEntities(6))
+	batchesBefore := g.batches
+
+	_, err := assembler.Assemble(t.Context(), testTurnID, testTurnEntityID)
+	if err == nil {
+		t.Fatal("a context over the cap assembled anyway; the member stage fits and the neighbour stage is " +
+			"where a crowded inventory blows the bound")
+	}
+	var oversize *scene.OversizeError
+	if !errors.As(err, &oversize) {
+		t.Fatalf("refusal is a %T, want an OversizeError", err)
+	}
+	if oversize.Entities != 11 {
+		t.Fatalf("the refusal counts %d entities, want the scene, the turn, two members, and seven "+
+			"neighbours", oversize.Entities)
+	}
+	if g.batches != batchesBefore+1 {
+		t.Fatalf("the assembly issued %d batches; the members must hydrate (they are how the boundary is "+
+			"known) and the oversized neighbour batch must not", g.batches-batchesBefore)
+	}
+}
+
+// The cap and the reported size have to count the same things. They did not: the
+// cap counted the scene, the members, and their neighbours while the view also
+// carries the TURN — so a context could exceed its own ceiling by one and then
+// report the excess in Size, which is the number an operator would use to decide
+// the ceiling was holding.
+func TestAssemble_TheCapCountsEverythingTheViewCarries(t *testing.T) {
+	g := gatehouse(t)
+
+	exact := assemble(t, g, scene.WithMaxEntities(6))
+	if exact.Size.Entities != 6 {
+		t.Fatalf("the view carries %d entities at a cap of 6: %s", exact.Size.Entities, exact.Size)
+	}
+
+	_, err := newAssembler(t, g, scene.WithMaxEntities(5)).Assemble(t.Context(), testTurnID, testTurnEntityID)
+	var oversize *scene.OversizeError
+	if !errors.As(err, &oversize) {
+		t.Fatalf("a six-entity context assembled under a cap of five (%v); the cap is not counting what the "+
+			"view carries", err)
 	}
 }
 

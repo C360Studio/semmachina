@@ -2,6 +2,7 @@ package content
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/c360studio/semstreams/message"
@@ -18,18 +19,20 @@ import (
 // addresses the object inside it — and a bare key would be a reference that
 // only resolves as long as there is exactly one store forever.
 //
-// It is a string on the graph because a triple object is a scalar. This is the
-// canonical spelling of that string, stated once, so a writer and a reader
-// cannot each invent one.
+// It is a string on the graph because a triple object is a scalar, and the
+// canonical spelling of that string lives in internal/payload rather than here.
+// That is deliberate: the grammar has to be enforced where a reference reaches
+// the GRAPH (the triple projection), not only where one is minted, or a decoded
+// payload carrying a sentence in a ref field walks past it. This package writes
+// the references and consumes the rule; it does not restate it.
 const (
-	// RefScheme prefixes every reference the engine writes. It exists to make a
-	// reference recognizable on sight — in a triple, in a ledger manifest, in a
-	// log line — and to make anything else obviously not one.
-	RefScheme = "obj://"
+	// RefScheme prefixes every reference the engine writes.
+	RefScheme = payload.RefScheme
 	// refSeparator divides the storage instance from the key. The key contains
 	// separators of its own, so the split is at the FIRST one and the instance
-	// may not contain any.
-	refSeparator = "/"
+	// may not contain any — which is why it is the projection's separator and
+	// not a second one that happens to look the same today.
+	refSeparator = payload.RefSeparator
 )
 
 // Ref addresses one stored artifact.
@@ -111,17 +114,13 @@ func ParseRef(s string) (Ref, error) {
 	if s == "" {
 		return Ref{}, nil
 	}
-	rest, ok := strings.CutPrefix(s, RefScheme)
-	if !ok {
-		return Ref{}, fmt.Errorf(
-			"%q is not a storage reference: it does not begin with %q. A reference predicate whose object is a "+
-				"sentence passes every shape gate on the way to the graph, so the scheme is the check that it is "+
-				"a pointer at all", s, RefScheme)
+	// The grammar check is the projection's, not a second copy of it: a writer
+	// that minted references by one rule and a projection that accepted another
+	// would disagree exactly where it costs the most.
+	if err := payload.RequireStorageRef("storage reference", s); err != nil {
+		return Ref{}, err
 	}
-	instance, key, found := strings.Cut(rest, refSeparator)
-	if !found {
-		return Ref{}, fmt.Errorf("storage reference %q carries no key", s)
-	}
+	instance, key, _ := strings.Cut(strings.TrimPrefix(s, RefScheme), refSeparator)
 	ref := Ref{Instance: instance, Key: key}
 	if err := ref.Validate(); err != nil {
 		return Ref{}, err
@@ -129,37 +128,71 @@ func ParseRef(s string) (Ref, error) {
 	return ref, nil
 }
 
-// keyPrefix is the first segment of every turn-artifact key. Keys are a
-// namespace shared with whatever else this store ever holds, so a turn's
-// artifacts live under one prefix rather than at the root.
-const keyPrefix = "turn"
-
-// KeyFor derives the object key for one turn's artifact.
+// SubjectKind names WHAT an artifact belongs to — the first segment of every
+// key.
 //
-// The derivation is total and pure — the same turn and the same reference
+// It exists because not every stored artifact is a turn's. The chronicler's
+// vignettes (roadmap stage 4) belong to a scene or an arc, and the shape a key
+// derivation grows when a second subject arrives is a SECOND derivation beside
+// this one — with a second store a step behind it. Naming the subject now costs
+// one segment that the turn's keys already had, and the derived keys are
+// byte-identical to the ones this store has been writing.
+//
+// Only the turn is declared. A subject kind arrives with the capability that
+// stores under it, in the same discipline the entity-kind vocabulary follows:
+// speculative members nothing reads are how a closed set stops meaning anything.
+type SubjectKind string
+
+// The subjects artifacts belong to.
+const (
+	// SubjectTurn is one turn's own artifacts: the action, the verdict, the
+	// roll, the effect batch, the narration, the failure detail.
+	SubjectTurn SubjectKind = "turn"
+)
+
+var subjectKinds = []SubjectKind{SubjectTurn}
+
+// SubjectKinds returns the closed subject-kind set.
+func SubjectKinds() []SubjectKind { return slices.Clone(subjectKinds) }
+
+// KeyFor derives the object key for one subject's artifact:
+// <subject kind>/<subject id>/<slot>.
+//
+// The derivation is total and pure — the same subject and the same reference
 // predicate always compose the same key — and that is the whole idempotency
 // story for this store: a redelivered action re-puts the identical bytes at the
 // identical key, so at-least-once delivery leaves one object rather than a pile
 // of them, with no read-before-write and no conditional put (NATS ObjectStore
 // offers neither).
 //
-// It is derived from turn_id and NOT from the turn's six-part entity ID.
-// Deliberately: the entity ID may be up to the full 256-byte budget on its own,
-// so a key built from it could compose a reference the triple-object budget
-// refuses — after the object had already been written. turn_id is bounded at
-// one segment, which makes "the reference always fits" structural rather than
-// lucky (TestKeyFor_WorstCaseReferenceFitsTheTripleBudget). The cost is that
-// keys are unique per turn id rather than per world namespace, which is exactly
-// the instance-per-world assumption the MVP already resolves at the process
-// boundary; a process that ever serves two namespaces changes this line, not
-// its callers.
-func KeyFor(refPredicate vocabulary.Predicate, turnID string) (string, error) {
+// The subject id is an ID SEGMENT and NOT a six-part entity ID. Deliberately:
+// the entity ID may be up to the full 256-byte budget on its own, so a key built
+// from it could compose a reference the triple-object budget refuses — after the
+// object had already been written. A segment is bounded, which makes "the
+// reference always fits" structural rather than lucky
+// (TestKeyFor_WorstCaseReferenceFitsTheTripleBudget). The cost is that keys are
+// unique per subject id rather than per world namespace, which is exactly the
+// instance-per-world assumption the MVP already resolves at the process
+// boundary; a process that ever serves two namespaces changes this line, not its
+// callers.
+//
+// It does NOT check that the subject matches a turn entity. That pairing is a
+// property of the CALLER's arguments, not of the key, and it lives in the PutX
+// wrappers where both halves of the pair are in hand — a key derivation that
+// demanded a turn would have to be edited to store a scene's vignette, which is
+// the edit this shape exists to avoid.
+func KeyFor(refPredicate vocabulary.Predicate, kind SubjectKind, subjectID string) (string, error) {
 	slot, err := vocabulary.ArtifactSlot(refPredicate)
 	if err != nil {
 		return "", err
 	}
-	if err := vocabulary.ValidateIDSegment(turnID); err != nil {
-		return "", fmt.Errorf("artifact key needs a turn id: %w", err)
+	if !slices.Contains(subjectKinds, kind) {
+		return "", fmt.Errorf(
+			"%q is not a registered artifact subject kind (registered: %v); an unregistered one would put "+
+				"artifacts in a namespace no reader looks in", kind, subjectKinds)
 	}
-	return strings.Join([]string{keyPrefix, turnID, slot}, refSeparator), nil
+	if err := vocabulary.ValidateIDSegment(subjectID); err != nil {
+		return "", fmt.Errorf("artifact key needs a %s id: %w", kind, err)
+	}
+	return strings.Join([]string{string(kind), subjectID, slot}, refSeparator), nil
 }

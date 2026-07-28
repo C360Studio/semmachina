@@ -277,6 +277,29 @@ func TestIntegration_SomebodyWhoArrivedAfterSubmissionIsInTheContext(t *testing.
 	}
 }
 
+// The actor cross-check against a REAL index, which is the only place the
+// property it guards is observable: membership arrives through graph-index off a
+// KV watch, so "the acting character is in the room" is a claim about a lookup
+// that lags. Once the index is caught up the view must name the actor and say it
+// proved presence — and it must do so from the ids the real create lane and the
+// real recorder minted, not from a fixture's.
+func TestIntegration_TheViewNamesTheActingCharacterAndProvesTheyAreInTheRoom(t *testing.T) {
+	live := startScene(t)
+	rook := live.id(t, "character", "rook")
+
+	view := live.assembleWhen(t, "populated", func(v *scene.View) bool { return len(v.Members) == 2 })
+
+	if view.Actor.PlayerID != live.id(t, "player", "p1") {
+		t.Fatalf("the view names player %q", view.Actor.PlayerID)
+	}
+	if view.Actor.CharacterID != rook {
+		t.Fatalf("the view names acting character %q, want %q", view.Actor.CharacterID, rook)
+	}
+	if !view.Actor.Verified() {
+		t.Fatalf("the actor is unverified (%q) against a caught-up index", view.Actor.Doubt)
+	}
+}
+
 // F11 against the component that actually mints stubs. A referenced-but-
 // undelivered entity is queryable and factless, and handing one to a persona is
 // a silent context hole: the courier carries a thing with no name and the

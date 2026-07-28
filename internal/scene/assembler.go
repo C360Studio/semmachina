@@ -28,6 +28,17 @@ import (
 // uses seven) with room for a crowded one, and it is a dial rather than a
 // constant: worlds are data, so a world that genuinely needs a bigger room says
 // so at construction.
+//
+// The cap counts ENTITIES while the cost it stands in for is BYTES, so the
+// derived ceiling is worth stating rather than leaving to be rediscovered. Of
+// the engine's registered predicates, twenty-nine are single-valued and an
+// author-written string fact is bounded at payload.MaxFactTextBytes, so one
+// entity's single-valued facts weigh at most ~15 KB and sixty-four of them ~0.9
+// MB — comfortably inside a NATS message, and far past what belongs in a prompt.
+// The five RELATION predicates are multi-valued and therefore outside that
+// arithmetic: a character carrying a hundred things is a hundred triples on one
+// entity. That is precisely why every view reports its own measured Size instead
+// of trusting the entity count to stand for weight.
 const DefaultMaxEntities = 64
 
 // Graph is the read surface the assembler needs.
@@ -103,7 +114,7 @@ func NewAssembler(g Graph, opts ...Option) (*Assembler, error) {
 // world, which is the whole reason this is a component the persona calls rather
 // than a blob the action carries.
 //
-// The shape, in full — five reads, always, in this order:
+// The shape, in full — at most five reads, in this order:
 //
 //  1. the turn entity, for the scene it is happening in and its own artifacts;
 //  2. the scene entity, for its own facts;
@@ -111,8 +122,10 @@ func NewAssembler(g Graph, opts ...Option) (*Assembler, error) {
 //  4. one batch for the members;
 //  5. one batch for the members' 1-hop neighbours.
 //
-// There is no sixth. The traversal stops at one hop because nothing here
-// recurses, which is what makes the depth bound structural rather than a
+// "At most" rather than "always" because a stage with no candidates issues no
+// read at all — an empty room costs three. The bound is the load-bearing half:
+// there is no sixth read, and the traversal stops at one hop because nothing
+// here recurses, which is what makes the depth bound structural rather than a
 // parameter somebody can raise.
 func (a *Assembler) Assemble(ctx context.Context, turnID, turnEntityID string) (*View, error) {
 	// The turn and its entity are one fact wearing two shapes, and this is a
@@ -127,7 +140,8 @@ func (a *Assembler) Assemble(ctx context.Context, turnID, turnEntityID string) (
 	if err != nil {
 		return nil, err
 	}
-	sceneID, err := sceneOf(turnState)
+	turn := project(turnState)
+	sceneID, err := sceneOf(turn)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +155,7 @@ func (a *Assembler) Assemble(ctx context.Context, turnID, turnEntityID string) (
 		TurnEntityID: turnEntityID,
 		SceneID:      sceneID,
 		AssembledAt:  a.now().UTC(),
-		Turn:         project(turnState),
+		Turn:         turn,
 		Scene:        project(sceneState),
 	}
 
@@ -152,7 +166,12 @@ func (a *Assembler) Assemble(ctx context.Context, turnID, turnEntityID string) (
 	// The cap is checked against the CANDIDATE count, before the batch is
 	// issued: an oversized scene must be refused rather than fetched and then
 	// refused, or the read this bound exists to bound has already happened.
-	if err := a.checkCap(sceneID, len(memberIDs)+1); err != nil {
+	//
+	// The turn and the scene are counted with them (fixedEntities) because the
+	// view carries both: a cap that counted only what it fetched would let a
+	// context exceed its own reported ceiling by two and report the excess in
+	// Size afterwards.
+	if err := a.checkCap(sceneID, fixedEntities+len(memberIDs)); err != nil {
 		return nil, err
 	}
 	members, excluded, err := a.hydrate(ctx, memberIDs)
@@ -163,7 +182,7 @@ func (a *Assembler) Assemble(ctx context.Context, turnID, turnEntityID string) (
 	view.Excluded = excluded
 
 	neighbourIDs := neighbourIDsOf(sceneID, view.Turn, view.Scene, members)
-	if err := a.checkCap(sceneID, len(memberIDs)+len(neighbourIDs)+1); err != nil {
+	if err := a.checkCap(sceneID, fixedEntities+len(memberIDs)+len(neighbourIDs)); err != nil {
 		return nil, err
 	}
 	neighbours, neighbourExclusions, err := a.hydrate(ctx, neighbourIDs)
@@ -173,9 +192,19 @@ func (a *Assembler) Assemble(ctx context.Context, turnID, turnEntityID string) (
 	view.Neighbours = neighbours
 	view.Excluded = append(view.Excluded, neighbourExclusions...)
 
+	actor, err := actorOf(view)
+	if err != nil {
+		return nil, err
+	}
+	view.Actor = actor
+
 	view.Size = measure(view.Entities())
 	return view, nil
 }
+
+// fixedEntities is what every view carries before anybody is in the room: the
+// turn and the scene.
+const fixedEntities = 2
 
 // readSolid reads one entity and refuses a referential stub.
 //
@@ -201,18 +230,10 @@ func (a *Assembler) readSolid(ctx context.Context, id, role string) (*graph.Enti
 }
 
 // sceneOf reads the scene the turn is happening in off the turn entity.
-func sceneOf(turnState *graph.EntityState) (string, error) {
-	var scenes []string
-	for _, triple := range turnState.Triples {
-		if triple.Predicate != vocabulary.TurnActionScene.String() {
-			continue
-		}
-		id, ok := triple.Object.(string)
-		if !ok {
-			return "", fmt.Errorf("turn %s records a %T scene reference, want an entity id",
-				turnState.ID, triple.Object)
-		}
-		scenes = append(scenes, id)
+func sceneOf(turn Entity) (string, error) {
+	scenes, err := entityReferences(turn, vocabulary.TurnActionScene)
+	if err != nil {
+		return "", err
 	}
 	switch len(scenes) {
 	case 1:
@@ -220,12 +241,139 @@ func sceneOf(turnState *graph.EntityState) (string, error) {
 	case 0:
 		return "", fmt.Errorf(
 			"turn %s carries no %s; the scene is written once, by the turn's birth record, and a turn "+
-				"without one has no world to assemble", turnState.ID, vocabulary.TurnActionScene)
+				"without one has no world to assemble", turn.ID, vocabulary.TurnActionScene)
 	default:
 		return "", fmt.Errorf(
 			"turn %s holds %d values for the single-valued %s; a scene written on an appending lane leaves "+
-				"this reader choosing one at random", turnState.ID, len(scenes), vocabulary.TurnActionScene)
+				"this reader choosing one at random", turn.ID, len(scenes), vocabulary.TurnActionScene)
 	}
+}
+
+// playerOf reads the player whose turn this is off the turn entity.
+//
+// Single-valued for the same reason the scene is, and established by the same
+// write: the birth record names the player once, so a turn holding two is one
+// this reader would pick an actor for at random.
+func playerOf(turn Entity) (string, error) {
+	players, err := entityReferences(turn, vocabulary.TurnActionPlayer)
+	if err != nil {
+		return "", err
+	}
+	switch len(players) {
+	case 1:
+		return players[0], nil
+	case 0:
+		return "", fmt.Errorf(
+			"turn %s carries no %s; without it nothing can say which of the people in the room is acting, "+
+				"and a persona shown a courier, an apprentice, and a sentry would have to guess",
+			turn.ID, vocabulary.TurnActionPlayer)
+	default:
+		return "", fmt.Errorf(
+			"turn %s holds %d values for the single-valued %s; two players on one turn leaves this reader "+
+				"choosing an actor at random", turn.ID, len(players), vocabulary.TurnActionPlayer)
+	}
+}
+
+// entityReferences returns every entity id an entity records for a predicate.
+//
+// A non-string object on a reference predicate is a refusal rather than a skip:
+// it is authoritative state that cannot mean what its predicate says, and
+// silently returning fewer references than the entity holds is how a reader ends
+// up describing a smaller world than the graph does.
+func entityReferences(entity Entity, predicate vocabulary.Predicate) ([]string, error) {
+	objects := entity.Objects(predicate)
+	ids := make([]string, 0, len(objects))
+	for _, object := range objects {
+		id, ok := object.(string)
+		if !ok {
+			return nil, fmt.Errorf("entity %s records a %T value for %s, want an entity id",
+				entity.ID, object, predicate)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// actorOf answers the one question the assembled room cannot answer for itself:
+// is the person acting in it?
+//
+// Membership is a REVERSE lookup, so an entity whose world.location.current the
+// index has not applied yet is not a candidate at all — and a candidate is the
+// only thing an Exclusion can name. Without this cross-check the acting
+// character can be missing from the assembled room silently: no error, no
+// exclusion, and a persona asked to judge what somebody does in a room they are
+// not in.
+//
+// ErrIndexNotReady does not cover it, which is the whole reason this exists.
+// Upstream's readiness latch flips as soon as initial enumeration completes over
+// an EMPTY graph (target == 0 on a fresh instance-per-world boot, before the
+// world import writes anything), and the query gate deliberately never fires on
+// ordinary lag afterwards. The sentinel covers cold replay and known-degraded;
+// the post-import window is exactly the gap.
+//
+// It costs NO read. The turn names the player, the player is already hydrated
+// one hop out, and player.character.current is registered vocabulary — so this
+// is in-memory work over data the view already holds, and the query shape stays
+// what the doc comment says it is.
+//
+// A resolvable character absent from the room is a REFUSAL, because handing a
+// persona a room without the actor is worse than failing the turn. A binding
+// that cannot be read at all is recorded as doubt instead: a campaign whose
+// player entity was never written is broken in a way no turn can fix, and
+// failing every turn forever would report it worse than saying so once per view.
+func actorOf(view *View) (Actor, error) {
+	playerID, err := playerOf(view.Turn)
+	if err != nil {
+		return Actor{}, err
+	}
+	actor := Actor{PlayerID: playerID}
+
+	player, hydrated := view.entity(playerID)
+	if !hydrated {
+		// Either the player was a candidate and did not survive hydration — in
+		// which case Excluded says why — or the reference is not entity-shaped
+		// and never became a candidate to hydrate. Both leave nothing to follow.
+		actor.Doubt = ActorPlayerAbsent
+		return actor, nil
+	}
+	characters, err := entityReferences(player, vocabulary.PlayerCharacterCurrent)
+	if err != nil {
+		return Actor{}, err
+	}
+	switch len(characters) {
+	case 1:
+	case 0:
+		actor.Doubt = ActorBindingAbsent
+		return actor, nil
+	default:
+		actor.Doubt = ActorBindingAmbiguous
+		return actor, nil
+	}
+
+	actor.CharacterID = characters[0]
+	for _, member := range view.Members {
+		if member.ID == actor.CharacterID {
+			return actor, nil
+		}
+	}
+
+	absent := &AbsentActorError{
+		SceneID:      view.SceneID,
+		TurnEntityID: view.TurnEntityID,
+		PlayerID:     actor.PlayerID,
+		CharacterID:  actor.CharacterID,
+		Members:      idsOf(view.Members),
+	}
+	// A character the assembler REFUSED is a different failure from one the
+	// index never mentioned, and the two need different repairs — finish the
+	// import versus wait for the index — so the refusal says which it saw.
+	for _, excluded := range view.Excluded {
+		if excluded.ID == actor.CharacterID {
+			absent.Excluded = excluded.Reason
+			break
+		}
+	}
+	return Actor{}, absent
 }
 
 // memberIDs asks who is in the scene.
@@ -366,4 +514,58 @@ func (e *OversizeError) Error() string {
 		"scene %s would assemble a context of %d entities, over the cap of %d; refusing rather than "+
 			"trimming, because a persona handed part of a room narrates a room that is not there and "+
 			"nothing reports it", e.SceneID, e.Entities, e.Max)
+}
+
+// AbsentActorError reports an assembled room that does not contain the person
+// acting in it.
+//
+// It is a refusal for the same reason OversizeError is: the alternative is a
+// persona handed a room it cannot narrate honestly, with nothing anywhere
+// reporting a problem. This one is worse than a short room — the missing entity
+// is the one the turn is ABOUT.
+//
+// The cause is one of two things, and the error says both because this reader
+// cannot tell them apart: the membership index has not applied the character's
+// world.location.current edge yet (retry), or the character genuinely left the
+// scene the turn was submitted in (the turn's premise is void). Either way the
+// turn cannot be judged against this room.
+type AbsentActorError struct {
+	// SceneID is the room that was assembled.
+	SceneID string
+	// TurnEntityID is the turn whose actor is missing.
+	TurnEntityID string
+	// PlayerID is the player the turn names.
+	PlayerID string
+	// CharacterID is the character that player is playing — the entity that
+	// should have been in the room and was not.
+	CharacterID string
+	// Members is who WAS in the room, so the refusal is diagnosable without a
+	// second query.
+	Members []string
+	// Excluded is set when the character reached the view as a candidate and was
+	// refused, and empty when it never appeared at all. The two want different
+	// repairs — finish the import versus wait for the index — so they are not
+	// reported as one failure.
+	Excluded ExclusionReason
+}
+
+// Error implements error.
+func (e *AbsentActorError) Error() string {
+	members := "nobody"
+	if len(e.Members) > 0 {
+		members = strings.Join(e.Members, ", ")
+	}
+	cause := fmt.Sprintf(
+		"either the membership index has not applied that character's %s edge yet or the character is no "+
+			"longer there", vocabulary.WorldLocationCurrent)
+	if e.Excluded != "" {
+		cause = fmt.Sprintf(
+			"that character was excluded from this context as %q, so its facts are not available to show",
+			e.Excluded)
+	}
+	return fmt.Sprintf(
+		"scene %s does not hold %s, the character player %s is playing in turn %s; the room holds %s. %s — "+
+			"refusing either way, because a persona handed a room without the actor in it narrates somebody "+
+			"who is not present",
+		e.SceneID, e.CharacterID, e.PlayerID, e.TurnEntityID, members, cause)
 }

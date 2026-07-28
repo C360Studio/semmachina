@@ -173,16 +173,20 @@ func TestEffectBatch_TriplesProjectTheIdentityAndTheReference(t *testing.T) {
 // An invalid batch must not reach the graph in fragments: the projection
 // validates the whole payload before it emits a single triple.
 func TestEffectBatch_TriplesRefuseAnInvalidBatchAndAMissingReference(t *testing.T) {
+	// A well-formed reference, so each case below fails for the reason it names
+	// rather than for its reference.
+	const ref = "obj://TEST_CONTENT/turn/turn-act-1/effects"
+
 	broken := validEffectBatch()
 	broken.Intents[0].Value = intPtr(9999)
-	if _, err := broken.Triples(testTurnEntity, "obj://x", "effect-applier", testTime); err == nil {
+	if _, err := broken.Triples(testTurnEntity, ref, "effect-applier", testTime); err == nil {
 		t.Fatal("an out-of-bounds intent was projected into triples")
 	}
 
 	if _, err := validEffectBatch().Triples(testTurnEntity, "", "effect-applier", testTime); err == nil {
 		t.Fatal("a batch with no stored reference was projected; the payload would be unreachable")
 	}
-	if _, err := validEffectBatch().Triples("not-an-entity", "obj://x", "effect-applier", testTime); err == nil {
+	if _, err := validEffectBatch().Triples("not-an-entity", ref, "effect-applier", testTime); err == nil {
 		t.Fatal("a non-canonical turn entity id was accepted as a triple subject")
 	}
 }

@@ -162,6 +162,42 @@ func TestTripleProjection_RejectsEveryWayToBreakTheDiscipline(t *testing.T) {
 			wantErr: "empty object",
 		},
 		{
+			// The hazard vocabulary/references.go names: a reference predicate is
+			// the one place a SHORT sentence passes every other gate — it is a
+			// bounded scalar string — and lands free text where rules match.
+			name: "a sentence where the reference goes",
+			mutate: func(p *tripleProjection) {
+				p.ref = "the batch was refused because health would go to 43"
+			},
+			wantErr: "not a storage reference",
+		},
+		{
+			name: "a reference naming a store and no object in it",
+			mutate: func(p *tripleProjection) {
+				p.ref = "obj://SEMMACHINA_CONTENT"
+			},
+			wantErr: "carries no key",
+		},
+		{
+			// The gate applies to every projected predicate, not only to the
+			// projection's designated reference slot: a *.ref predicate in a
+			// payload's registered list would otherwise walk past it.
+			name: "a non-pointer on a reference predicate in the registered set",
+			mutate: func(p *tripleProjection) {
+				p.registered = append(p.registered, vocabulary.TurnNarrationRef)
+				p.objects[vocabulary.TurnNarrationRef] = true
+			},
+			wantErr: "nothing else may be written there",
+		},
+		{
+			name: "a sentence on a reference predicate in the registered set",
+			mutate: func(p *tripleProjection) {
+				p.registered = append(p.registered, vocabulary.TurnNarrationRef)
+				p.objects[vocabulary.TurnNarrationRef] = "the courier levers the gate open, and it gives"
+			},
+			wantErr: "not a storage reference",
+		},
+		{
 			name: "a string object past the triple-object budget",
 			mutate: func(p *tripleProjection) {
 				p.objects[vocabulary.TurnRollBand] = strings.Repeat("a", MaxTripleObjectBytes+1)
@@ -347,6 +383,40 @@ func TestTripleProjection_ReflessShapeKeepsEveryOtherGate(t *testing.T) {
 				t.Fatalf("rejection reason %q does not mention %q", err.Error(), tc.wantErr)
 			}
 		})
+	}
+}
+
+// The reference gate is DERIVED from the predicate name, so it must hold for
+// every predicate that name selects — not for the two the table above happens to
+// use. A new *.ref predicate inherits it or this fails.
+func TestCheckTripleObject_EveryReferencePredicateRefusesEverythingButAPointer(t *testing.T) {
+	const sentence = "the courier levers the gate open, and it gives"
+
+	// Anti-vacuity: the sentence is a bounded scalar string, so every OTHER gate
+	// in this file accepts it. Only the reference check stops it.
+	if len(sentence) > MaxTripleObjectBytes {
+		t.Fatal("the sentence is past the shape budget, so this proves nothing about the reference check")
+	}
+	if err := checkTripleObject(vocabulary.WorldEntityName, sentence); err != nil {
+		t.Fatalf("the sentence is refused on an ordinary predicate too (%v); this test would pass for the "+
+			"wrong reason", err)
+	}
+
+	predicates := vocabulary.StorageRefPredicates()
+	if len(predicates) == 0 {
+		t.Fatal("no reference predicates are registered; this test proves nothing")
+	}
+	for _, predicate := range predicates {
+		if err := checkTripleObject(predicate, sentence); err == nil {
+			t.Fatalf("%q accepted a sentence; free text on a reference predicate passes every other gate on "+
+				"the way to the graph", predicate)
+		}
+		if err := checkTripleObject(predicate, 7); err == nil {
+			t.Fatalf("%q accepted an integer; a reference is a pointer", predicate)
+		}
+		if err := checkTripleObject(predicate, "obj://SEMMACHINA_CONTENT/turn/turn-act-1/x"); err != nil {
+			t.Fatalf("%q refused a well-formed reference: %v", predicate, err)
+		}
 	}
 }
 

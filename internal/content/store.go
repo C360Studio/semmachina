@@ -188,7 +188,7 @@ func (s *Store) PutAction(
 	if err := payload.RequireTurnEntityID(turnID, turnEntityID); err != nil {
 		return Ref{}, err
 	}
-	return s.put(ctx, vocabulary.TurnActionRef, turnID, action)
+	return s.put(ctx, vocabulary.TurnActionRef, SubjectTurn, turnID, action)
 }
 
 // GetAction reads a stored action back.
@@ -218,7 +218,7 @@ func (s *Store) PutFailureDetail(
 	if err := payload.RequireTurnEntityID(detail.TurnID, turnEntityID); err != nil {
 		return Ref{}, err
 	}
-	return s.put(ctx, vocabulary.TurnFailureRef, detail.TurnID, detail)
+	return s.put(ctx, vocabulary.TurnFailureRef, SubjectTurn, detail.TurnID, detail)
 }
 
 // GetFailureDetail reads a stored failure detail back.
@@ -252,13 +252,14 @@ type artifact interface {
 func (s *Store) put(
 	ctx context.Context,
 	refPredicate vocabulary.Predicate,
-	turnID string,
+	kind SubjectKind,
+	subjectID string,
 	a artifact,
 ) (Ref, error) {
 	if err := a.Validate(); err != nil {
-		return Ref{}, fmt.Errorf("refusing to store an invalid artifact for turn %s: %w", turnID, err)
+		return Ref{}, fmt.Errorf("refusing to store an invalid artifact for %s %s: %w", kind, subjectID, err)
 	}
-	key, err := KeyFor(refPredicate, turnID)
+	key, err := KeyFor(refPredicate, kind, subjectID)
 	if err != nil {
 		return Ref{}, err
 	}
@@ -269,7 +270,7 @@ func (s *Store) put(
 
 	data, err := json.Marshal(a)
 	if err != nil {
-		return Ref{}, fmt.Errorf("encode artifact for turn %s: %w", turnID, err)
+		return Ref{}, fmt.Errorf("encode artifact for %s %s: %w", kind, subjectID, err)
 	}
 	if err := s.backend.Put(ctx, key, data); err != nil {
 		return Ref{}, fmt.Errorf("store artifact at %s: %w", ref, err)

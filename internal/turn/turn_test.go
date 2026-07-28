@@ -205,7 +205,7 @@ func (a *fakeActions) PutAction(
 	if err := payload.RequireTurnEntityID(turnID, turnEntityID); err != nil {
 		return content.Ref{}, err
 	}
-	key, err := content.KeyFor(vocabulary.TurnActionRef, turnID)
+	key, err := content.KeyFor(vocabulary.TurnActionRef, content.SubjectTurn, turnID)
 	if err != nil {
 		return content.Ref{}, err
 	}
@@ -992,7 +992,7 @@ func TestFail_DetailRidesAsAReference(t *testing.T) {
 	store, recorder, acceptance := acceptedTurn(t)
 	advanceTo(t, recorder, acceptance, vocabulary.PhaseAdjudicating, vocabulary.PhaseApplying)
 
-	key, err := content.KeyFor(vocabulary.TurnFailureRef, acceptance.TurnID)
+	key, err := content.KeyFor(vocabulary.TurnFailureRef, content.SubjectTurn, acceptance.TurnID)
 	if err != nil {
 		t.Fatalf("KeyFor: %v", err)
 	}

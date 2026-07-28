@@ -167,6 +167,40 @@ func TestTurnState_RejectsAReasonOutsideTheClosedSet(t *testing.T) {
 	}
 }
 
+// TurnState is a DECODABLE wire payload, so "the store validates the references
+// it mints" is not an enforcement point (F16): a decoded record can carry
+// anything in a ref field. The projection is where a reference reaches the
+// graph, so that is where the grammar has to hold — for the action reference the
+// birth record requires, and for the failure detail reference, which is the one
+// most likely to be handed an explanation instead of a pointer.
+func TestTurnState_RefusesASentenceWhereAReferenceGoes(t *testing.T) {
+	const explanation = "the applier refused the batch because health would go to 43"
+
+	accepted := acceptedState()
+	accepted.ActionRef = explanation
+	if _, err := accepted.Triples(testTurnEntity, "turn-recorder", testTime); err == nil {
+		t.Fatal("a sentence was projected onto turn.action.ref; free text reached the surface rules match")
+	}
+
+	failed := failedState(vocabulary.FailureEffectInvalid)
+	failed.DetailRef = explanation
+	if _, err := failed.Triples(testTurnEntity, "turn-recorder", testTime); err == nil {
+		t.Fatal("a sentence was projected onto turn.failure.ref, which is exactly the closed reason code's " +
+			"hole relocated one predicate over")
+	}
+
+	// Anti-vacuity: the record's own Validate accepts it — it asks only that a
+	// reference be present and bounded — so nothing but the projection's grammar
+	// check would have stopped it.
+	if err := accepted.Validate(); err != nil {
+		t.Fatalf("the payload contract already refused the sentence (%v); this proves nothing about the "+
+			"projection", err)
+	}
+	if len(explanation) > payload.MaxTripleObjectBytes {
+		t.Fatal("the sentence is past the shape budget, so the shape gate would have caught it anyway")
+	}
+}
+
 func TestTurnState_RejectsEveryMisshapedRecord(t *testing.T) {
 	cases := []struct {
 		name    string

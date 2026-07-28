@@ -135,9 +135,15 @@ var referenceObjectKinds = map[Predicate][]EntityKind{
 // turn in the campaign's history and call it the room.
 //
 // So the set is CLOSED and stated here, next to the ontology it belongs to,
-// rather than inferred at the reader. When place becomes first-class (roadmap
-// stage 2) this is the line that grows a second member, not the context
-// assembler.
+// rather than inferred at the reader.
+//
+// Growing it is NOT sufficient on its own, and the earlier version of this
+// comment said the opposite. When place becomes first-class (roadmap stage 2)
+// the reverse lookup is still keyed on the SCENE, so adding a second membership
+// predicate here changes which incoming edges count and nothing else — the
+// assembler would still ask the scene who is in it. Re-keying that read onto the
+// location is the assembler's change, and this list is the vocabulary half of
+// the same change rather than the whole of it.
 var sceneMembershipPredicates = []Predicate{WorldLocationCurrent}
 
 // SceneMembershipPredicates returns the closed set of edges that put an entity

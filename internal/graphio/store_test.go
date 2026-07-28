@@ -506,17 +506,27 @@ func TestGetEntities_SendsNothingForAnEmptyRequest(t *testing.T) {
 // The authoritative-state contract applies to every decoded entity, exactly as
 // it does on the single read: poisoned stored bytes become a typed refusal here
 // rather than half-usable state in a persona's context.
-func TestGetEntities_RefusesAPoisonedEntityInTheBatch(t *testing.T) {
+//
+// And the refusal has to say WHICH one. The entity that poisons a reply is very
+// often the one whose ID is missing — as here — so a message built from the
+// entity's own ID names nothing; the position in the reply is the handle that
+// always exists.
+func TestGetEntities_RefusesAPoisonedEntityInTheBatchAndSaysWhichOne(t *testing.T) {
 	poisoned := validEntity()
 	poisoned.ID = ""
-	body, err := json.Marshal(graph.EntityBatchResponse{Entities: []graph.EntityState{*poisoned}})
+	body, err := json.Marshal(graph.EntityBatchResponse{
+		Entities: []graph.EntityState{*validEntity(), *poisoned},
+	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	if _, err := newStore(t, &fakeRequester{reply: body}).GetEntities(
-		t.Context(), []string{testEntityID}); err == nil {
+	_, err = newStore(t, &fakeRequester{reply: body}).GetEntities(t.Context(), []string{testEntityID})
+	if err == nil {
 		t.Fatal("a batch carrying an entity that fails the decoded-state contract was accepted")
+	}
+	if !strings.Contains(err.Error(), "entity[1]") {
+		t.Fatalf("refusal %q does not name which candidate poisoned the reply", err)
 	}
 }
 
