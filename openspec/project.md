@@ -136,6 +136,23 @@ vision but are NOT on the active MVP path.
    - The clock readout renders the campaign clock entity as a **fact, not an
      animation**: under reactive pacing time advances only on player action, so a
      visibly ticking clock would be a lie. Policy-aware from the first version.
+   - **Reuse the upstream indexes; do not hand-roll spatial or temporal search**
+     (M6). `graph-index-spatial` is a geohash index over `geo.location.latitude`/
+     `.longitude` with radius, bounding-box, and GeoJSON polygon queries;
+     `graph-index-temporal` buckets by minute/hour/day off a canonical event-time
+     predicate. Both are projections over `ENTITY_STATES`, so they reward the
+     stage-2 ontology rather than substituting for it — with no coordinates and no
+     connective edge, neither index has anything to index. Match the mechanism to
+     the question: **adjacency is a graph edge** ("the gatehouse connects to the
+     courtyard" — geohash cannot express connectivity, and two rooms a metre apart
+     through a locked wall are metrically adjacent and unreachable in play);
+     regional travel and "what is within a day's ride" is the spatial index;
+     deadline windows are the temporal index. Two decisions to take deliberately:
+     fictional coordinates must be expressed as literal lat/lon (workable — geohash
+     is a space-filling curve over any 2D range — but cells are not equal-area, so
+     keep a large map in a modest band), and there is a **single** canonical
+     event-time predicate, so indexing world time means real time falls back to
+     ingestion time. Needing both indexed is an upstream ask, not a local index.
 4. **Scene completion + chronicler** — salience marking, vignette emission,
    Markdown preview/export (play-to-draft becomes demonstrable).
 5. **Continuity checking + retrieval evaluation** — the ops-role diff persona and
