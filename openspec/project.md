@@ -107,14 +107,35 @@ vision but are NOT on the active MVP path.
 1. **Turn-loop engine spike** (active: `turn-loop-vertical-slice`) — durable turn
    state, idempotent effects, validated closed-vocabulary mutations, crash tests;
    loads the starter world from a package-shaped fixture via an importer.
-2. **Template proof** — instantiate the same starter world twice; swap the
-   narrator/tone pack; swap fiction-heavy vs mechanics-heavy rule packs; two
-   materially different experiences on identical engine code. The first
+2. **Template proof + place ontology** — instantiate the same starter world twice;
+   swap the narrator/tone pack; swap fiction-heavy vs mechanics-heavy rule packs;
+   two materially different experiences on identical engine code. The first
    falsifiable test of the tunability claim ("the dial is rule-pack selection,
-   not architecture").
-3. **Creator surface** — minimal Svelte client: action in, narration out, and a
-   **resolution card** (plausibility, risk, modifiers, roll, consequence) so
-   outcomes are legible, never arbitrary; typed progress/error/reconnect.
+   not architecture"). Also promotes **place to first-class**: a `location` kind
+   distinct from `scene` (a location persists; a scene is a unit of play *at* one,
+   and many scenes may share a place) plus a connective relation. Today the
+   ontology can say "Rook is in the gatehouse" but cannot say "the gatehouse
+   connects to the courtyard" — there is no edge between places, so no map is
+   expressible. Vocabulary is cheapest to change before more templates bind to it.
+3. **Creator surface + sense of place** — minimal Svelte client: action in,
+   narration out, and a **resolution card** (plausibility, risk, modifiers, roll,
+   consequence) so outcomes are legible, never arbitrary; typed
+   progress/error/reconnect. Plus the two orientation widgets a player needs to
+   know where and when they are: a **map view** and a **clock readout**.
+   - The world exists whole at import — nothing about the map accretes through
+     play. The **base map is authored world data**, disclosed at session zero the
+     way a GM hands over a regional map: geography is public, contents and current
+     state are not. That baseline needs no epistemic model and ships here.
+   - The map is a **projection over `ENTITY_STATES`, never a stored artifact**. A
+     saved map can disagree with the world, and detecting exactly that kind of
+     divergence is the product thesis; a map that can lie is the failure mode.
+   - Templates may carry authored **geometry**, not just topology — an authored
+     world deserves author-controlled arrangement. Auto-layout from the connection
+     graph is the fallback when a package supplies no coordinates, not the target.
+     Drawn regional art is a later media pack (see stage 10's typed packs).
+   - The clock readout renders the campaign clock entity as a **fact, not an
+     animation**: under reactive pacing time advances only on player action, so a
+     visibly ticking clock would be a lie. Policy-aware from the first version.
 4. **Scene completion + chronicler** — salience marking, vignette emission,
    Markdown preview/export (play-to-draft becomes demonstrable).
 5. **Continuity checking + retrieval evaluation** — the ops-role diff persona and
@@ -123,7 +144,10 @@ vision but are NOT on the active MVP path.
    tone/crunch rule-pack presets.
 7. **Epistemic model** — canonical truth vs character belief vs player knowledge
    vs narration-revealed; required BEFORE NPC cognition, else retrieval produces
-   spoilers and omniscient NPCs.
+   spoilers and omniscient NPCs. It governs the **delta** on top of stage 3's
+   authored baseline — what a character has since discovered, been told, or been
+   told wrongly. The base map does not wait on this; progressive discovery,
+   rumored-but-unverified places, and stale player beliefs do.
 8. **World clock + pacing policies** — campaign clock entity, clock-policy modes
    (reactive / scheduled / fiction-driven), deadline entities + threshold rules
    ("the caravan leaves at dawn"), deadline-warning notification egress over
@@ -131,7 +155,13 @@ vision but are NOT on the active MVP path.
    ticks; useful long before them (time-sensitive choices work solo).
 9. **NPC cognition + cost governance** — tiered NPCs, decision/voice split,
    admission-gate LOD (needs the upstream governance engine ask).
-10. **Deferred**: human-GM editing surface, sandboxed user-authored rules, hosting,
+10. **Deferred**: procedural world generation (as a **template author**, not an
+   engine feature — a generator emits a package that imports through the existing
+   path, adding no engine surface and keeping worlds-as-data; an LLM naming and
+   describing places at *generation* time bakes into the template and stays
+   replay-deterministic, whereas embellishing at render time would break replay
+   honesty and per-turn cost flatness), human-GM editing surface, sandboxed
+   user-authored rules, hosting,
    federation, multi-tenancy, detailed inventory/economy, **multi-channel play**
    (Slack/email/SMS ingress-egress adapters over the same action/result contract —
    allowed-for by design, built later), and the **world-template marketplace**. Marketplace principles, recorded now so the package shape stays
