@@ -80,6 +80,10 @@ parsing prose.
   personas ship as a package-shaped fixture (template-local IDs, manifest v0)
   loaded via an importer through graph-ingest. Template = immutable versioned
   product; world instance = mutable campaign. Never hardcode a world in Go.
+- **Player I/O is adapter-shaped.** Canonical action payload in, canonical
+  committed result out; WebSocket is one adapter of N (Slack/email/SMS later).
+  Player identity is a graph entity, never a connection ID. No turn-loop step
+  assumes interactive pacing — email-cadence play is valid.
 - **Do not compete on simulation depth.** The adjudicator is compressed
   simulation — LLM judgment substituting for hand-built systems.
 

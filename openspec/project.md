@@ -68,6 +68,12 @@ SemStreams repo review; read it before scoping anything).
 - **Cost is a policy, not a forecast:** per-session budget enforced by admission
   gate + spend ledger; per-turn cost is flat because context is
   graph-retrieval-bounded, never append-everything.
+- **Player I/O is adapter-shaped.** The engine's contract is a canonical action
+  payload in (JetStream) and a canonical committed result out (ledger, graph,
+  ObjectStore); channels — WebSocket now; Slack, email, SMS later — are thin
+  ingress/egress components that normalize to it. Player identity is a graph
+  entity bound to channel addresses, never a connection ID. No turn-loop step may
+  assume interactive pacing — play at email cadence is valid.
 - **Worlds are data; the engine is world-agnostic.** Starting state, rule packs,
   and persona configs ship as package-shaped data (template-local logical IDs,
   versioned manifest) loaded through an importer. A **template** is an immutable
@@ -110,8 +116,9 @@ vision but are NOT on the active MVP path.
 8. **NPC cognition + cost governance** — tiered NPCs, decision/voice split,
    admission-gate LOD (needs the upstream governance engine ask).
 9. **Deferred**: human-GM editing surface, sandboxed user-authored rules, hosting,
-   federation, multi-tenancy, detailed inventory/economy, and the **world-template
-   marketplace**. Marketplace principles, recorded now so the package shape stays
+   federation, multi-tenancy, detailed inventory/economy, **multi-channel play**
+   (Slack/email/SMS ingress-egress adapters over the same action/result contract —
+   allowed-for by design, built later), and the **world-template marketplace**. Marketplace principles, recorded now so the package shape stays
    compatible: templates are immutable/content-addressed and composable from typed
    packs (world, mechanics, persona, media — components stay first-party);
    community packages are hostile input with capability *requests* resolved as

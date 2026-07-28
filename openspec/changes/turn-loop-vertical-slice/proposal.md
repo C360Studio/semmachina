@@ -21,9 +21,13 @@ canonical narration, and a retrievable response after reconnect.
 
 - First code in the repo: a `cmd/semmachina` binary composing SemStreams components into a
   one-player, single-scene world (instance-per-world from day one).
-- **Player I/O**: WebSocket ingress lands each player action as a request on JetStream
-  (a restart must not replay the dragon eating you); narration is pushed back out over
-  WebSocket, and the last turn's result is retrievable after reconnect.
+- **Player I/O (transport-neutral contract; WebSocket adapter)**: a canonical
+  player-action payload lands on JetStream from an ingress adapter; WebSocket is this
+  slice's only adapter, explicitly one-of-N — Slack/email/SMS later are new input
+  components, not engine changes. Actions carry durable player identity (a graph entity);
+  channel binding is delivery metadata, never identity. Narration egress delivers the
+  canonical committed result, which outlives any connection (retrievable after
+  reconnect); a restart must not replay the dragon eating you.
 - **Turn identity and idempotency**: every action carries `action_id`, `turn_id`,
   `scene_id`, and correlation/causation IDs; turn state moves through explicit phases
   (accepted → adjudicating → resolving → applying → narrating → complete/failed) durable
@@ -68,8 +72,10 @@ Nothing breaking — greenfield.
 
 ### New Capabilities
 
-- `player-io`: player action ingress (WebSocket → JetStream request) and narration egress;
-  the facts-vs-requests boundary for player input.
+- `player-io`: the transport-neutral action/result contract — canonical action payload
+  (durable player identity as an entity, channel binding as metadata), ingress-adapter
+  normalization (WebSocket first), canonical-result egress and retrieval, no
+  interactive-pacing assumptions; the facts-vs-requests boundary for player input.
 - `turn-sequencing`: the rule chain driving a turn — turn identity (`action_id`/`turn_id`/
   `scene_id`), explicit turn phases, trigger order, conditional dice branch, reference-only
   payloads, iteration bounds, and the idempotency scenarios (duplicate delivery, crash at
