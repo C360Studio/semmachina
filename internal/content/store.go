@@ -200,6 +200,74 @@ func (s *Store) GetAction(ctx context.Context, ref Ref) (*payload.PlayerAction, 
 	return action, nil
 }
 
+// PutVerdict stores the adjudicator's verdict and returns the reference the
+// turn entity will carry.
+//
+// The banded intent set is why this exists. A verdict's rule-matched half is
+// four scalars; the rest — three bands of proposed effect intents, the typed
+// modifiers, the rationale — is bulky, is read only by the applier and the
+// resolution card, and would put LLM-authored structure on the graph's
+// rule-matching surface if it travelled any other way (F6).
+//
+// It is called BEFORE the reference is committed to the turn, for the same
+// reason PutAction is: a reference to a verdict nobody stored is a turn the
+// dice and the applier cannot resolve, while a stored verdict no turn points at
+// is garbage a retry overwrites at the identical derived key.
+func (s *Store) PutVerdict(
+	ctx context.Context,
+	turnEntityID string,
+	verdict *payload.Verdict,
+) (Ref, error) {
+	if verdict == nil {
+		return Ref{}, errors.New("storing a verdict requires a verdict")
+	}
+	if err := payload.RequireTurnEntityID(verdict.TurnID, turnEntityID); err != nil {
+		return Ref{}, err
+	}
+	return s.put(ctx, vocabulary.TurnVerdictRef, SubjectTurn, verdict.TurnID, verdict)
+}
+
+// GetVerdict reads a stored verdict back.
+func (s *Store) GetVerdict(ctx context.Context, ref Ref) (*payload.Verdict, error) {
+	verdict := &payload.Verdict{}
+	if err := s.get(ctx, vocabulary.TurnVerdictRef, ref, verdict); err != nil {
+		return nil, err
+	}
+	return verdict, nil
+}
+
+// PutNarration stores one turn's narration prose and returns the reference the
+// turn entity will carry.
+//
+// This is the write half of prose-first-ref-last, and the ordering is the whole
+// crash-safety argument of the narration stage: the object lands here, and only
+// a successful return lets the caller commit turn.narration.ref. A reference to
+// missing prose is a completed turn whose result cannot be delivered and cannot
+// be re-derived; an orphaned object is garbage that the next attempt overwrites
+// at the same derived key.
+func (s *Store) PutNarration(
+	ctx context.Context,
+	turnEntityID string,
+	narration *Narration,
+) (Ref, error) {
+	if narration == nil {
+		return Ref{}, errors.New("storing a narration requires a narration")
+	}
+	if err := payload.RequireTurnEntityID(narration.TurnID, turnEntityID); err != nil {
+		return Ref{}, err
+	}
+	return s.put(ctx, vocabulary.TurnNarrationRef, SubjectTurn, narration.TurnID, narration)
+}
+
+// GetNarration reads stored narration prose back.
+func (s *Store) GetNarration(ctx context.Context, ref Ref) (*Narration, error) {
+	narration := &Narration{}
+	if err := s.get(ctx, vocabulary.TurnNarrationRef, ref, narration); err != nil {
+		return nil, err
+	}
+	return narration, nil
+}
+
 // PutFailureDetail stores the explanation behind a turn's closed failure code.
 //
 // The code on the graph answers "what kind of failure"; this answers "which

@@ -38,7 +38,11 @@ occur before effect application — band selection is fully determined by the ro
 ### Requirement: The adjudicator holds the roll gate
 The adjudicator's reported `requires_roll` SHALL be authoritative, and a verdict SHALL NOT
 be rejected for disagreeing with the engine's advisory (plausibility, risk) mapping. The
-disagreement SHALL be recorded as structured data on the resolved turn. The declared band
+disagreement SHALL be recorded on the resolved turn's **ledger manifest**, together with the
+mapping version that produced it — the disagreement is derivable from the stored verdict
+today, but the mapping is advisory and expected to be tuned with play, and a derived value
+would flip retroactively for every historical turn when it changes. The archive records what
+was true at the time. The declared band
 set SHALL follow the reported value, so the engine never synthesizes a band the adjudicator
 did not author.
 

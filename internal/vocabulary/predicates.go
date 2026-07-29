@@ -272,6 +272,28 @@ var effectScalarPredicates = []Predicate{
 // allowed to write as triples on the turn entity.
 func EffectScalarPredicates() []Predicate { return slices.Clone(effectScalarPredicates) }
 
+// narrationScalarPredicates is the rule-matched projection of a narration, and
+// it is EMPTY — deliberately, and stated here rather than left to be inferred
+// from an absent list.
+//
+// The narrator voices a committed outcome. Everything it produces is prose,
+// which is fiction (M1) and cannot become a triple at all; every structural fact
+// about the turn — the verdict's classes, the roll's band, the applied batch —
+// was already landed by the stage that decided it, and a narrator re-stating one
+// would be a persona writing to the rule-matching surface about a decision it
+// did not make. So the narration's only mark on the graph is a POINTER at its
+// prose, and the turn's closing rule matches the arrival of that pointer.
+//
+// An empty list is a claim, and the projection makes the caller declare it: a
+// scalar-less projection is a distinct, explicit mode, so a payload whose
+// scalars were forgotten is not silently indistinguishable from one that has
+// none.
+var narrationScalarPredicates []Predicate
+
+// NarrationScalarPredicates returns the predicates a narration is allowed to
+// write as triples on the turn entity. It is empty; see the discussion above.
+func NarrationScalarPredicates() []Predicate { return slices.Clone(narrationScalarPredicates) }
+
 // The turn entity's OWN state, in the three shapes it is ever written in.
 //
 // Three lists rather than one because the shapes carry different facts, and a

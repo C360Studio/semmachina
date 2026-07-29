@@ -207,7 +207,7 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       which a marker-based check would fail. The turn's own 1-hop is included too: without
       `turn.action.player` the adjudicator sees three people in a room and cannot tell which
       one is acting
-- [ ] 7.2 Before re-running a persona on a resumed stage, check whether that stage's
+- [x] 7.2 Before re-running a persona on a resumed stage, check whether that stage's
       artifact ref triple is already on the turn — present means the interrupted attempt
       actually finished, so advance instead of re-executing. The phase is written on stage
       *entry*, so it cannot distinguish "entered" from "finished"; the artifact ref can.
@@ -226,9 +226,17 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       injects identity and the model supplies judgment only. And decide deliberately whether
       the adjudicator exits through upstream's existing `decide` tool — which F4 names as
       the ready-made closed-vocabulary seam, with a rule-supplied allowlist enforced in the
-      executor — or a custom terminal tool; the mock's scenario pack uses placeholder tool
-      names that must be renamed to match whichever is chosen
-- [ ] 7.3 Configure the narrator loop + terminal tool (prose ref + rule-opaque metadata
+      executor — or a custom terminal tool.
+      **Resolved: custom terminal tools.** `decide`'s schema is
+      `{action, reason, subtopics, retry_hint}`, so a banded verdict would ride as JSON
+      smuggled through a string — moving the schema out of the tool definition where a
+      mid-tier model can see it, and into a parser, which is backwards for the slice's one
+      schema-bearing exit (F5). It also publishes onto the *loop* entity via the
+      **appending** lane (F14), so our single-valued turn scalars would need a second write
+      regardless, and its allowlist closes one string field where we close four scalars, the
+      effect vocabulary inside every band, modifier bounds, and gate/band coherence. The
+      correction-message shape and stop-with-payload-in-content pattern were re-derived
+- [x] 7.3 Narrator loop + terminal tool (prose ref + rule-opaque metadata
       only, no mutation-capable tools); prose-first-ref-last write ordering per narration
       spec
 
@@ -250,7 +258,13 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 - [ ] 8.1 Author the turn-sequencing rule pack: accepted → adjudicator; roll-requiring
       verdict → dice; roll or no-roll verdict → applier; applied/rejected → narrator;
       narrated → complete + ledger. References only; caps on every LLM-triggering path
-- [ ] 8.2 Implement the ledger writer: `CAMPAIGN_LEDGER` stream (no age/size eviction),
+- [ ] 8.2 Record the roll-gate agreement on `TurnManifest` — reported gate, advised gate,
+      and the **mapping version** — resolving a question 7.2 raised rather than guessed.
+      It is derivable from the stored verdict today, so a field looks redundant; it is not,
+      because the mapping is advisory and expected to be tuned with play, and a derived
+      value would silently flip for every historical turn when it changes. Payloads are
+      cheapest to change before the ledger holds records. Then: implement the ledger writer:
+      `CAMPAIGN_LEDGER` stream (no age/size eviction),
       one manifest per resolved turn keyed by `turn_id` (including failed turns),
       duplicate-append dropped; world-time field present (zero)
 - [ ] 8.3 Implement a minimal replay reader proving replay honesty: re-execute the roll
@@ -327,7 +341,12 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       replay has broken. **Assert provider shape at the wire** where fidelity matters (F18):
       the client normalizes token totals, finish reasons, and malformed arguments, so
       asserting through it hides the defects the mock exists to produce. Scenarios: no-roll
-      turn; miss / partial / full band turns; invalid-effect rejection turn; duplicate action delivery;
+      turn; miss / partial / full band turns; invalid-effect rejection turn — **note the
+      mock's current `invalid-effect` script no longer reaches the applier**: it uses an
+      out-of-vocabulary effect *type*, which executor-side validation now refuses at the
+      tool boundary, so an applier-rejection scenario needs a **well-formed intent naming a
+      wrong-*kind* target** (moving a character into an item, F16's own example), and that
+      step's `rejected` entry must be flipped; duplicate action delivery;
       crash-resume at each phase (kill between roll and apply at minimum); reconnect
       retrieval; email-cadence gap (clock-independent processing)
 - [ ] 10.4 CI workflow: lint (revive-clean), `go test -race ./...`, mock-LLM e2e; no live

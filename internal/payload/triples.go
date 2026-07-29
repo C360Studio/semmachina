@@ -152,6 +152,19 @@ type tripleProjection struct {
 	// reference set is a contradiction, and reference-bearing with no reference
 	// predicate is still the same error it always was.
 	refless bool
+	// scalarless DECLARES that this payload has no rule-matched half, so there
+	// are no registered predicates for it to project.
+	//
+	// It is refless's mirror image and exists for the same reason. The narrator
+	// produces prose and nothing else: everything structural about the turn was
+	// decided and landed by an earlier stage, so the narration's only mark on the
+	// graph is the reference to its prose. Inferring that from an empty
+	// `registered` list would make a payload whose scalars were FORGOTTEN
+	// indistinguishable from one that has none — the same failure "may have a
+	// reference" would have introduced at the other end — so the claim is
+	// explicit and the two modes cannot both be set: a projection that is neither
+	// scalar nor reference projects nothing at all.
+	scalarless bool
 }
 
 // build runs the discipline and returns the triples, or the first violation.
@@ -204,7 +217,19 @@ func (p tripleProjection) build() ([]message.Triple, error) {
 
 // checkPredicateSet proves the projection is exactly the registered one.
 func (p tripleProjection) checkPredicateSet() error {
-	if len(p.registered) == 0 {
+	if p.scalarless && p.refless {
+		return fmt.Errorf(
+			"triple projection declares itself both scalar-less and reference-less, so it would write nothing; " +
+				"a payload that puts nothing on the graph must not be projected at all")
+	}
+	switch {
+	case p.scalarless:
+		if len(p.registered) != 0 {
+			return fmt.Errorf(
+				"triple projection declares itself scalar-less and still registers %v; a payload either has a "+
+					"rule-matched half or it does not", p.registered)
+		}
+	case len(p.registered) == 0:
 		return fmt.Errorf("triple projection registers no predicates")
 	}
 	seen := make(map[vocabulary.Predicate]bool, len(p.registered))

@@ -365,6 +365,29 @@ distinct rules — `types.ValidateEntityID` for mapped IDs, `vocabulary.ParsePre
 every predicate in `entities.jsonl` — and must reject bad predicates at import time with a
 reason naming the offending line, rather than letting them fail later at materialization.
 
+### F20 — An undeclared model capability silently resolves to the default model
+
+`model.Registry.Resolve` returns `Defaults.Model` for any capability absent from its map, so
+`ResolveEndpoint` **succeeds** for a capability nobody configured. A deployment that forgets
+to declare `fiction_adjudication` therefore runs the adjudicator on whatever the default
+happens to be, reports nothing, and looks healthy. That is precisely F5's failure — the
+schema-bearing persona on the small slot — arriving through a fallback rather than a
+decision, which is worse, because a decision leaves a trace.
+
+Boot must therefore assert the capability is **declared**, not merely that it resolves.
+Every persona's model slot is a deliberate configuration choice; silently inheriting the
+default is not a degraded mode, it is an unnoticed one.
+
+**Related, and it strengthens F4 with a structural argument:** the banded verdict cannot be
+strict-mode-conformant regardless of provider support. Strict mode requires every property
+listed in `required`, while the band set is a discriminated union — `miss`/`partial`/`full`
+XOR `auto` — so a conformant schema would compel the model to author bands D12 requires the
+engine to refuse. Executor-side validation is the enforcement of record for two independent
+reasons now: providers may ignore strict mode, and this schema could not use it anyway. The
+narrator's flat schema *does* satisfy the subset and uses it, deliberately confined to a
+conservative keyword set — a strict schema carrying a keyword some runtime rejects returns a
+400 that no token-free test can see and a live run discovers on turn one.
+
 ### F18 — A tolerant client hides exactly the defects a mock exists to produce
 
 The framework's model client normalizes: it recomputes `total_tokens`, infers a tool call

@@ -386,6 +386,96 @@ func TestTripleProjection_ReflessShapeKeepsEveryOtherGate(t *testing.T) {
 	}
 }
 
+// scalarlessProjection is a projection whose payload genuinely has no
+// rule-matched half: everything it produces is fiction, so its only mark on the
+// graph is a pointer at where the fiction lives. The narrator's is the one.
+func scalarlessProjection() tripleProjection {
+	return tripleProjection{
+		payload:      &projectionTestPayload{},
+		subject:      projTurnEntity,
+		turnID:       projTurnID,
+		source:       "persona-narrator",
+		at:           projTime,
+		scalarless:   true,
+		refPredicate: vocabulary.TurnNarrationRef,
+		refName:      "narration ref",
+		ref:          "obj://SEMMACHINA_CONTENT/turn/" + projTurnID + "/narration",
+	}
+}
+
+func TestTripleProjection_ScalarlessShapeEmitsThePointerAndNothingElse(t *testing.T) {
+	triples, err := scalarlessProjection().build()
+	if err != nil {
+		t.Fatalf("the scalar-less fixture was rejected: %v", err)
+	}
+	if len(triples) != 1 {
+		t.Fatalf("emitted %d triples, want exactly the reference: %+v", len(triples), triples)
+	}
+	if triples[0].Predicate != vocabulary.TurnNarrationRef.String() {
+		t.Fatalf("emitted %q, want %q", triples[0].Predicate, vocabulary.TurnNarrationRef)
+	}
+}
+
+// The second extension must not open a hole either. Scalar-less is an explicit
+// CLAIM — "this payload has no rule-matched half" — so a projection that also
+// registers predicates is a contradiction, and one that claims both no scalars
+// and no reference would write nothing at all while looking, at the call site,
+// like it had.
+func TestTripleProjection_ScalarlessShapeKeepsEveryOtherGate(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*tripleProjection)
+		wantErr string
+	}{
+		{
+			name: "scalar-less and still registering predicates",
+			mutate: func(p *tripleProjection) {
+				p.registered = []vocabulary.Predicate{vocabulary.TurnPhaseCurrent}
+				p.objects = map[vocabulary.Predicate]any{vocabulary.TurnPhaseCurrent: "complete"}
+			},
+			wantErr: "either has a rule-matched half",
+		},
+		{
+			name:    "scalar-less and reference-less at once, which writes nothing",
+			mutate:  func(p *tripleProjection) { p.refless = true },
+			wantErr: "would write nothing",
+		},
+		{
+			name:    "a forgotten reference is still an error",
+			mutate:  func(p *tripleProjection) { p.ref = "" },
+			wantErr: "narration ref",
+		},
+		{
+			name:    "a sentence where the pointer belongs",
+			mutate:  func(p *tripleProjection) { p.ref = "the gate gives, and Hollis looks away" },
+			wantErr: "not a storage reference",
+		},
+		{
+			name:    "a mismatched turn entity",
+			mutate:  func(p *tripleProjection) { p.subject = "c360.semmachina.world1.starter.turn.turn-act-9" },
+			wantErr: "the two name one turn or neither does",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			projection := scalarlessProjection()
+			tc.mutate(&projection)
+
+			triples, err := projection.build()
+			if err == nil {
+				t.Fatalf("the scalar-less projection accepted %s and emitted %d triples", tc.name, len(triples))
+			}
+			if triples != nil {
+				t.Fatalf("a refused projection returned %d triples", len(triples))
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("rejection reason %q does not mention %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
 // The reference gate is DERIVED from the predicate name, so it must hold for
 // every predicate that name selects — not for the two the table above happens to
 // use. A new *.ref predicate inherits it or this fails.

@@ -157,10 +157,14 @@ func TestRegisterPayloads_ComposesWithTheFrameworkBuiltins(t *testing.T) {
 func TestEntityOnlyCategories_AreDeliberatelyUnregistered(t *testing.T) {
 	reg := testRegistry(t)
 
-	// Both categories name entity state that reaches the graph through the
-	// mutation lane, never through the fact lane. Neither is a wire type, and a
+	// Every category here names entity state that reaches the graph through the
+	// mutation lane, never through the fact lane. None is a wire type, and a
 	// registered factory would advertise a message shape nothing sends.
-	for _, category := range []string{payload.CategoryCampaignEntity, payload.CategoryTurnState} {
+	for _, category := range []string{
+		payload.CategoryCampaignEntity,
+		payload.CategoryTurnState,
+		payload.CategoryTurnNarration,
+	} {
 		if created := reg.Create(payload.Domain, category, payload.SchemaVersion); created != nil {
 			t.Fatalf("%s/%s/%s has a registered factory producing %T; that category names entity state "+
 				"written through the mutation lane and must not also name a decodable wire payload",

@@ -40,6 +40,19 @@ const (
 	// message shape nothing sends and nothing reads.
 	CategoryTurnState = "turn_state"
 
+	// CategoryTurnNarration is the narrator's artifact-reference record, and it
+	// is deliberately NOT registered for exactly the reason CategoryTurnState is
+	// not: no message of this type is ever published. It exists so the narration
+	// reference reaches the graph through the shared triple projection rather
+	// than as a hand-built triple that would skip the storage-reference grammar
+	// and the turn-entity pairing.
+	//
+	// It is named here, beside the registered categories, so the (domain,
+	// category, version) namespace has one home: as a bare literal in another
+	// package a future collision would be invisible, because the registry cannot
+	// report an overlap it never sees.
+	CategoryTurnNarration = "turn_narration"
+
 	// CategoryCampaignEntity is the campaign entity's provenance envelope, and
 	// it is deliberately NOT registered: no message of this type is ever
 	// published, because the campaign entity is created through the atomic
