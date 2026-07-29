@@ -31,6 +31,27 @@ const (
 	// package. It is the Graphable the importer publishes so graph-ingest
 	// remains the sole ENTITY_STATES writer.
 	CategoryWorldEntity = "world_entity"
+	// CategoryTurnResult is the canonical terminal turn result — the public
+	// counterpart of CategoryPlayerAction. A player action is the canonical
+	// thing that comes IN and a turn result is the canonical thing that goes
+	// OUT, and both are registered for the same reason: an adapter is added by
+	// writing a component that consumes the canonical message, never by changing
+	// the engine.
+	CategoryTurnResult = "turn_result"
+
+	// CategorySubmitAction is the untrusted client's submission, and it is
+	// deliberately NOT registered — for a different reason than the entity-only
+	// categories below, which is why it is named apart from them.
+	//
+	// A SubmitAction never crosses NATS. It is decoded from client bytes at the
+	// player-session gateway, which publishes a canonical PlayerAction and
+	// discards it; the client is not a NATS participant and never sees a
+	// BaseMessage envelope. A registered factory would advertise a decodable
+	// message shape that nothing on the bus ever sends, and would invite a
+	// component to consume the UNTRUSTED shape where it should only ever see the
+	// gateway-stamped one. TestSubmitAction_IsDeliberatelyUnregistered keeps that
+	// a decision rather than an omission.
+	CategorySubmitAction = "submit_action"
 
 	// CategoryTurnState is the turn entity's own state record, and like
 	// CategoryCampaignEntity it is deliberately NOT registered: no TurnState

@@ -282,6 +282,49 @@ func validTurnManifest() *payload.TurnManifest {
 	}
 }
 
+func validSubmitAction() *payload.SubmitAction {
+	return &payload.SubmitAction{
+		Protocol:       payload.PlayerProtocolV1,
+		Text:           "I wedge the gate open with the crowbar and slip through.",
+		IdempotencyKey: "0f9c2b1e-6a4d-4c7f-9b21-8e5d3a7c1f04",
+	}
+}
+
+// validTurnResult is a COMPLETED turn's result. It is the shape a client sees
+// most, and the one with the most required structure; the failed shape is
+// exercised where its own rules are, in turnresult_test.go.
+//
+// Its resolution is derived from the same fixtures the verdict and roll use, so
+// the three describe one turn rather than three unrelated ones — which is what
+// makes the band agreement in TurnResolution.Validate a real assertion here.
+func validTurnResult() *payload.TurnResult {
+	return &payload.TurnResult{
+		Protocol:     payload.PlayerProtocolV1,
+		TurnID:       testTurnID,
+		ActionID:     testActionID,
+		PlayerID:     testPlayerID,
+		Phase:        vocabulary.PhaseComplete,
+		Resolution:   validTurnResolution(),
+		NarrationRef: testNarrationRef,
+		ResolvedAt:   testTime,
+	}
+}
+
+func validTurnResolution() *payload.TurnResolution {
+	roll := validRollResult()
+	return &payload.TurnResolution{
+		Verdict: validVerdict().Scalars,
+		Band:    roll.Band,
+		Roll: &payload.TurnRoll{
+			Mechanic:      roll.Mechanic,
+			Dice:          roll.Dice,
+			Modifiers:     roll.Modifiers,
+			ModifierTotal: roll.ModifierTotal,
+			Total:         roll.Total,
+		},
+	}
+}
+
 // validRollGate is the fixture's roll-gate agreement, derived from the same
 // scalars validVerdict reports so the two fixtures describe one turn.
 //

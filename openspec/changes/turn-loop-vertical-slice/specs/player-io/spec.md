@@ -97,12 +97,14 @@ A turn's result SHALL be durably stored independent of any connection, and a pla
 be able to retrieve it by `action_id` or `turn_id`, plus their most recent TERMINAL result.
 A successful result comprises the narration prose reference plus a resolution summary
 (verdict class, roll values, outcome band); a failed turn's result comprises its recorded
-failure reason.
+failure reason, plus whatever narration and resolution the turn had produced before it
+ended.
 
-Terminal rather than completed, deliberately. A failed turn has no narration by design, and
-a retrieval surface that only answers for completed turns leaves the player who most needs
-an answer — the one whose turn died — with silence indistinguishable from a turn still
-running. The ledger already archives failed turns, so the data exists.
+Terminal rather than completed, deliberately. A failed turn's narration is not guaranteed —
+a turn that died before the narrator ran has none, and one abandoned after its prose landed
+has some — so a retrieval surface keyed on narration cannot answer for it at all, and one
+keyed on completion leaves the player who most needs an answer with silence indistinguishable
+from a turn still running. The ledger already archives failed turns, so the data exists.
 
 #### Scenario: Result survives disconnect
 - **WHEN** a player disconnects after submitting an action and reconnects after the turn

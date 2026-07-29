@@ -87,29 +87,8 @@ func (r *RollResult) Validate() error {
 		return fmt.Errorf("seed.turn_id %q does not match turn_id %q", r.Seed.TurnID, r.TurnID)
 	}
 
-	if len(r.Dice) != spec.Dice {
-		return fmt.Errorf("mechanic %s rolls %d dice, got %d", r.Mechanic, spec.Dice, len(r.Dice))
-	}
-	diceTotal := 0
-	for idx, die := range r.Dice {
-		if !spec.ValidDie(die) {
-			return fmt.Errorf("die %d value %d is outside [1, %d]", idx, die, spec.Faces)
-		}
-		diceTotal += die
-	}
-
-	if err := validateModifiers(r.Modifiers); err != nil {
+	if err := validateRollArithmetic(spec, r.Dice, r.Modifiers, r.ModifierTotal, r.Total); err != nil {
 		return err
-	}
-	if sum := SumModifiers(r.Modifiers); sum != r.ModifierTotal {
-		return fmt.Errorf("modifier_total %d does not match the summed modifiers %d", r.ModifierTotal, sum)
-	}
-	// ModifierTotal needs no separate bound check: validateModifiers bounds the
-	// list's sum and the equality above pins the recorded field to that sum, so
-	// an out-of-range total is unreachable here. A check would be untestable —
-	// if ModifierTotal ever becomes authoritative over the list, bound it then.
-	if want := diceTotal + r.ModifierTotal; want != r.Total {
-		return fmt.Errorf("total %d does not match dice %d plus modifiers %d", r.Total, diceTotal, r.ModifierTotal)
 	}
 
 	if _, err := vocabulary.ParseOutcomeBand(string(r.Band)); err != nil {
@@ -118,9 +97,58 @@ func (r *RollResult) Validate() error {
 	if !r.Band.IsRollBand() {
 		return fmt.Errorf("band %q is not selectable by a roll", r.Band)
 	}
-	if want := spec.BandForTotal(r.Total); want != r.Band {
+	return requireBandForTotal(spec, r.Total, r.Band)
+}
+
+// validateRollArithmetic recomputes a recorded roll's dice count, die faces,
+// modifier sum, and total under the spec of the mechanic that produced it.
+//
+// It is shared by the ledger's RollResult and the player protocol's TurnRoll
+// rather than restated in each, because the two describe THE SAME ROLL to two
+// audiences — the archive and the player's resolution card — and a divergence
+// between them is a card that explains a total the ledger says never happened.
+//
+// Every check reads the supplied spec, never a package-level constant, which is
+// what stops a future mechanic's record from being re-validated under 2d6's
+// numbers.
+func validateRollArithmetic(
+	spec vocabulary.MechanicSpec, dice []int, modifiers []Modifier, modifierTotal, total int,
+) error {
+	if len(dice) != spec.Dice {
+		return fmt.Errorf("mechanic %s rolls %d dice, got %d", spec.Mechanic, spec.Dice, len(dice))
+	}
+	diceTotal := 0
+	for idx, die := range dice {
+		if !spec.ValidDie(die) {
+			return fmt.Errorf("die %d value %d is outside [1, %d]", idx, die, spec.Faces)
+		}
+		diceTotal += die
+	}
+
+	if err := validateModifiers(modifiers); err != nil {
+		return err
+	}
+	if sum := SumModifiers(modifiers); sum != modifierTotal {
+		return fmt.Errorf("modifier_total %d does not match the summed modifiers %d", modifierTotal, sum)
+	}
+	// ModifierTotal needs no separate bound check: validateModifiers bounds the
+	// list's sum and the equality above pins the recorded field to that sum, so
+	// an out-of-range total is unreachable here. A check would be untestable —
+	// if ModifierTotal ever becomes authoritative over the list, bound it then.
+	if want := diceTotal + modifierTotal; want != total {
+		return fmt.Errorf("total %d does not match dice %d plus modifiers %d", total, diceTotal, modifierTotal)
+	}
+	return nil
+}
+
+// requireBandForTotal holds a recorded band to the total it claims to come from,
+// under the record's OWN mechanic. A record whose band its own dice do not
+// produce is the one error neither the archive nor a resolution card could
+// detect later: both would simply render the band.
+func requireBandForTotal(spec vocabulary.MechanicSpec, total int, band vocabulary.OutcomeBand) error {
+	if want := spec.BandForTotal(total); want != band {
 		return fmt.Errorf("band %q does not match total %d under mechanic %s (expected %q)",
-			r.Band, r.Total, r.Mechanic, want)
+			band, total, spec.Mechanic, want)
 	}
 	return nil
 }

@@ -53,6 +53,11 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 			Description: "Materialized world entity from a template package (Graphable)",
 			Factory:     func() any { return &WorldEntity{} },
 		},
+		{
+			Domain: Domain, Category: CategoryTurnResult, Version: SchemaVersion,
+			Description: "Canonical terminal turn result for the public player protocol",
+			Factory:     func() any { return &TurnResult{} },
+		},
 	}
 
 	var errs []error

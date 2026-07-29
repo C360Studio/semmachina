@@ -31,6 +31,9 @@ func roundTripCases() []roundTripCase {
 		// manifest is covered separately in turnmanifest_test.go.
 		{name: "turn_manifest", payload: validTurnManifest(), exempt: []string{"FailureReason"}},
 		{name: "world_entity", payload: validWorldEntity()},
+		// A complete turn carries no failure reason; the failed shape has its own
+		// round-trip in turnresult_test.go, where its rules are.
+		{name: "turn_result", payload: validTurnResult(), exempt: []string{"FailureReason"}},
 	}
 }
 
