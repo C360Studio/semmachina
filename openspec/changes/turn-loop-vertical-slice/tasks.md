@@ -317,27 +317,99 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       composition starts the rule processor first and the pass waits for the stage stream to
       go quiet before reading. Upstream has no bootstrap-replay completion signal — an
       engine ask
-- [ ] 8.1b Two cleanups 8.1 surfaced: (a) the starter world's `rules/00-turn-sequencing.json`
+- [x] 8.1b Two cleanups 8.1 surfaced: ~~(a) the starter world's `rules/00-turn-sequencing.json`
       stub is now misleading — turn sequencing lives in `internal/rulepack` because it is the
       *engine's* state machine and a downloaded world must not be able to author or break the
       turn loop, so replace the stub with a genuinely world-scoped rule (a world reaction) or
-      relax the loader's "at least one rule file" requirement; ~~(b) add the closed
+      relax the loader's "at least one rule file" requirement~~ **DONE**, and the rationale
+      for the cleanup was itself aspirational: `checkRuleFile` validated one thing — predicate
+      SYNTAX on condition fields — so a downloaded world could ship a rule matching
+      `turn.phase.current`, publishing to `semmachina.turn.narrating`, and carrying no cap, and
+      nothing refused it. `internal/world/rulescope.go` now refuses at LOAD, naming the rule id,
+      the position and the reason, across the FOUR positions a rule can carry a name the engine
+      answers to. **Predicates**, in any condition, any per-action `when` guard (which upstream's
+      own `validateConditionFields` does not walk), or any triple-mutating action — reserved at
+      the width each justification supports: `turn.*` whole, because every predicate in that
+      domain is loop state written by a guarded stage, and `campaign.seed.*` ONLY, because the
+      harm there is replay determinism and the rest of that domain is world content — the
+      campaign CLOCK lands in it, and CLAUDE.md makes clock deadlines the canonical world
+      reaction, so a domain-wide reservation would have refused the exemplar world rule of the
+      whole project before any world shipped to argue back. **Subjects**, for any publishing
+      action, against three roots: the engine's own (derived from `rulepack.StageSubjectPrefix`
+      rather than listed, so the ledger and task 9's intake are covered without a list nobody
+      remembers to extend), the whole AGENTIC root (from `persona.AgentSubjectFilter` — not just
+      the task lane, because the loop declares five inputs and `agent.signal.*` alone carries
+      `retry`, which spends, and `feedback`, which injects author text into a running persona's
+      context), and `tool.result.` (the fifth input, which sits outside `agent.`; a forged tool
+      result is fabricated evidence handed to a live adjudicator). Reserved on the SUBJECT rather
+      than by refusing `publish_agent`, because refusing the action type leaves the identical
+      spend available to a plain `publish`. **Buckets**, for `update_kv`: upstream's
+      `FrameworkOwnedBuckets()` (taken from upstream so the set cannot fall behind it) plus
+      `RULE_STATE`, which is NOT on that list and holds the rule engine's `MatchState` — a world
+      rule merging an empty `action_iterations` map into it switches off the per-action caps on
+      the engine's own hops, at fire time, silently. In every reserved position the name must be
+      a LITERAL, because the rule engine resolves `Action.Predicate`, `Action.Subject` and
+      `Action.Bucket` at fire time and a literal-only gate is evaded by a template while
+      reporting the package clean; and any action type the boundary has not classified is refused
+      by name, so upstream's next one cannot be admitted unchecked. The stub is replaced by a
+      genuine world reaction (`00-spent-supplies.json` — a spent stack loses its location: REMOVE
+      not add per F14, capped ON THE ACTION, naming nothing the engine owns), and the "at least
+      one rule file" requirement is relaxed to match, since a world that reacts to nothing is
+      legitimate and that requirement is exactly what forced a placeholder rule into existence.
+      **The other half of the standing invariant is DEFERRED, deliberately, and the remaining
+      claim is now small**: caps are NOT mandatory on world rules that reach an LLM-triggering
+      path. Every subject that reaches a model today is reserved — all five agentic-loop inputs,
+      pinned by a test that reads the loop's own port declarations and fails when upstream adds a
+      sixth — so what stays open is a world spending through a path nobody has enumerated: a
+      future component consuming a subject a world rule may legitimately name. Whoever builds the
+      cap check inherits one PRECONDITION that already cost this task a defect: **which field is
+      the cap**. `Definition.MaxIterations` is not enforced for expression rules (the evaluator
+      records it into `MatchState` and republishes it as `$state.max_iterations` for a `when`
+      guard to read; cron rules reject the field outright), while the enforced cap is per-ACTION
+      `Action.MaxIterations`, defaulting to `rule.DefaultActionMaxIterations` = 3 when omitted. A
+      check written against the definition-level field would validate a field that does nothing
+      and pass every uncapped world; ~~(b) add the closed
       `vocabulary.FailureReason` for a persona loop that fails for a reason **other** than
       its cap~~ **DONE in 8.1a** — `FailurePersonaLoopFailed` and `FailureTurnStranded` both
       landed, and `LoopFailureWatcher` records the first rather than logging it. The claim
       this line used to make — that the turn waits "until the next boot's recovery replay" —
       was false in both halves: no replay fires for a parked turn, and there was no code to
-      record; (c) tighten `checkArtifactGate`: it currently enforces "gated on something
-      besides the phase", not "gated on the previous stage's artifact", so a rule matching a
-      *birth-record* fact like `turn.action.player` — present the whole time — loads cleanly
-      and reintroduces F21's race while looking gated. The per-phase artifact set it needs
-      now exists as `vocabulary.StageArtifacts`, built for 8.1a and deliberately shared;
-      (d) check FSM-edge legality for `eq`-gated hops, so a pack
-      cannot express `accepted → narrating` (loud at runtime today, but one derivation from
-      being impossible); (e) three pack gates have no regression test at all — the
-      `logic != "and"` refusal, the on_enter/on_recovery subject agreement, and
-      `TerminateDelivery` on a poison trigger, whose test passes whether or not the message
-      is terminated
+      record; ~~(c) tighten `checkArtifactGate`~~ **DONE** — it now asks the specific
+      question: for each phase a rule pins with `eq`, does another condition name a predicate
+      in `vocabulary.StageArtifacts(that phase)`? The old "gated on something besides the
+      phase" test is gone, so a *birth-record* fact like `turn.action.player` — present the
+      whole time — can no longer look like a gate while gating nothing and reintroducing
+      F21's race. Two refusals were needed to make the gate TOTAL rather than skippable, and
+      both are load-bearing: a rule must PIN a phase (one with only artifact conditions gave
+      the gate nothing to read, so it would have passed in silence — a gate that answers
+      "fine" to a question it could not read is the exact shape (c) exists to close), and
+      `ne` on `turn.phase.current` is refused (only `eq` and `transition` pin a phase;
+      without this, rekeying the gate on `eq` would have been WEAKER than the gate it
+      replaced, in a case the old one caught — a tightening that is secretly a regression).
+      Terminal phases matched with `eq` get their own refusal: `complete`/`failed` own no
+      stage, so no artifact could ever satisfy the gate; ~~(d) check FSM-edge legality~~
+      **DONE** — `checkPhaseEdges` uses `vocabulary.PhasePredecessors` for legality and
+      `PhaseRank` to classify the diagnosis ("runs the turn backwards" vs "skips a stage"),
+      so a pack can no longer express `accepted → narrating`. Note this is the LEGITIMATE use
+      of the phase-succession vocabulary that 8.1a forbade: 8.1a's warning was about
+      *executing* a derived hop at runtime, which is a second FSM; this compares two
+      declarations before the engine starts and executes nothing. `rulepack.PhaseForSubject`
+      is the derived inverse of `SubjectForPhase`, so there is still one pairing. Applied to
+      `transition`-pinned hops as well as `eq`, and order is load-bearing — edges are checked
+      AFTER `checkActions`, so a typo'd subject reads as a typo rather than an illegal edge;
+      ~~(e) three pack gates have no regression test~~ **DONE** — `logic != "and"`, the
+      on_enter/on_recovery subject agreement, and `TerminateDelivery` on a poison trigger.
+      The third was a proven green lie, not a suspected one: the OLD test body was run against
+      a runner mutated to return a plain error instead of terminating, and it PASSED. The
+      replacement observes the poison message itself — publish with ack, then poll the stage
+      consumer until its `AckFloor.Stream` passes that sequence, inside a window deliberately
+      under the framework's 30s nak delay. **Supervision note:** (d)'s extension to
+      transition-pinned hops was initially unreachable — both of the pack's transition-pinned
+      rules publish `SubjectResolved`, which `PhaseForSubject` declines, so the branch was
+      real code no rule could exercise and a mutation disabling it survived the whole suite.
+      Closed with a case that retargets a transition hop at a real stage across an illegal
+      edge; nothing else in the pack can refuse that pack, which is what makes the case prove
+      the branch rather than merely reach it
 - [x] 8.2 Record the roll-gate agreement on `TurnManifest` — reported gate, advised gate,
       and the **mapping version**, which does not exist yet: `RollGateExpectation` carries
       no version and `vocabulary.RequiresRoll` has no version constant, so add one here

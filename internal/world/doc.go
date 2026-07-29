@@ -4,10 +4,11 @@
 // # Templates and instances
 //
 // A TEMPLATE is an immutable versioned product: a directory holding
-// manifest.yaml, entities.jsonl, rules/, and personas/. An INSTANCE is a
-// mutable campaign materialized from a template into a world namespace. The
-// distinction is what makes "worlds are data" true in practice — the same
-// package can be played twice, by different people, in one graph, with no edit.
+// manifest.yaml, entities.jsonl, personas/, and — optionally — rules/. An
+// INSTANCE is a mutable campaign materialized from a template into a world
+// namespace. The distinction is what makes "worlds are data" true in practice —
+// the same package can be played twice, by different people, in one graph, with
+// no edit.
 //
 // Loading is three steps with three different failure surfaces, kept apart on
 // purpose:
@@ -15,8 +16,9 @@
 //	LoadPackage  — everything checkable from the package alone: manifest v0,
 //	               engine compatibility, the predicate alphabet (in entity facts
 //	               AND in rule conditions), vocabulary membership, kind
-//	               compatibility, object shapes, entity-ID segment legality, and
-//	               attribute bounds. Fails with a file and a line.
+//	               compatibility, object shapes, entity-ID segment legality,
+//	               attribute bounds, and the world-rule scope boundary
+//	               (rulescope.go). Fails with a file and a line.
 //	Resolve      — everything that needs instance identity: the six-part ID
 //	               mapping, `local:` reference rewriting, dangling references,
 //	               and the instance-configured player binding. Pure and
@@ -30,6 +32,11 @@
 // ID can never disagree, and the played-character binding, which is instance
 // configuration. A template that could name its own player would be
 // instantiable exactly once.
+//
+// The same line runs through a package's RULES, and it is drawn in rulescope.go:
+// a world authors reactions to world facts, and the turn loop is the engine's
+// state machine. A rule that reads or writes the engine's facts, or publishes
+// into its subjects, is refused at load.
 //
 // # Materialization
 //

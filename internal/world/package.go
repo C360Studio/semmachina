@@ -27,20 +27,24 @@ const (
 // Package is a loaded, fully validated world template.
 //
 // Loading is deliberately total: a Package value exists only if its manifest,
-// every entity line, and the presence of its rule and persona directories all
-// checked out. Downstream code therefore never has to ask whether a package is
-// valid, only what it says.
+// every entity line, its personas, and any rules it ships all checked out.
+// Downstream code therefore never has to ask whether a package is valid, only
+// what it says.
 type Package struct {
 	// Manifest is the validated manifest v0.
 	Manifest Manifest
 	// Entities are the template entities in file order.
 	Entities []TemplateEntity
-	// RuleFiles and PersonaFiles are the package-relative paths of the rule
-	// pack and persona configurations, sorted. Rule SEMANTICS are not
-	// interpreted here — they belong to the rule processor, and re-deriving
-	// them at world-load would put a second rule engine in the tree. What is
-	// checked is the part an author can only be told about at import: the
-	// predicate syntax of every condition field (see checkRuleFile).
+	// RuleFiles and PersonaFiles are the package-relative paths of the world's
+	// reactions and persona configurations, sorted. RuleFiles may be empty: a
+	// world that reacts to nothing is a legitimate world (see optionalDir).
+	//
+	// Rule SEMANTICS are not interpreted here — they belong to the rule
+	// processor, and re-deriving them at world-load would put a second rule
+	// engine in the tree. What is checked is the part an author can only be
+	// told about at import: the predicate syntax of every condition field, and
+	// the boundary between a world reaction and the engine's own turn loop
+	// (see checkRuleFile).
 	RuleFiles    []string
 	PersonaFiles []string
 }
@@ -98,11 +102,11 @@ func LoadPackage(fsys fs.FS, opts LoadOptions) (*Package, error) {
 		return nil, err
 	}
 
-	ruleFiles, err := loadJSONDir(fsys, RulesDir, checkRuleFile)
+	ruleFiles, err := loadJSONDir(fsys, RulesDir, optionalDir, checkRuleFile)
 	if err != nil {
 		return nil, err
 	}
-	personaFiles, err := loadJSONDir(fsys, PersonasDir, checkPersonaRecord)
+	personaFiles, err := loadJSONDir(fsys, PersonasDir, requiredDir, checkPersonaRecord)
 	if err != nil {
 		return nil, err
 	}
@@ -115,11 +119,38 @@ func LoadPackage(fsys fs.FS, opts LoadOptions) (*Package, error) {
 	}, nil
 }
 
-// loadJSONDir requires the directory to exist and to hold at least one .json
-// file that passes the supplied check.
-func loadJSONDir(fsys fs.FS, dir string, check func(data []byte) error) ([]string, error) {
+// dirRequirement says whether a package member directory has to be there.
+type dirRequirement bool
+
+const (
+	// requiredDir means an absent or empty directory fails the load.
+	requiredDir dirRequirement = true
+	// optionalDir means an absent or empty directory yields no files.
+	//
+	// The rules directory is optional, and the reason is worth stating: a world
+	// that reacts to nothing is a legitimate world — a scene, some characters,
+	// and whatever the turn loop makes of them — and the "at least one rule
+	// file" requirement is what put a placeholder rule in the starter package in
+	// the first place. It cannot be satisfied by an empty directory either:
+	// neither git nor embed.FS carries one, so "the directory must exist" would
+	// mean "ship a file", which is the requirement being removed.
+	//
+	// Personas stay required. A package with no adjudicator and no narrator
+	// cannot resolve a turn at all, and that is a broken world rather than a
+	// quiet one.
+	optionalDir dirRequirement = false
+)
+
+// loadJSONDir reads a package member directory of .json files, running check
+// over each. A required directory must exist and hold at least one file.
+func loadJSONDir(
+	fsys fs.FS, dir string, requirement dirRequirement, check func(data []byte) error,
+) ([]string, error) {
 	entries, err := fs.ReadDir(fsys, dir)
 	if err != nil {
+		if requirement == optionalDir && errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("read %s/: %w", dir, err)
 	}
 
@@ -138,15 +169,16 @@ func loadJSONDir(fsys fs.FS, dir string, check func(data []byte) error) ([]strin
 		}
 		files = append(files, name)
 	}
-	if len(files) == 0 {
+	if len(files) == 0 && requirement == requiredDir {
 		return nil, fmt.Errorf("%s/: %w", dir, errors.New("holds no .json files"))
 	}
 	sort.Strings(files)
 	return files, nil
 }
 
-// checkRuleFile is the rule pack's gate: JSON syntax, plus PREDICATE syntax on
-// every condition field.
+// checkRuleFile is the rule pack's gate: JSON syntax, PREDICATE syntax on every
+// condition field, and the world-rule SCOPE boundary (see rulescope.go — a
+// world may author reactions, never the engine's turn loop).
 //
 // It deliberately does NOT run rule.ValidateDefinition. That validator's
 // condition check is two checks in one — vocabulary.RequireDeclaredPredicate is
@@ -185,6 +217,13 @@ func checkRuleFile(data []byte) error {
 						"predicate (entity ids may carry underscores and uppercase, predicates may not): %w",
 					definition.ID, index, condition.Field, err)
 			}
+		}
+		// Alphabet first, then scope: a misspelled predicate is a typo the
+		// author fixes, and a reserved one is a boundary they have to be told
+		// about — reporting the typo as a boundary violation would send them
+		// looking for the wrong thing.
+		if err := checkRuleScope(definition); err != nil {
+			return err
 		}
 	}
 	return nil

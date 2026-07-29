@@ -134,13 +134,65 @@ func checkDefinition(definition rule.Definition) error {
 			return fmt.Errorf("condition[%d] on %s: %w", index, condition.Field, err)
 		}
 	}
+	// The precondition BOTH gates below share, checked once and stated once: a
+	// rule that pins no phase cannot be held to either of them. Nothing says
+	// whose artifact should gate it, and nothing says which edge it declares, so
+	// both would pass in silence — a gate that answers "fine" to a question it
+	// could not read is worse than no gate.
+	if len(phaseGates(definition)) == 0 {
+		return fmt.Errorf(
+			"names no phase, so nothing at load time can say which stage's artifact should gate it or which edge " +
+				"of the turn FSM it takes. Every rule in this pack is one hop: it matches a phase with `eq` or " +
+				"`transition`, and a mid-chain hop also matches an artifact that phase's stage produces")
+	}
 	if err := checkArtifactGate(definition); err != nil {
 		return err
 	}
-	return checkActions(definition)
+	if err := checkActions(definition); err != nil {
+		return err
+	}
+	// LAST, and the order is load-bearing: the edge check reads the subject an
+	// action publishes, so it must run after checkActions has established that
+	// the subject is one a stage consumes and that entry and recovery agree on
+	// it. Otherwise a typo'd subject would be reported as an illegal FSM edge.
+	return checkPhaseEdges(definition)
 }
 
-// checkArtifactGate refuses a mid-chain hop that is gated on the PHASE alone.
+// phaseGate is a phase a rule is PINNED to, with the operator that pins it.
+type phaseGate struct {
+	phase    vocabulary.TurnPhase
+	operator string
+}
+
+// phaseGates returns every phase a rule is pinned to.
+//
+// Only `eq` and `transition` PIN a phase, and this function counts only those —
+// checkCondition refuses any other operator on turn.phase.current for the same
+// reason, but the two are independent on purpose. A rule matching `phase != x`
+// fires in every OTHER phase at once, so neither of the two gates below could say
+// anything true about it; reading such a condition as a pin here would let a
+// reordering of the checks turn "unpinned" into a confidently wrong phase.
+func phaseGates(definition rule.Definition) []phaseGate {
+	gates := make([]phaseGate, 0, len(definition.Conditions))
+	for _, condition := range definition.Conditions {
+		if condition.Field != vocabulary.TurnPhaseCurrent.String() {
+			continue
+		}
+		if condition.Operator != "eq" && condition.Operator != "transition" {
+			continue
+		}
+		phase, ok := condition.Value.(string)
+		if !ok {
+			// checkCondition already refused a phase compared against a non-string.
+			continue
+		}
+		gates = append(gates, phaseGate{phase: vocabulary.TurnPhase(phase), operator: condition.Operator})
+	}
+	return gates
+}
+
+// checkArtifactGate refuses a mid-chain hop that is not gated on the artifact
+// the stage owning its phase produces. Phases sequence; ARTIFACTS gate.
 //
 // This is the least obvious gate here and the one that took a surviving mutation
 // to find. Every phase except `accepted` is written when a stage is ENTERED, so a
@@ -152,38 +204,149 @@ func checkDefinition(definition rule.Definition) error {
 // passes an end-to-end test almost every time and fails in production under load,
 // which is the worst shape a bug can have.
 //
-// A hop must therefore also match the ARTIFACT the previous stage produces —
-// the verdict's roll gate, the roll's band, the applied batch, the narration
-// reference — because an artifact is written when a stage is DONE.
+// # Why "a second condition" was not enough
 //
-// Two exemptions, both principled. `accepted` is written by intake's atomic
-// create, which is a completed fact, so the first hop legitimately gates on the
-// phase alone. And a `transition` condition fires on the phase MOVE rather than
-// on the phase value, which is likewise a completed fact.
+// The first version of this gate asked whether the rule matched anything BESIDES
+// the phase, and that is a weaker question than it looks. `turn.action.player` is
+// written by intake's atomic create, so it is present from the turn's first
+// instant; a hop conjoining it with the phase reads as a conjunction, changes
+// nothing about when the rule fires, and reintroduces the race in full. An
+// EARLIER stage's artifact is the same failure with more steps — the verdict
+// reference has been present for two stages by the time a turn is applying.
+//
+// So the question is now the specific one: does the rule match a predicate the
+// stage owning THAT phase writes when it finishes? vocabulary.StageArtifacts is
+// the per-phase answer, composed from the projection lists the stages write
+// through, and it is shared with the boot-time stranded-turn pass — which asks
+// the identical question for a different reason. Matching such a predicate is
+// proof its stage finished, because a scalar condition on an ABSENT predicate
+// does not match — Required is refused above, so a missing field evaluates false
+// rather than erroring, and presence is therefore implied by the match.
+//
+// # Three exemptions, all principled
+//
+// `accepted` is written by intake's atomic create, which is a completed fact, so
+// the first hop legitimately gates on the phase alone. A `transition` condition
+// fires on the phase MOVE rather than on its presence, which is likewise a
+// completed fact. And the terminal phases have no owning stage at all — nothing
+// is pending for a turn that has ended — so they are matchable only as a move,
+// which the second exemption already covers and this function says out loud.
 func checkArtifactGate(definition rule.Definition) error {
-	gatedOnPhase := false
-	gatedOnSomethingElse := false
-	for _, condition := range definition.Conditions {
-		if condition.Field != vocabulary.TurnPhaseCurrent.String() {
-			gatedOnSomethingElse = true
+	for _, gate := range phaseGates(definition) {
+		if gate.operator == "transition" {
 			continue
 		}
-		if condition.Operator == "transition" {
-			return nil
+		if gate.phase == vocabulary.PhaseAccepted {
+			continue
 		}
-		if phase, ok := condition.Value.(string); ok && phase != string(vocabulary.PhaseAccepted) {
-			gatedOnPhase = true
+		artifacts, known := vocabulary.StageArtifacts(gate.phase)
+		if !known {
+			// checkCondition already refused a value outside the phase set.
+			continue
 		}
-	}
-	if gatedOnPhase && !gatedOnSomethingElse {
-		return fmt.Errorf(
-			"is gated on %s alone. Every phase except %q is written when a stage is ENTERED, so this rule fires "+
-				"as the previous stage STARTS and the stage it triggers races the one before it for the artifact "+
-				"it needs — a race that is usually won, which is why it passes a test and fails under load. Match "+
-				"the artifact the previous stage produces as well",
-			vocabulary.TurnPhaseCurrent, vocabulary.PhaseAccepted)
+		if len(artifacts) == 0 {
+			return fmt.Errorf(
+				"matches phase %q with `eq`, but no stage produces an artifact for it — a turn that has ended has "+
+					"nothing pending. A terminal phase is matchable only as a MOVE, with the transition operator",
+				gate.phase)
+		}
+		if !gatedOnArtifact(definition, artifacts) {
+			return fmt.Errorf(
+				"matches phase %q, but nothing else it matches is an artifact the %s stage produces (%v). Every "+
+					"phase except %q is written when a stage is ENTERED, so this rule fires as that stage STARTS "+
+					"and the stage it triggers races it for the artifact it needs — a race that is usually won, "+
+					"which is why the defect passes a test and appears under load. A predicate that is merely "+
+					"present beside the phase does not gate anything: a birth record like %s, or an earlier "+
+					"stage's artifact, was already there",
+				gate.phase, gate.phase, predicateNames(artifacts), vocabulary.PhaseAccepted,
+				vocabulary.TurnActionPlayer)
+		}
 	}
 	return nil
+}
+
+// gatedOnArtifact reports whether any condition matches one of the predicates the
+// stage lands when it finishes.
+func gatedOnArtifact(definition rule.Definition, artifacts []vocabulary.Predicate) bool {
+	for _, condition := range definition.Conditions {
+		for _, artifact := range artifacts {
+			if condition.Field == artifact.String() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// checkPhaseEdges refuses a hop the turn FSM could never take — `accepted` to
+// `narrating`, say, or any edge that runs a turn backwards.
+//
+// # Why reading the FSM here is not a second FSM
+//
+// vocabulary.PhaseRank and PhasePredecessors are deliberately unused at RUNTIME:
+// the boot-time stranded-turn pass derives no hop from them, because a component
+// that computed the next phase and published its trigger would be a second state
+// machine executing beside the rule pack, and the two would drift.
+//
+// This is the opposite use and the distinction is worth stating, because the two
+// look alike. Nothing here executes. Both sides are DECLARATIONS available before
+// the engine starts — the pack says which phase a hop leaves and which subject it
+// publishes, the vocabulary says which phase that subject enters and what may
+// precede it — and comparing two declarations is what a validator is. The pack
+// remains the only thing that decides a hop at runtime; it just cannot any longer
+// declare one the FSM would refuse.
+//
+// The refusal is worth having even though the turn recorder rejects an illegal
+// transition at runtime already: runtime means a player's turn is the thing that
+// discovers the authoring error, and the report names the recorder rather than
+// the rule that sent it there.
+//
+// Both pinning operators are checked, not only `eq`. A `transition` condition
+// names the phase the turn has just ENTERED, so it fixes the source of the hop
+// exactly as an `eq` does; the two terminal hops escape only because
+// SubjectResolved enters no phase at all.
+func checkPhaseEdges(definition rule.Definition) error {
+	edges := []struct {
+		label   string
+		actions []rule.Action
+	}{
+		{"on_enter", definition.OnEnter},
+		{"on_recovery", definition.OnRecovery},
+	}
+	for _, gate := range phaseGates(definition) {
+		for _, edge := range edges {
+			for index, action := range edge.actions {
+				target, isStage := PhaseForSubject(action.Subject)
+				if !isStage {
+					// SubjectResolved announces a turn that has already ended; it
+					// drives no stage, so it expresses no edge.
+					continue
+				}
+				if vocabulary.PhaseFollows(gate.phase, target) {
+					continue
+				}
+				want, _ := vocabulary.PhasePredecessors(target)
+				return fmt.Errorf(
+					"%s[%d] drives a turn from %q into %q, which %s: the turn FSM enters %q only from %v",
+					edge.label, index, gate.phase, target, edgeDirection(gate.phase, target),
+					target, phaseNames(want))
+			}
+		}
+	}
+	return nil
+}
+
+// edgeDirection names HOW an illegal edge is illegal, which is the difference
+// between a hop pointed at the wrong stage and a hop pointed at an earlier one.
+// Rank is what separates them: the turn's forward progression is an order, and a
+// target at or below its source is a loop rather than a skip.
+func edgeDirection(from, to vocabulary.TurnPhase) string {
+	fromRank, fromKnown := vocabulary.PhaseRank(from)
+	toRank, toKnown := vocabulary.PhaseRank(to)
+	if fromKnown && toKnown && toRank <= fromRank {
+		return "runs the turn backwards"
+	}
+	return "skips a stage"
 }
 
 // checkCondition verifies the two derivable condition shapes against their
@@ -253,6 +416,19 @@ func checkCondition(condition expression.ConditionExpression) error {
 
 	case "eq", "ne":
 		if condition.Field == vocabulary.TurnPhaseCurrent.String() {
+			// `ne` PINS NO PHASE: a hop matching "the phase is not x" matches every
+			// other phase at once, so neither the artifact gate nor the FSM-edge
+			// check can establish anything about it — the first would not know
+			// whose artifact to require, the second would not know which edge is
+			// being declared. Both would pass in silence, which is the exact shape
+			// of gate this pack has already been burned by.
+			if condition.Operator == "ne" {
+				return fmt.Errorf(
+					"excludes a phase rather than naming one, and `ne` pins no phase: this hop would match every " +
+						"other phase at once, so neither the artifact gate nor the FSM-edge check could say " +
+						"anything about it. Match the phase this hop leaves with `eq`, or the move into it with " +
+						"`transition`")
+			}
 			phase, ok := condition.Value.(string)
 			if !ok {
 				return fmt.Errorf("compares the phase against a %T", condition.Value)
@@ -366,12 +542,8 @@ func knownSubject(subject string) bool {
 	if subject == SubjectResolved {
 		return true
 	}
-	for _, phase := range stagePhases {
-		if got, err := SubjectForPhase(phase); err == nil && got == subject {
-			return true
-		}
-	}
-	return false
+	_, isStage := PhaseForSubject(subject)
+	return isStage
 }
 
 func subjectsOf(actions []rule.Action) []string {
@@ -418,6 +590,14 @@ func phaseNames(phases []vocabulary.TurnPhase) []string {
 	out := make([]string, 0, len(phases))
 	for _, phase := range phases {
 		out = append(out, string(phase))
+	}
+	return out
+}
+
+func predicateNames(predicates []vocabulary.Predicate) []string {
+	out := make([]string, 0, len(predicates))
+	for _, predicate := range predicates {
+		out = append(out, predicate.String())
 	}
 	return out
 }

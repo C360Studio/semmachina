@@ -44,11 +44,13 @@ func TestLoadPackage_LoadsAWholePackage(t *testing.T) {
 	}
 }
 
-// The spec names four required members. A package missing any of them is not a
-// package, and the reason has to say which one.
+// A package missing a required member is not a package, and the reason has to
+// say which one. `rules/` is deliberately absent from this list: a world with
+// no reactions is legitimate, and TestLoadPackage_AcceptsAWorldWithNoRules
+// holds that line from the other side.
 func TestLoadPackage_RequiresEveryPackageMember(t *testing.T) {
 	for _, missing := range []string{
-		world.ManifestFile, world.EntitiesFile, "rules/00-stub.json", "personas/narrator.json",
+		world.ManifestFile, world.EntitiesFile, "personas/narrator.json",
 	} {
 		t.Run(missing, func(t *testing.T) {
 			fsys := minimalPackageFS()
@@ -119,7 +121,7 @@ func TestLoadPackage_RejectsMalformedPackageContent(t *testing.T) {
 func TestLoadPackage_RejectsARulePredicateThatTheWriteGateWouldRefuse(t *testing.T) {
 	badRule := `{"id":"starter_rusty","type":"expression","name":"rusty","enabled":false,` +
 		`"entity":{"pattern":"*.*.*.*.*.*"},"conditions":[` +
-		`{"field":"turn.phase.current","operator":"eq","value":"accepted"},` +
+		`{"field":"item.attribute.quantity","operator":"gt","value":0},` +
 		`{"field":"item.condition.rust_level","operator":"gt","value":3}],"logic":"and"}`
 
 	fsys := minimalPackageFS()
@@ -152,7 +154,7 @@ func TestLoadPackage_RejectsARulePredicateThatTheWriteGateWouldRefuse(t *testing
 func TestLoadPackage_ChecksRulePredicateSyntaxWithoutRequiringDeclaration(t *testing.T) {
 	// Both halves are asserted against the starter pack's own condition field,
 	// because the gate's design rests entirely on the two being separable.
-	const undeclared = "turn.phase.current"
+	const undeclared = "item.attribute.quantity"
 	if _, err := ssvocab.ParsePredicate(undeclared); err != nil {
 		t.Fatalf("the starter pack's own condition field is not canonical: %v", err)
 	}
@@ -185,7 +187,7 @@ func TestLoadPackage_ChecksRulePredicateSyntaxWithoutRequiringDeclaration(t *tes
 func TestLoadPackage_ChecksEveryRuleInAnArrayValuedRuleFile(t *testing.T) {
 	pack := `[{"id":"ok","type":"expression","name":"ok","enabled":false,` +
 		`"entity":{"pattern":"*.*.*.*.*.*"},"conditions":[` +
-		`{"field":"turn.phase.current","operator":"eq","value":"accepted"}],"logic":"and"},` +
+		`{"field":"item.attribute.quantity","operator":"lte","value":0}],"logic":"and"},` +
 		`{"id":"bad","type":"expression","name":"bad","enabled":false,` +
 		`"entity":{"pattern":"*.*.*.*.*.*"},"conditions":[` +
 		`{"field":"item.condition.rust_level","operator":"gt","value":3}],"logic":"and"}]`
@@ -350,7 +352,7 @@ func TestFixtures_EmbedCarriesTheWholeStarterPackage(t *testing.T) {
 	for _, name := range []string{
 		world.ManifestFile,
 		world.EntitiesFile,
-		"rules/00-turn-sequencing.json",
+		"rules/00-spent-supplies.json",
 		"personas/adjudicator.json",
 		"personas/narrator.json",
 	} {

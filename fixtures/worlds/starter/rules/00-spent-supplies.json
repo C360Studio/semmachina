@@ -1,0 +1,23 @@
+{
+  "id": "starter_spent_supplies_leave_the_scene",
+  "type": "expression",
+  "name": "Spent supplies leave the scene",
+  "description": "A WORLD REACTION, which is what a world package's rules directory is for: a world fact crosses a threshold and a world fact changes in answer. The sentry's supper is a stack, and a stack that reaches zero is not lying on the winch housing any more, so the item stops being anywhere — it keeps its name and its description, and the context assembler stops handing it to the narrator as part of the scene. Nothing here reads fiction, spends a model call, or waits on anything: a rule matched structure and a triple moved. Three details are the reason this file is worth reading rather than copying. It is REMOVE, not add: the triple-add lane appends, so writing a single-valued predicate through it leaves an entity holding two locations, with a success response and no error (design finding F14) — removing the predicate says exactly what happened, which is that the stack is gone. It is CAPPED ON THE ACTION: max_iterations sits inside the on_enter action because that is the field the rule engine ENFORCES — Action.MaxIterations, counted per action across an entity's match-cycle, defaulting to 3 when omitted. The identically named field at the top level of a rule is NOT enforced for expression rules; the evaluator only republishes it as $state.max_iterations for a when-guard to read, and a cron rule rejects it outright. A cap written one level up looks like a bound and is a comment. And it names nothing the engine owns: no turn.* fact, no engine or agentic subject, no engine KV bucket. Turn sequencing is the ENGINE's state machine and lives in internal/rulepack — the loader refuses a world rule that reaches it, by name and by reason, rather than letting a downloaded world author the loop that pays for the models.",
+  "enabled": true,
+  "entity": {"pattern": "*.semmachina.*.*.item.*"},
+  "conditions": [
+    {
+      "field": "item.attribute.quantity",
+      "operator": "lte",
+      "value": 0
+    }
+  ],
+  "logic": "and",
+  "on_enter": [
+    {
+      "type": "remove_triple",
+      "predicate": "world.location.current",
+      "max_iterations": 4
+    }
+  ]
+}

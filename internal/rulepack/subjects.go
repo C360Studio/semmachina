@@ -91,3 +91,23 @@ func SubjectForPhase(phase vocabulary.TurnPhase) (string, error) {
 			"intake's atomic create and `failed` by whichever stage gave up, so neither is entered on a trigger",
 		phase, stagePhases)
 }
+
+// PhaseForSubject returns the phase a stage trigger drives a turn INTO.
+//
+// It is the inverse of SubjectForPhase and is derived by running it, so the two
+// cannot disagree — the pairing stays stated once. The load-time FSM-edge check
+// needs this direction: a rule declares the subject it publishes, and the edge it
+// expresses is only legal if the phase behind that subject follows the phase the
+// rule is gated on.
+//
+// The bool is false for any subject no stage enters, which deliberately includes
+// SubjectResolved: that subject announces a turn that has ALREADY ended and
+// drives nothing, so it is not an edge and has no legality to check.
+func PhaseForSubject(subject string) (vocabulary.TurnPhase, bool) {
+	for _, phase := range stagePhases {
+		if got, err := SubjectForPhase(phase); err == nil && got == subject {
+			return phase, true
+		}
+	}
+	return "", false
+}

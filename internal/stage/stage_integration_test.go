@@ -18,6 +18,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/processor/rule"
 	ssvocab "github.com/c360studio/semstreams/vocabulary"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semmachina/internal/campaign"
 	"github.com/c360studio/semmachina/internal/content"
@@ -660,7 +661,27 @@ func TestTurnLoop_ARedeliveredPersonaTriggerDoesNotRespawnTheModel(t *testing.T)
 }
 
 // A stage trigger naming something that is not a turn can never become a stage,
-// so it is terminated rather than redelivered forever.
+// so it is TERMINATED rather than redelivered forever.
+//
+// # What this test used to prove, which was nothing
+//
+// It published the poison, ran another turn, and asserted that turn completed.
+// That assertion holds whether the trigger is terminated or nak'd: the stage
+// consumer has no MaxDeliver and a nak carries a 30-second delay, so a message
+// redelivering forever in the background does not stop the next turn. The test
+// passed on both sides of the behaviour it was named for — a "termination" test
+// that could not distinguish termination from an infinite redelivery loop.
+//
+// So it now measures the poison message itself. The consumer's ACKNOWLEDGEMENT
+// FLOOR is where the difference lives, and it is the same reading the boot-time
+// stranded-turn pass takes: upstream terminates a PermanentDeliveryError with
+// msg.Term(), which retires the sequence and lets the floor pass it, while a nak
+// leaves the floor stuck below it forever. The floor cannot skip an outstanding
+// message, so "the follow-up turn's triggers were acked" cannot carry it either —
+// and by the same contiguity, an EARLIER test that left an unretired adjudicating
+// trigger on this shared stream fails this test rather than hiding in it. That is
+// the correct direction: a stage trigger nobody finished is garbage on the queue
+// whichever test produced it.
 func TestStageRunner_TerminatesATriggerThatNamesNoTurn(t *testing.T) {
 	world := startLoop(t)
 
@@ -672,14 +693,60 @@ func TestStageRunner_TerminatesATriggerThatNamesNoTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
-	if err := world.harness.Client.PublishToStream(t.Context(), subject, bad); err != nil {
+	// WithAck, because the stream sequence is the whole point: it names the one
+	// message this test is about.
+	ack, err := world.harness.Client.PublishToStreamWithAck(t.Context(), subject, bad)
+	if err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 
-	// The turn loop keeps working afterwards, which is the property that matters:
-	// a poison trigger must not wedge the stage.
+	world.requireRetired(t, vocabulary.PhaseAdjudicating, ack.Sequence)
+
+	// And the loop keeps working afterwards, which is the other half: terminating
+	// the poison must not have cost the stage its consumer.
 	_, entityID := world.submit(t, "act-after-poison", "I step through the gate.")
 	world.awaitPhase(t, entityID, vocabulary.PhaseComplete)
+}
+
+// requireRetired waits for a stage consumer to finish with one specific stream
+// sequence — acknowledged or terminated, which JetStream records identically and
+// which is exactly the distinction this engine does not need to draw here.
+//
+// The deadline is deliberately shorter than the framework's 30-second
+// nak-with-delay: a nak'd message is not merely slower to retire, it never
+// retires at all, and a window under one redelivery cycle says so without waiting
+// for a second refusal to prove it.
+func (l *loop) requireRetired(t *testing.T, phase vocabulary.TurnPhase, sequence uint64) {
+	t.Helper()
+	js, err := l.harness.Client.JetStream()
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	consumer, err := js.Consumer(t.Context(), rulepack.StageStream, rulepack.StageConsumerName(phase))
+	if err != nil {
+		t.Fatalf("read the %s consumer: %v", phase, err)
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	var last *jetstream.ConsumerInfo
+	for time.Now().Before(deadline) {
+		info, infoErr := consumer.Info(t.Context())
+		if infoErr != nil {
+			t.Fatalf("read the %s consumer info: %v", phase, infoErr)
+		}
+		last = info
+		if info.AckFloor.Stream >= sequence {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("the %s stage never retired stream sequence %d: its acknowledgement floor is still %d, with %d "+
+		"delivery(ies) outstanding and %d redelivered. A trigger that can never become a stage was nak'd rather "+
+		"than terminated, so it redelivers forever. READ THE FLOOR BEFORE BLAMING TERMINATION: the floor is "+
+		"CONTIGUOUS, so a floor stuck BELOW %d means some earlier sequence never retired — an unfinished "+
+		"trigger another test left on this shared stream blocks this one and reads exactly like a termination "+
+		"bug. A floor that reached %d and stopped is the termination failure this test is actually about",
+		phase, sequence, last.AckFloor.Stream, last.NumAckPending, last.NumRedelivered, sequence-1, sequence-1)
 }
 
 // The pack is data the rule processor accepts, and the registration pass is what

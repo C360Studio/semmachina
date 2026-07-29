@@ -2,10 +2,12 @@ package rulepack_test
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/processor/rule"
+	"github.com/c360studio/semstreams/processor/rule/expression"
 	ssvocab "github.com/c360studio/semstreams/vocabulary"
 
 	"github.com/c360studio/semmachina/internal/rulepack"
@@ -390,43 +392,369 @@ func TestProcessorConfig_DeclaresEveryStageSubjectAsAJetStreamPort(t *testing.T)
 	}
 }
 
-// A mid-chain hop gated on the phase alone fires as the PREVIOUS stage starts,
-// not when it finished — a race that usually resolves in the pack's favour and
-// therefore passes an end-to-end test while being wrong. It is refused at load.
-func TestDefinitions_RefuseAMidChainHopGatedOnThePhaseAlone(t *testing.T) {
-	declare(t)
-
+// mutable decodes the pack and proves the UNTOUCHED copy loads.
+//
+// The anti-vacuity half is the point: a refusal below has to be caused by the
+// mutation, and a test that only asserts "Check returned an error" passes just as
+// happily when the pack was already broken for an unrelated reason.
+func mutable(t *testing.T) []rule.Definition {
+	t.Helper()
 	var definitions []rule.Definition
 	if err := json.Unmarshal(rulepack.JSON(), &definitions); err != nil {
 		t.Fatalf("decode pack: %v", err)
 	}
+	if err := rulepack.Check(definitions); err != nil {
+		t.Fatalf("the untouched pack does not load: %v", err)
+	}
+	return definitions
+}
 
-	mutated := false
+// refuse holds a mutated pack to Check and to the REASON it was refused.
+//
+// The reason matters as much as the refusal: this pack has a dozen gates, and a
+// mutation that trips a different one proves nothing about the gate under test —
+// it is the load-time form of a test that cannot tell "refused" from "never
+// reached".
+func refuse(t *testing.T, definitions []rule.Definition, want ...string) {
+	t.Helper()
+	err := rulepack.Check(definitions)
+	if err == nil {
+		t.Fatal("the mutated pack loaded")
+	}
+	for _, phrase := range want {
+		if !strings.Contains(err.Error(), phrase) {
+			t.Fatalf("refused for the wrong reason: wanted a message carrying %q, got: %v", phrase, err)
+		}
+	}
+}
+
+// hopForPhase returns the one rule gated on phase, found by SHAPE rather than by
+// rule id so a renamed rule fails on the property it was renamed out of rather
+// than on a string in a test.
+func hopForPhase(t *testing.T, definitions []rule.Definition, phase vocabulary.TurnPhase) *rule.Definition {
+	t.Helper()
+	var found *rule.Definition
 	for index := range definitions {
-		conditions := definitions[index].Conditions
-		if len(conditions) < 2 || conditions[0].Field != vocabulary.TurnPhaseCurrent.String() {
-			continue
+		for _, condition := range definitions[index].Conditions {
+			if condition.Field != vocabulary.TurnPhaseCurrent.String() || condition.Operator != "eq" {
+				continue
+			}
+			if value, ok := condition.Value.(string); !ok || value != string(phase) {
+				continue
+			}
+			if found != nil {
+				t.Fatalf("more than one hop is gated on %s, so this test would mutate an arbitrary one", phase)
+			}
+			found = &definitions[index]
 		}
-		if conditions[0].Value == string(vocabulary.PhaseAccepted) {
-			continue
-		}
-		// Replace the artifact condition with a second, redundant phase test —
-		// exactly the shape a careless edit produces.
-		conditions[1].Field = vocabulary.TurnPhaseCurrent.String()
-		conditions[1].Operator = "ne"
-		conditions[1].Value = string(vocabulary.PhaseAccepted)
-		mutated = true
-		break
 	}
-	if !mutated {
-		t.Fatal("no mid-chain hop found; this test would pass vacuously")
+	if found == nil {
+		t.Fatalf("no hop is gated on phase %s; this test would pass vacuously", phase)
 	}
+	return found
+}
 
-	if err := rulepack.Check(definitions); err == nil {
-		t.Fatal("a hop gated on the phase alone loaded")
-	} else if !strings.Contains(err.Error(), "alone") {
-		t.Fatalf("phase-only hop refused for the wrong reason: %v", err)
+// hopPublishing returns the one rule whose ENTRY edge drives a turn into phase.
+func hopPublishing(t *testing.T, definitions []rule.Definition, phase vocabulary.TurnPhase) *rule.Definition {
+	t.Helper()
+	subject, err := rulepack.SubjectForPhase(phase)
+	if err != nil {
+		t.Fatalf("SubjectForPhase(%s): %v", phase, err)
 	}
+	var found *rule.Definition
+	for index := range definitions {
+		for _, action := range definitions[index].OnEnter {
+			if action.Subject != subject {
+				continue
+			}
+			if found != nil {
+				t.Fatalf("more than one hop publishes %s, so this test would mutate an arbitrary one", subject)
+			}
+			found = &definitions[index]
+		}
+	}
+	if found == nil {
+		t.Fatalf("no hop publishes %s; this test would pass vacuously", subject)
+	}
+	return found
+}
+
+// transitionHopInto returns the one rule guarded by a transition INTO phase.
+//
+// A separate finder from hopForPhase rather than a flag on it: the two pin a
+// phase in different senses — `eq` names the phase a turn is SITTING in, a
+// transition names the one it just MOVED into — and a test that conflated them
+// would silently mutate whichever the pack happened to carry.
+func transitionHopInto(t *testing.T, definitions []rule.Definition, phase vocabulary.TurnPhase) *rule.Definition {
+	t.Helper()
+	var found *rule.Definition
+	for index := range definitions {
+		for _, condition := range definitions[index].Conditions {
+			if condition.Field != vocabulary.TurnPhaseCurrent.String() || condition.Operator != "transition" {
+				continue
+			}
+			if value, ok := condition.Value.(string); !ok || value != string(phase) {
+				continue
+			}
+			if found != nil {
+				t.Fatalf("more than one hop transitions into %s, so this test would mutate an arbitrary one", phase)
+			}
+			found = &definitions[index]
+		}
+	}
+	if found == nil {
+		t.Fatalf("no hop transitions into phase %s; this test would pass vacuously", phase)
+	}
+	return found
+}
+
+// artifactCondition returns the one condition of a mid-chain hop that is not the
+// phase test — the half that is supposed to prove the previous stage FINISHED.
+func artifactCondition(t *testing.T, definition *rule.Definition) *expression.ConditionExpression {
+	t.Helper()
+	var found *expression.ConditionExpression
+	for index := range definition.Conditions {
+		if definition.Conditions[index].Field == vocabulary.TurnPhaseCurrent.String() {
+			continue
+		}
+		if found != nil {
+			t.Fatalf("rule %q carries more than one non-phase condition", definition.ID)
+		}
+		found = &definition.Conditions[index]
+	}
+	if found == nil {
+		t.Fatalf("rule %q carries no artifact condition; this test would pass vacuously", definition.ID)
+	}
+	return found
+}
+
+// retarget points a hop's entry AND recovery edges at another stage, which is the
+// only way to move an edge without tripping the subject-agreement gate first.
+func retarget(t *testing.T, definition *rule.Definition, phase vocabulary.TurnPhase) {
+	t.Helper()
+	subject, err := rulepack.SubjectForPhase(phase)
+	if err != nil {
+		t.Fatalf("SubjectForPhase(%s): %v", phase, err)
+	}
+	for index := range definition.OnEnter {
+		definition.OnEnter[index].Subject = subject
+	}
+	for index := range definition.OnRecovery {
+		definition.OnRecovery[index].Subject = subject
+	}
+}
+
+// Phases sequence; ARTIFACTS gate (design F21).
+//
+// Every phase but `accepted` is written when a stage is ENTERED, so a mid-chain
+// hop that does not also match the artifact that stage produces fires as the
+// previous stage STARTS and races it — a race that is usually won, so the defect
+// passes an end-to-end test and appears under load.
+//
+// Each mutation below is a rule that LOOKS gated and is not. The second one is
+// the reason this gate had to be tightened rather than merely kept: "gated on
+// something besides the phase" accepted a birth-record fact and reintroduced the
+// whole race while reading as a conjunction.
+func TestDefinitions_RefuseAMidChainHopNotGatedOnItsStagesArtifact(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(t *testing.T, definitions []rule.Definition)
+		want   []string
+	}{
+		{
+			name: "the artifact condition dropped, leaving the phase alone",
+			mutate: func(t *testing.T, definitions []rule.Definition) {
+				hop := hopForPhase(t, definitions, vocabulary.PhaseResolving)
+				artifact := artifactCondition(t, hop)
+				hop.Conditions = slices.DeleteFunc(hop.Conditions,
+					func(condition expression.ConditionExpression) bool {
+						return condition.Field == artifact.Field
+					})
+			},
+			want: []string{"matches phase \"resolving\"", "artifact the resolving stage produces"},
+		},
+		{
+			// turn.action.player is written by intake's atomic create, so it is
+			// present from the turn's first instant. Conjoining it with the phase
+			// changes nothing about WHEN the rule fires: it is not a gate at all,
+			// and this is precisely the shape the pre-8.1b check accepted.
+			name: "a birth-record fact standing in for the artifact",
+			mutate: func(t *testing.T, definitions []rule.Definition) {
+				artifact := artifactCondition(t, hopForPhase(t, definitions, vocabulary.PhaseResolving))
+				artifact.Field = vocabulary.TurnActionPlayer.String()
+				artifact.Operator = "ne"
+				artifact.Value = ""
+			},
+			want: []string{"artifact the resolving stage produces", vocabulary.TurnRollRef.String()},
+		},
+		{
+			// An artifact of an EARLIER stage is a birth record with extra steps:
+			// the verdict reference landed two stages before the turn reached
+			// `applying`, so it too is present the whole time the phase is.
+			name: "an earlier stage's artifact standing in for this one's",
+			mutate: func(t *testing.T, definitions []rule.Definition) {
+				artifact := artifactCondition(t, hopForPhase(t, definitions, vocabulary.PhaseApplying))
+				artifact.Field = vocabulary.TurnVerdictRef.String()
+			},
+			want: []string{"artifact the applying stage produces", vocabulary.TurnEffectsBatch.String()},
+		},
+		{
+			// The shape a careless edit produces: a second, redundant phase test
+			// where the artifact condition used to be.
+			name: "a second phase test standing in for the artifact",
+			mutate: func(t *testing.T, definitions []rule.Definition) {
+				artifact := artifactCondition(t, hopForPhase(t, definitions, vocabulary.PhaseApplying))
+				artifact.Field = vocabulary.TurnPhaseCurrent.String()
+				artifact.Operator = "eq"
+				artifact.Value = string(vocabulary.PhaseApplying)
+			},
+			want: []string{"artifact the applying stage produces"},
+		},
+		{
+			// A terminal phase has no owning stage, so no artifact could ever
+			// satisfy the gate: a turn that has ended has nothing pending. Matching
+			// one with `eq` is refused as a category error rather than reported as
+			// a missing artifact nobody could supply.
+			name: "a hop gated on a terminal phase with eq",
+			mutate: func(t *testing.T, definitions []rule.Definition) {
+				hop := hopForPhase(t, definitions, vocabulary.PhaseNarrating)
+				for index := range hop.Conditions {
+					if hop.Conditions[index].Field == vocabulary.TurnPhaseCurrent.String() {
+						hop.Conditions[index].Value = string(vocabulary.PhaseComplete)
+					}
+				}
+			},
+			want: []string{"no stage produces an artifact for it", "matchable only as a MOVE"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			declare(t)
+			definitions := mutable(t)
+			tc.mutate(t, definitions)
+			refuse(t, definitions, tc.want...)
+		})
+	}
+}
+
+// A rule that names no phase at all cannot be checked by either gate: nothing
+// says which stage's artifact should gate it, and nothing says which edge it
+// takes. It is refused rather than exempted.
+func TestDefinitions_RefuseAHopThatNamesNoPhase(t *testing.T) {
+	declare(t)
+	definitions := mutable(t)
+
+	hop := hopForPhase(t, definitions, vocabulary.PhaseNarrating)
+	hop.Conditions = slices.DeleteFunc(hop.Conditions, func(condition expression.ConditionExpression) bool {
+		return condition.Field == vocabulary.TurnPhaseCurrent.String()
+	})
+	refuse(t, definitions, "names no phase")
+}
+
+// `eq` and `transition` are the only operators that PIN a phase. A hop matching
+// `phase != something` fires in every other phase at once, so neither the
+// artifact gate nor the FSM-edge check can establish anything about it.
+func TestDefinitions_RefuseAPhaseConditionThatPinsNoPhase(t *testing.T) {
+	declare(t)
+	definitions := mutable(t)
+
+	hop := hopForPhase(t, definitions, vocabulary.PhaseNarrating)
+	for index := range hop.Conditions {
+		if hop.Conditions[index].Field == vocabulary.TurnPhaseCurrent.String() {
+			hop.Conditions[index].Operator = "ne"
+			hop.Conditions[index].Value = string(vocabulary.PhaseAccepted)
+		}
+	}
+	refuse(t, definitions, "pins no phase")
+}
+
+// A pack must not be able to EXPRESS an edge the turn FSM refuses.
+//
+// Every mutation below is loud at runtime today — the turn recorder rejects the
+// transition — but loud at runtime means a player's turn is the thing that
+// discovers it. The declaration and the FSM are both data at load time, so the
+// comparison costs nothing and moves the failure to the person editing the pack.
+//
+// The third case exists because the first two cannot reach half the check. Both
+// of the pack's transition-pinned rules publish SubjectResolved, which enters no
+// phase — so `PhaseForSubject` declines and the edge is never consulted for them.
+// Skipping transition-pinned hops entirely therefore left the whole suite green:
+// the branch was real code no rule in the pack could exercise, which is the
+// "looks gated, isn't" shape this task exists to close. Giving one a real stage
+// subject is what reaches it.
+func TestDefinitions_RefuseAHopTheTurnFSMCannotTake(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(t *testing.T, definitions []rule.Definition)
+		want   []string
+	}{
+		{
+			// The edge 8.1b names: accepted → narrating, skipping adjudication,
+			// the dice and the applier.
+			name: "a hop that skips three stages",
+			mutate: func(t *testing.T, definitions []rule.Definition) {
+				retarget(t, hopForPhase(t, definitions, vocabulary.PhaseAccepted), vocabulary.PhaseNarrating)
+			},
+			want: []string{`from "accepted" into "narrating"`, "skips"},
+		},
+		{
+			name: "a hop that runs the turn backwards",
+			mutate: func(t *testing.T, definitions []rule.Definition) {
+				retarget(t, hopForPhase(t, definitions, vocabulary.PhaseNarrating), vocabulary.PhaseAdjudicating)
+			},
+			want: []string{`from "narrating" into "adjudicating"`, "backwards"},
+		},
+		{
+			// A transition names the phase the turn has just ENTERED, so it fixes
+			// the source of a hop exactly as `eq` does and is held to the same
+			// legality. The source phase in the message is the proof this case
+			// reaches the transition branch and not another: no `eq`-pinned hop can
+			// carry `complete`, because the artifact gate refuses a terminal phase
+			// matched with `eq` before the edge check ever runs.
+			name: "a transition-pinned hop retargeted at a stage it cannot reach",
+			mutate: func(t *testing.T, definitions []rule.Definition) {
+				retarget(t, transitionHopInto(t, definitions, vocabulary.PhaseComplete), vocabulary.PhaseApplying)
+			},
+			want: []string{`from "complete" into "applying"`, "backwards"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			declare(t)
+			definitions := mutable(t)
+			tc.mutate(t, definitions)
+			refuse(t, definitions, append([]string{"the turn FSM enters"}, tc.want...)...)
+		})
+	}
+}
+
+// `or` would fire a stage on either half of a hop alone — including on the phase
+// alone, which is F21's race with the gate that catches it bypassed.
+func TestDefinitions_RefuseAPackThatCombinesAHopsConditionsWithOr(t *testing.T) {
+	declare(t)
+	definitions := mutable(t)
+
+	hopForPhase(t, definitions, vocabulary.PhaseApplying).Logic = "or"
+	refuse(t, definitions, "combines its conditions with")
+}
+
+// A recovery edge that resumed a DIFFERENT stage than the entry edge started
+// would skip a hop after every restart. Both subjects below are real stage
+// subjects and the edge is FSM-legal, so nothing but the agreement gate can
+// refuse this.
+func TestDefinitions_RefuseARecoveryThatResumesADifferentStage(t *testing.T) {
+	declare(t)
+	definitions := mutable(t)
+
+	// The hop into the dice, whose phase (`adjudicating`) legally reaches the
+	// applier too — so pointing its recovery edge there is a divergence and
+	// NOTHING else. An FSM-illegal recovery subject would be refused by the edge
+	// check instead, and this test would pass without the agreement gate.
+	hop := hopPublishing(t, definitions, vocabulary.PhaseResolving)
+	subject, err := rulepack.SubjectForPhase(vocabulary.PhaseApplying)
+	if err != nil {
+		t.Fatalf("SubjectForPhase: %v", err)
+	}
+	hop.OnRecovery[0].Subject = subject
+	refuse(t, definitions, "on entry and")
 }
 
 // The first hop is the exemption, and it must stay one: `accepted` is written by
