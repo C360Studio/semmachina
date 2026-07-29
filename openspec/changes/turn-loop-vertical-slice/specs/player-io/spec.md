@@ -103,9 +103,16 @@ submission.
 
 Broadcast egress is a disclosure defect, not a performance one: a component that fans every
 message out to all connected sockets would satisfy "the result was delivered" while showing
-one player's narration to everyone in the campaign. `ChannelBinding.ReplyTo` is a DURABLE
-address where the adapter has one (an email address, a chat channel); for a WebSocket it is
-not, because a connection identifier is invalid after reconnect.
+one player's narration to everyone in the campaign. The delivery path SHALL therefore be
+given a session lookup keyed on `player_id` and no way to enumerate every session, so that
+broadcast is unexpressible rather than merely avoided.
+
+`ChannelBinding.ReplyTo` is PER-ADAPTER, and each adapter SHALL state which of the two it
+is. For a WebSocket it is a connection identifier and a delivery HINT only — invalid after
+reconnect, and never dialled. For an adapter whose transport carries a durable address (an
+email box, a chat channel) it IS an address, and that adapter's sink may deliver to it
+directly because there is no live session to resolve. The engine records it either way and
+resolves nothing from it.
 
 #### Scenario: One player's narration does not reach another
 - **WHEN** two players are connected and a turn belonging to the first resolves
@@ -114,6 +121,47 @@ not, because a connection identifier is invalid after reconnect.
 #### Scenario: Delivery survives a reconnect
 - **WHEN** a player reconnects on a new connection before their in-flight turn resolves
 - **THEN** the result is delivered to the new connection, resolved from `player_id`
+
+#### Scenario: A player with no live connection is not a delivery failure
+- **WHEN** a turn resolves for a player who is not connected
+- **THEN** the delivery is acknowledged with no recipients, nothing is queued in adapter
+  memory, and the result remains retrievable from durable state
+
+### Requirement: A delivered result carries the prose it references
+A delivered document SHALL carry the canonical `TurnResult` UNMODIFIED plus the narration
+prose that result references, resolved by the SERVER. The delivered result SHALL be
+byte-identical to the published one; the prose SHALL be present exactly when the result
+carries a `narration_ref`, and SHALL be refused when it belongs to another turn or voices a
+band the turn did not land on.
+
+`TurnResult.narration_ref` is an `obj://` storage reference and no client can resolve one, so
+something must dereference it. Adding the prose to `TurnResult` at delivery would make the
+delivered document differ from the published and archived one — two documents wearing one
+name, which is the failure `TurnResult` was made a single discriminated type to avoid — so
+the prose travels in an envelope AROUND the unmodified result.
+
+The server dereferences rather than the client fetching, because a fetch-back protocol is one
+only an interactive adapter can speak: an email or SMS adapter has no second round trip, and
+no step may assume interactive pacing.
+
+One delivery carries ONE turn's prose, bounded by the same budget that bounds the stored
+artifact, and nothing else bulky — the verdict body, the effect batch and the stored action
+stay behind their references. Nothing accumulates across turns, so per-turn wire cost is flat
+for the same reason per-turn token cost is.
+
+#### Scenario: The delivered result is the published result
+- **WHEN** a turn's result is delivered
+- **THEN** the result inside the delivered document encodes byte-identically to the canonical
+  result composed from durable state
+
+#### Scenario: Prose presence follows the reference
+- **WHEN** a result carries a narration reference
+- **THEN** the delivered document carries that prose, and a delivery carrying a reference with
+  no prose — or prose with no reference — is refused
+
+#### Scenario: Prose belonging to another turn is refused
+- **WHEN** a result's narration reference resolves to prose recorded against a different turn
+- **THEN** the delivery is refused rather than sent, naming both turns
 
 ### Requirement: Canonical terminal result and retrieval
 A turn's result SHALL be durably stored independent of any connection, and a player SHALL
@@ -139,6 +187,50 @@ from a turn still running. The ledger already archives failed turns, so the data
 - **WHEN** a player's turn ends in the `failed` phase with a recorded reason
 - **THEN** retrieving their most recent terminal result returns that failure rather than
   the previous successful turn or an empty answer
+
+#### Scenario: Retrieval distinguishes waiting from a turn that does not exist
+- **WHEN** a result is retrieved for a turn that has not reached a terminal phase
+- **THEN** the answer says the turn is still running, and is distinguishable without
+  inference from the answer for a turn id nothing ever created
+
+### Requirement: The most recent terminal turn is a durable fact, not a scan
+A player entity SHALL carry a single-valued pointer at the turn that most recently RESOLVED
+for them, written on the terminal transition by the same component that writes the terminal
+phase. Retrieval of a player's most recent terminal result SHALL read that pointer TOGETHER
+with the pointer at their most recently accepted turn, treat both as addresses rather than
+answers, and decide between them by each named turn's own recorded phase and phase timestamp.
+
+The accepted-turn pointer alone cannot answer this. It names the most recent turn, so it is
+an answer only while that turn happens to be terminal; the moment the player acts again it
+names a live one and nothing else in the graph names the terminal turn before it. The
+alternative — scanning the archive — is O(campaign history) per retrieval, on a request path,
+growing forever, because the archive is ordered by when turns were archived rather than
+indexed by player.
+
+It is a POINTER at a turn and never a flag about one, for the reason the accepted-turn
+pointer is: "which turn resolved last" needs no clearing, so it cannot go stale in the
+direction that strands a player. The phase is written before the pointer, so a failure in the
+gap leaves the pointer naming an OLDER terminal turn — never a missing or a non-terminal one
+— and reading both pointers is what closes that gap, because in exactly that window the
+accepted-turn pointer still names the turn that just ended.
+
+Retrieval SHALL read a BOUNDED number of candidate turns, so that a pointer written on an
+appending lane degrades into a slightly stale answer rather than into a history scan.
+
+#### Scenario: The last terminal result is answerable while the next turn is running
+- **WHEN** a player's turn has resolved and they have since submitted another that is still
+  in flight
+- **THEN** retrieving their most recent terminal result returns the turn that ended, not
+  silence and not the running turn
+
+#### Scenario: A pointer that has not caught up still yields the right answer
+- **WHEN** the resolved-turn pointer names an older terminal turn and the accepted-turn
+  pointer names one that has since ended
+- **THEN** retrieval answers with the turn that ended most recently
+
+#### Scenario: Retrieval cost does not grow with a corrupted pointer
+- **WHEN** a player's pointers hold more values than the two the engine writes
+- **THEN** retrieval reads at most a bounded number of turns and still answers
 
 ### Requirement: No interactive-pacing assumptions
 No turn-processing step SHALL fail, time out, or degrade a turn because of elapsed

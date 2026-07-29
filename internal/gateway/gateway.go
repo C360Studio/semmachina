@@ -239,6 +239,25 @@ func (g *Gateway) Authenticate(ctx context.Context, credential string, conn Conn
 // Session returns the session bound to a connection.
 func (g *Gateway) Session(connID string) (*Session, bool) { return g.sessions.get(connID) }
 
+// SessionsFor resolves a player's live delivery targets from their ENTITY ID.
+//
+// This is the lookup targeted egress is built on, and the direction is the whole
+// point: a turn result names a player, never a connection, so delivery asks this
+// question at DELIVERY time rather than dialling an address captured when the
+// action was submitted. A reconnect between the two is therefore invisible — the
+// player's result reaches whatever socket they are on now.
+//
+// There is deliberately no companion that enumerates every session. Broadcast is
+// a disclosure defect rather than a performance one (upstream's output/websocket
+// fans every message out to every connected client), and the cheapest way to
+// make it impossible is to give the delivery path no way to name anybody but the
+// player it was handed.
+//
+// An empty answer means nobody is connected as that player, which is an ordinary
+// state and not an error: the durable retrieval surface is what answers a player
+// who was away, and email-cadence play makes "away" the common case.
+func (g *Gateway) SessionsFor(playerID string) []Session { return g.sessions.forPlayer(playerID) }
+
 // Disconnect drops a connection's session. The player entity is untouched: a
 // player who is not connected is not a player who stopped existing.
 func (g *Gateway) Disconnect(connID string) { g.sessions.remove(connID) }

@@ -75,6 +75,22 @@ const (
 	// would be invisible.
 	CategoryPlayerTurn = "player_turn"
 
+	// CategoryPlayerResolvedTurn is the pointer a player entity carries at the
+	// turn that most recently RESOLVED for them, and it is deliberately NOT
+	// registered for the reason CategoryPlayerTurn is not: no message of this type
+	// is ever published. It reaches the graph through the shared triple
+	// projection, which is the only place the foreign-subject pairing is checked —
+	// and on THIS pointer a wrong subject is a disclosure defect, not a
+	// bookkeeping one, because retrieval reads it to decide whose narration a
+	// player is shown.
+	//
+	// It is a SEPARATE category from CategoryPlayerTurn on purpose. The two
+	// pointers live on one entity and are written by one component, which makes
+	// them exactly the pair most likely to be handed one set of coordinates by
+	// accident — and two payloads answering to one (domain, category, version) is
+	// a collision the registry cannot report, because it never sees either.
+	CategoryPlayerResolvedTurn = "player_resolved_turn"
+
 	// CategoryTurnResume is the stranded-turn pass's attempt-counter record, and
 	// it is deliberately NOT registered for the reason CategoryTurnState is not:
 	// no message of this type is ever published. It exists so a counter reaches

@@ -162,12 +162,19 @@ func (s *Store) Close() error {
 // turn entity will carry.
 //
 // The WHOLE action is stored, not just its text. Two of its fields have no
-// other durable home once the stream message is acknowledged, and both are read
-// by something that has not been built yet:
+// other durable home once the stream message is acknowledged:
 //
-//   - Channel.ReplyTo is where the result goes. The egress adapter resolves the
-//     player's delivery target from it, and an action whose reply address died
-//     at the ack is a completed turn nobody can be told about.
+//   - Channel is the PROVENANCE of the submission: which adapter it arrived
+//     through and what address it named at the time. Whether that address is
+//     still worth anything is PER ADAPTER, and this is the field the distinction
+//     hangs on, so it is stated here rather than left to a reader to infer.
+//     For a WebSocket, ReplyTo is a connection identifier and is a DELIVERY HINT
+//     ONLY: it is invalid the moment the socket drops, and nothing may dial it.
+//     For an adapter with a durable address — an email box, a chat channel — it
+//     IS an address, and an adapter that has one may deliver to it. Targeted
+//     egress therefore resolves the live target from PLAYER ID at delivery time
+//     (internal/egress) and never from this field; an adapter whose transport has
+//     no live session table is the only kind that reads it as an address.
 //   - ArrivedAt is when the player acted. Deadline evaluation uses the action's
 //     ARRIVAL time and never processing time, so a turn that sat in a queue
 //     must not miss a deadline it made — and the arrival stamp has to survive

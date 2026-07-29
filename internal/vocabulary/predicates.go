@@ -190,6 +190,52 @@ const (
 	// after the write. With the recorder as the only writer, the pointer never
 	// names a turn that does not exist and that case never has to be decided.
 	PlayerTurnCurrent Predicate = "player.turn.current"
+
+	// PlayerTurnResolved names the turn this player most recently had RESOLVE.
+	// Its object is a turn ENTITY ID, and it is single-valued through the merge
+	// lane exactly as PlayerTurnCurrent is.
+	//
+	// # Why the current pointer cannot answer this
+	//
+	// PlayerTurnCurrent names the most recently ACCEPTED turn, so it answers "what
+	// happened last?" only while that turn happens to be terminal. The moment the
+	// player takes another action it names a LIVE turn, and nothing else in the
+	// graph names the terminal one before it — which leaves a retrieval surface
+	// with a history scan as its only way to answer, on a request path, forever.
+	// The edge runs turn → player (TurnActionPlayer), so that scan is
+	// O(campaign history) filtered by phase; this predicate is what makes the
+	// answer two reads instead, for the same reason PlayerTurnCurrent is.
+	//
+	// # It is a FACT, not a flag, for the reason the current pointer is
+	//
+	// "Which turn resolved last" is true the moment it is written and stays true
+	// until a later turn resolves. Nothing ever has to clear it, so there is no
+	// state in which failing to clear it strands a player — which is the failure a
+	// boolean "has an unread result" would have, and the one PlayerTurnCurrent was
+	// shaped to avoid.
+	//
+	// # Who writes it, and why it is the same writer
+	//
+	// The turn RECORDER, on the terminal transition, immediately after the phase
+	// is written. Every terminal phase in the engine goes through
+	// Recorder.transition — `complete` from the completion stage, and `failed`
+	// from the applier, the persona failure path, and the stranded-turn pass — so
+	// the recorder is the only thing that knows a turn BECAME terminal, exactly as
+	// it is the only thing that knows a turn became real. Moving this write onto a
+	// consumer of the resolved-turn notification would put it behind a durable
+	// consumer whose redeliveries can arrive out of order, and a pointer at "the
+	// most recent" written out of order is a pointer that walks backwards.
+	//
+	// # Staleness degrades toward an older answer, never toward silence
+	//
+	// The phase is written first and this pointer second, so a crash in the gap
+	// leaves this naming the player's PREVIOUS terminal turn. That gap is covered
+	// at the READ rather than by a second write: a retrieval asking for the most
+	// recent terminal result reads PlayerTurnCurrent too, and in exactly that gap
+	// the current pointer still names the turn that just ended. Neither pointer is
+	// trusted to BE the answer; both are addresses to check, and each turn's own
+	// recorded phase and phase timestamp decide between them.
+	PlayerTurnResolved Predicate = "player.turn.resolved"
 )
 
 // World predicates written by effect intents.
@@ -259,6 +305,7 @@ var allPredicates = []Predicate{
 	WorldEntityDescription,
 	PlayerCharacterCurrent,
 	PlayerTurnCurrent,
+	PlayerTurnResolved,
 	CharacterStatusCurrent,
 	WorldLocationCurrent,
 	CharacterAttributeHealth,
@@ -405,8 +452,25 @@ var (
 var playerTurnPredicates = []Predicate{PlayerTurnCurrent}
 
 // PlayerTurnPredicates returns the predicates the turn recorder writes on the
-// player entity.
+// player entity when it ACCEPTS a turn.
 func PlayerTurnPredicates() []Predicate { return slices.Clone(playerTurnPredicates) }
+
+// playerResolvedTurnPredicates is the pointer the turn recorder writes on the
+// PLAYER entity when a turn RESOLVES: which turn ended most recently.
+//
+// A second list rather than an addition to playerTurnPredicates, for the reason
+// the turn's own state is three lists and not one: the two pointers are written
+// at different moments by different calls, and a single projection carrying both
+// would force each write to restate the other's fact. The accept-time write
+// would have to name a resolved turn it knows nothing about, and the
+// resolution-time write would have to restate a current pointer it has no
+// business moving — which is precisely how the resolved pointer would end up
+// dragging a player off a turn they are still running.
+var playerResolvedTurnPredicates = []Predicate{PlayerTurnResolved}
+
+// PlayerResolvedTurnPredicates returns the predicates the turn recorder writes
+// on the player entity when a turn reaches a terminal phase.
+func PlayerResolvedTurnPredicates() []Predicate { return slices.Clone(playerResolvedTurnPredicates) }
 
 // TurnAcceptedPredicates returns the predicates the turn's birth record writes.
 func TurnAcceptedPredicates() []Predicate { return slices.Clone(turnAcceptedPredicates) }

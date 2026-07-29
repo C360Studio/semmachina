@@ -74,6 +74,28 @@ func RequireStorageRef(field, value string) error {
 	return nil
 }
 
+// MaxProseBytes bounds one turn's narration.
+//
+// Prose lives in ObjectStore rather than on a triple, so the triple-object
+// budget does not apply and this bound is doing a different job: it is the
+// narrator's half of the same argument every other LLM-authored field makes.
+// Unbounded, the first thing that would stop a runaway generation is NATS's 1 MB
+// max payload — a transport failure, opaque, after the tokens are already spent
+// — and the object it would leave behind is read back by the egress path, the
+// ledger reader, and the chronicler.
+//
+// 16 KiB is roughly 2,700 words: an order of magnitude past the "two to four
+// sentences for an ordinary turn" the starter world's narrator is told to write,
+// and an order of magnitude short of a chapter. A narrator that needs more than
+// this is not narrating a turn.
+//
+// It lives HERE rather than in the content store because it now bounds two
+// things: the artifact the store writes, and the prose a delivered TurnDelivery
+// carries to a player. Two numbers would mean prose that stores durably and then
+// cannot be delivered — the failure that only appears on the turn a narrator
+// finally runs long.
+const MaxProseBytes = 16 * 1024
+
 // MaxTripleObjectBytes bounds one triple object the engine writes.
 //
 // The largest LEGITIMATE object in the turn vocabulary is a six-part entity ID,

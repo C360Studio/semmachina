@@ -265,7 +265,7 @@ type Outcome struct {
 // NumAckPending and NumRedelivered non-zero and logs a WARN every attempt —
 // while a terminate has no counter anywhere.
 func (w *Writer) Handle(ctx context.Context, data []byte) error {
-	event, err := parseResolved(data)
+	event, err := ParseResolvedEvent(data)
 	if err != nil {
 		w.logger.Error("resolved-turn notification refused permanently", "error", err)
 		return natsclient.TerminateDelivery(err)
@@ -419,8 +419,14 @@ func readManifest(
 	return manifest, nil
 }
 
-// resolvedEvent is one decoded `semmachina.turn.resolved` notification.
-type resolvedEvent struct {
+// ResolvedEvent is one decoded `semmachina.turn.resolved` notification.
+//
+// Exported because that subject now has TWO consumers — this archive and the
+// player-egress path that owes the player an answer — and the notification's wire
+// shape is upstream's rule-publication map rather than one of ours. A second
+// decoding of somebody else's shape is a second thing to get wrong when it moves,
+// and the two consumers would disagree about which entity a rule fired for.
+type ResolvedEvent struct {
 	// TurnEntityID is the turn's six-part entity ID.
 	TurnEntityID string
 	// TurnID is the turn identity — the instance segment of TurnEntityID.
@@ -440,30 +446,35 @@ type rulePublication struct {
 	Subject  string `json:"subject"`
 }
 
-// parseResolved decodes a resolved-turn notification and holds it to the turn's
-// identity contract.
+// ParseResolvedEvent decodes a resolved-turn notification and holds it to the
+// turn's identity contract.
 //
 // Everything it rejects is permanent for that message: bytes that are not the
 // rule engine's publication shape, an entity ID that is not canonical, and an
 // entity that is not a TURN. The last is the interesting refusal — a rule whose
-// pattern was widened to characters or scenes would otherwise hand the archive a
-// perfectly valid entity ID, and a manifest would be composed for something that
+// pattern was widened to characters or scenes would otherwise hand a consumer a
+// perfectly valid entity ID, and a record would be composed for something that
 // has no phase.
-func parseResolved(data []byte) (resolvedEvent, error) {
+//
+// Exported for the second consumer of this subject, the player-egress path. It
+// lives here rather than in a shared package because this is where the shape was
+// first read and where the test that pins it against the stage-trigger parser
+// already lives; moving it would buy a package and lose that pairing.
+func ParseResolvedEvent(data []byte) (ResolvedEvent, error) {
 	var published rulePublication
 	if err := json.Unmarshal(data, &published); err != nil {
-		return resolvedEvent{}, fmt.Errorf("decode resolved-turn notification: %w", err)
+		return ResolvedEvent{}, fmt.Errorf("decode resolved-turn notification: %w", err)
 	}
 	if published.EntityID == "" {
-		return resolvedEvent{}, fmt.Errorf(
+		return ResolvedEvent{}, fmt.Errorf(
 			"resolved-turn notification on %q names no entity; a rule payload carries the reference and "+
-				"nothing else, so without it there is no turn to archive", published.Subject)
+				"nothing else, so without it there is no turn to act on", published.Subject)
 	}
 	turnID, err := turnIDOf(published.EntityID)
 	if err != nil {
-		return resolvedEvent{}, err
+		return ResolvedEvent{}, err
 	}
-	return resolvedEvent{TurnEntityID: published.EntityID, TurnID: turnID}, nil
+	return ResolvedEvent{TurnEntityID: published.EntityID, TurnID: turnID}, nil
 }
 
 // turnIDOf reads the turn identity out of a turn entity's six-part ID.

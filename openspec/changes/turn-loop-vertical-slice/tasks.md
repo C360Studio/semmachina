@@ -465,7 +465,7 @@ speaks and it is expensive to retrofit.
       because that is the only place a player is still connected to be told — `turn/intake.go`
       already argues this from the other side, in the comment explaining why a TERM there is
       the quietest failure in the component. Queueing is a later change; refusing is the MVP
-- [ ] 9.2 Implement **targeted** egress: deliver a turn's result to the player it belongs to
+- [x] 9.2 Implement **targeted** egress: deliver a turn's result to the player it belongs to
       and to no other connected player, resolving the connection from `player_id` at
       DELIVERY time rather than from an identifier captured at submission.
       `ChannelBinding.ReplyTo` is a durable address where the adapter has one (email, a chat
@@ -473,17 +473,26 @@ speaks and it is expensive to retrofit.
       is rather than leaving `content.Store`'s "the egress adapter resolves the player's
       delivery target from it" to mean both. Retrieval from durable state, never adapter
       memory: by `action_id` or `turn_id`, plus **last TERMINAL result** — not "last
-      completed", because a failed turn has no narration by design and a surface that answers
-      only for completed turns leaves the player who most needs an answer with silence
-      indistinguishable from a turn still running. The ledger already archives failed turns
+      completed". A failed turn's narration is not guaranteed (one that died before the
+      narrator ran has none; one abandoned after its prose landed has some — see
+      `internal/resume`), so a surface keyed on narration cannot answer for it at all, and one
+      keyed on completion leaves the player who most needs an answer with silence
+      indistinguishable from a turn still running. The ledger already archives failed turns.
+      **Two seams 9.0 and 9.1 left open, both to be closed here rather than discovered:**
+      (a) `player.turn.current` names the most recent turn, which answers "last terminal" only
+      while that turn IS terminal — when a turn is live, nothing names the previous terminal
+      one; (b) `TurnResult.NarrationRef` is a storage reference and no client can resolve an
+      `obj://`, so who dereferences it, and whether the delivered document differs from the
+      published one, is undecided
 - [ ] 9.3 Local-only security posture, stated and tested rather than assumed: what
       authenticates a session on an instance-per-world box, what happens to an unauthenticated
       socket, and what a second connection claiming the same `player_id` does. MVP may answer
       these narrowly — it may NOT leave them undefined, because every one of them is a
       disclosure decision and the egress path above is where a wrong answer shows up as one
       player reading another's fiction.
-      **Two obligations 9.1 deliberately left here rather than solving in the wrong layer**,
-      recorded so the transport author inherits them instead of inferring them from a comment:
+      **Three obligations 9.1 and 9.2 deliberately left here rather than solving in the wrong
+      layer**, recorded so the transport author inherits them instead of inferring them from a
+      comment:
       (a) `gateway.MaxRequestBytes` is a limit **the transport must apply to its own reader**
       (`websocket.Conn.SetReadLimit`, `http.MaxBytesReader`, or the equivalent). `Gateway.Submit`
       takes a `[]byte`, so the frame is already wholly in memory by the time its own check runs —
@@ -496,7 +505,19 @@ speaks and it is expensive to retrofit.
       cap, and an eviction policy are all decisions about what happens to a player who goes
       quiet, and this project's pacing rule makes an idle-session timeout the exact
       interactive-pacing assumption email-cadence play forbids. Connection lifecycle belongs
-      with the rest of the posture here
+      with the rest of the posture here; (c) **a connection id must never be reused without
+      going through `Authenticate`** — the sharpest of the three, and NEW with 9.2. The session
+      table is now indexed by player as well as by connection, so a stale session is no longer
+      a leaked map entry: it is a live DELIVERY TARGET. A transport that recycles `c1` onto a
+      fresh socket without re-authenticating leaves the previous session bound, and that socket
+      can both submit actions as the old player and receive that player's fiction. Nothing in
+      the gateway can detect it — `Authenticate` is the only place a connection's identity is
+      established, so a transport that skips it presents an impersonation as an ordinary
+      session. The table's own handling is correct and reviewed: `put` unbinds a connection
+      from its previous player before rebinding, and `unbind` deletes empty player entries, so
+      the index adds no growth the connection index did not already have. The obligation is on
+      the transport, and it is stated here because a comment in `session.go` is not where the
+      transport author will look
 
 ## 10. Composition, mock-LLM E2E, and gates
 

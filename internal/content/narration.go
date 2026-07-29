@@ -4,24 +4,19 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
 // MaxProseBytes bounds one turn's narration.
 //
-// The prose lives in ObjectStore rather than on a triple, so the triple-object
-// budget does not apply and the bound is doing a different job: it is the
-// narrator's half of the same argument every other LLM-authored field here
-// makes. Unbounded, the first thing that would stop a runaway generation is
-// NATS's 1 MB max payload — a transport failure, opaque, after the tokens are
-// already spent — and the object it would leave behind is read back by the
-// egress adapter, the ledger reader, and the chronicler.
-//
-// 16 KiB is roughly 2,700 words: an order of magnitude past the "two to four
-// sentences for an ordinary turn" the starter world's narrator is told to
-// write, and an order of magnitude short of a chapter. A narrator that needs
-// more than this is not narrating a turn.
-const MaxProseBytes = 16 * 1024
+// It is payload.MaxProseBytes, consumed rather than restated, for the reason
+// RefScheme is: the bound has TWO enforcement points now — the stored artifact
+// here, and the delivered document that carries the prose to a player — and a
+// store that bounded prose by one number while the protocol bounded it by
+// another would let a narration land durably and then be undeliverable. The
+// argument for the number lives on the constant.
+const MaxProseBytes = payload.MaxProseBytes
 
 // Narration is one turn's narration prose as the narrator committed it.
 //

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
@@ -386,11 +387,29 @@ func confirmAccepted(stored *graph.EntityState, turnEntityID string) error {
 // turn that is only a referential stub is queryable and factless, so "no phase
 // recorded" read off one would be a false negative.
 func (r *Recorder) Current(ctx context.Context, turnEntityID string) (vocabulary.TurnPhase, error) {
+	_, phase, err := r.currentState(ctx, turnEntityID)
+	return phase, err
+}
+
+// currentState reads the turn and its phase together.
+//
+// It exists because a TERMINAL transition needs one more fact off the same
+// record — which player the turn belongs to — and re-reading the entity to get
+// it would be a second read whose answer could differ from the one the guard
+// just made its decision on.
+func (r *Recorder) currentState(
+	ctx context.Context,
+	turnEntityID string,
+) (*graph.EntityState, vocabulary.TurnPhase, error) {
 	state, err := r.store.GetEntity(ctx, turnEntityID)
 	if err != nil {
-		return "", fmt.Errorf("read turn entity %s: %w", turnEntityID, err)
+		return nil, "", fmt.Errorf("read turn entity %s: %w", turnEntityID, err)
 	}
-	return PhaseOf(state, turnEntityID)
+	phase, err := PhaseOf(state, turnEntityID)
+	if err != nil {
+		return nil, "", err
+	}
+	return state, phase, nil
 }
 
 // PhaseOf reads a turn's recorded phase off an entity somebody else fetched.
@@ -539,6 +558,36 @@ func HeldTurns(state *graph.EntityState) (held []string, unreadable int) {
 	return held, unreadable
 }
 
+// ResolvedTurns lists the turn entity ids a player's RESOLVED pointer names, and
+// counts the ones it could not read.
+//
+// The shape mirrors HeldTurns, and for the same reason: a slice rather than one
+// value, because "how many values does this predicate hold" is what distinguishes
+// a merge-lane write from an append-lane one, and a reader that took the first
+// would answer a coin flip about what happened to this player last.
+//
+// Exported because it also has two callers on opposite sides — this package
+// deciding whether a repair is needed, and the retrieval surface deciding which
+// turn to answer with. A second implementation would be a second opinion about
+// what an anomalous pointer means.
+func ResolvedTurns(state *graph.EntityState) (resolved []string, unreadable int) {
+	if state == nil {
+		return nil, 0
+	}
+	for _, triple := range state.Triples {
+		if triple.Predicate != vocabulary.PlayerTurnResolved.String() {
+			continue
+		}
+		turnEntityID, ok := triple.Object.(string)
+		if !ok || turnEntityID == "" {
+			unreadable++
+			continue
+		}
+		resolved = append(resolved, turnEntityID)
+	}
+	return resolved, unreadable
+}
+
 // Outcome is what a transition attempt did. It never reaches the graph — the
 // graph records phases, not attempts — so it is an in-process answer, not
 // vocabulary.
@@ -670,7 +719,7 @@ func (r *Recorder) transition(
 		return Transition{}, err
 	}
 
-	previous, err := r.Current(ctx, turnEntityID)
+	stored, previous, err := r.currentState(ctx, turnEntityID)
 	if err != nil {
 		return Transition{}, err
 	}
@@ -681,6 +730,16 @@ func (r *Recorder) transition(
 			TurnEntityID: turnEntityID, From: previous, To: to, Fault: fault}
 	}
 	if outcome != OutcomeAdvanced {
+		// A DECLINED terminal transition is the redelivery of a transition that
+		// already happened, and it is the only thing that can still land a
+		// resolved-turn pointer whose first write was lost. See
+		// repairResolvedPointer for why the repair is guarded and the write on
+		// the advancing path below is not.
+		if to.IsTerminal() && previous.IsTerminal() {
+			if err := r.repairResolvedPointer(ctx, stored, turnID, turnEntityID); err != nil {
+				return Transition{}, err
+			}
+		}
 		return Transition{Previous: previous, Phase: previous, Outcome: outcome}, nil
 	}
 
@@ -694,7 +753,197 @@ func (r *Recorder) transition(
 	if _, err := r.store.MergeTriples(ctx, turnEntityID, triples); err != nil {
 		return Transition{}, fmt.Errorf("record phase %q on turn %s: %w", to, turnEntityID, err)
 	}
+
+	if to.IsTerminal() {
+		if err := r.pointPlayerAtResolvedTurn(ctx, stored, turnID, turnEntityID); err != nil {
+			return Transition{}, err
+		}
+	}
 	return Transition{Previous: previous, Phase: to, Outcome: OutcomeAdvanced}, nil
+}
+
+// pointPlayerAtResolvedTurn records on the PLAYER entity which turn most
+// recently ended for them.
+//
+// # Why the recorder owns this write too
+//
+// For the reason it owns pointPlayerAtTurn: it is the only thing that knows the
+// fact became true. Every terminal phase in this engine is written by the call
+// above — `complete` from the completion stage, and `failed` from the applier,
+// the persona failure path and the stranded-turn pass all reaching Fail — so
+// this is the one place in the process that can say "this turn ended, now" as
+// opposed to "this turn is ended", which is a different and much weaker claim.
+//
+// The alternative was a consumer of the resolved-turn notification, and it is
+// worse in a way that only shows up under load: a durable consumer's
+// redeliveries arrive in whatever order the broker produces them, and a pointer
+// at THE MOST RECENT written out of order is a pointer that walks backwards.
+// Here the writes happen in the same order the turns end, because ending them is
+// what triggers the writes.
+//
+// # After the phase, never before
+//
+// The phase is written first, so a failure in the gap leaves the pointer naming
+// the player's PREVIOUS terminal turn — an older answer, never a missing one.
+// The reverse order would leave the pointer naming a turn that had not ended,
+// and a retrieval reading it would find a live turn where a result should be and
+// have nothing else to fall back on.
+//
+// # A failure here is transient, not a resolved turn
+//
+// It returns an ordinary error, so the stage naks and redelivers rather than
+// acknowledging: the phase is written and the turn really has ended, the
+// redelivery declines the transition, and the DECLINED path repairs the pointer.
+// Swallowing it would leave the player's "what happened last?" permanently
+// answered with the turn before this one, silently.
+//
+// # This write is UNGUARDED, and can walk backwards
+//
+// It is unguarded on purpose — the turn just became terminal, so no read is
+// needed to know the fact is new. But two turns can be live at once (the
+// documented one-extra-turn window), and if the newer resolves first, the older
+// one resolving afterwards overwrites the pointer with an older turn.
+//
+// That is harmless only because of how the pointer is READ. Results.Latest does
+// not trust which pointer named a candidate; it reads both, reads each named
+// turn's own recorded phase timestamp, and answers with the turn that actually
+// ended most recently. Guarding this write instead would need a read-modify-write
+// with no compare-and-swap to protect it (F15) — a race on the very fact
+// retrieval depends on, bought to remove one a reader already handles.
+func (r *Recorder) pointPlayerAtResolvedTurn(
+	ctx context.Context,
+	state *graph.EntityState,
+	turnID, turnEntityID string,
+) error {
+	playerID, err := playerOf(state, turnEntityID)
+	if err != nil {
+		return err
+	}
+	pointer := &payload.PlayerResolvedTurn{
+		PlayerID:     playerID,
+		TurnID:       turnID,
+		TurnEntityID: turnEntityID,
+	}
+	triples, err := pointer.Triples(playerID, Source, r.now().UTC())
+	if err != nil {
+		return err
+	}
+	if _, err := r.store.MergeTriples(ctx, playerID, triples); err != nil {
+		return fmt.Errorf(
+			"point player %s at their resolved turn %s: %w; the phase is written, so this is retried on "+
+				"redelivery rather than failing the turn", playerID, turnEntityID, err)
+	}
+	return nil
+}
+
+// repairResolvedPointer lands a resolved-turn pointer whose first write was lost,
+// and refuses to land one that would run backwards.
+//
+// The guard is player.turn.current, and it is the cheapest sufficient one. That
+// pointer names the most recently ACCEPTED turn, so while it names THIS turn the
+// player has started nothing since — which makes this turn, having ended, the
+// most recent one to end. When it names a different turn the player has moved on,
+// and repairing here would overwrite a newer turn's answer with an older one.
+//
+// The alternative guard was comparing the two turns' terminal timestamps, which
+// is exact and needs a read-modify-write with no compare-and-swap to protect it
+// (F15). It would trade a bounded, self-correcting staleness for a race on the
+// one fact retrieval depends on, so it is refused.
+//
+// # It is a BOUNDED STALENESS, not a retry that eventually lands
+//
+// Stating that precisely, because the word "repair" invites the wrong reading.
+// When the guard declines, this returns nil and the caller ACKNOWLEDGES — the
+// repair is not deferred to a later delivery, it is gone. So the case it gives
+// up is: two turns live at once, the older resolves first, its pointer write
+// fails, its redelivery finds the current pointer on the newer turn and declines
+// the repair. The resolved pointer then names a turn OLDER than the one that just
+// ended, until the newer turn resolves and writes it — which it will, on its own
+// terminal transition, with no further redelivery needed.
+//
+// So the guarantee is one bounded interval of staleness followed by correctness,
+// never "it lands eventually". And through that whole interval Results.Latest
+// still answers correctly anyway, because player.turn.current names the newer
+// live turn and the older terminal one is the only candidate that composes.
+func (r *Recorder) repairResolvedPointer(
+	ctx context.Context,
+	state *graph.EntityState,
+	turnID, turnEntityID string,
+) error {
+	playerID, err := playerOf(state, turnEntityID)
+	if err != nil {
+		return err
+	}
+	player, err := r.store.GetEntity(ctx, playerID)
+	switch {
+	case errors.Is(err, graphio.ErrEntityNotFound):
+		// Nothing to repair a pointer on. A player entity that is gone is not a
+		// player waiting for an answer, and refusing here would nak forever over
+		// a turn that has already ended.
+		return nil
+	case err != nil:
+		return fmt.Errorf("read player %s to repair their resolved-turn pointer: %w", playerID, err)
+	}
+
+	resolved, _ := ResolvedTurns(player)
+	if slices.Contains(resolved, turnEntityID) {
+		// Already landed. The common case on a redelivery, and worth one read to
+		// avoid: an unconditional write would churn the pointer's timestamp on
+		// every duplicate trigger.
+		return nil
+	}
+	held, _ := HeldTurns(player)
+	if !slices.Contains(held, turnEntityID) {
+		return nil
+	}
+
+	pointer := &payload.PlayerResolvedTurn{
+		PlayerID:     playerID,
+		TurnID:       turnID,
+		TurnEntityID: turnEntityID,
+	}
+	triples, err := pointer.Triples(playerID, Source, r.now().UTC())
+	if err != nil {
+		return err
+	}
+	if _, err := r.store.MergeTriples(ctx, playerID, triples); err != nil {
+		return fmt.Errorf(
+			"repair player %s's pointer at their resolved turn %s: %w", playerID, turnEntityID, err)
+	}
+	return nil
+}
+
+// playerOf reads the player a turn belongs to off its birth record.
+//
+// A turn without one is reported rather than skipped, and it is the right
+// polarity even though the phase is already written: a turn that names no player
+// cannot be delivered to anybody and cannot be archived either — the ledger's
+// Compose refuses it for the same fact — so it is already in the loud class. The
+// alternative is a turn that quietly resolves for nobody.
+func playerOf(state *graph.EntityState, turnEntityID string) (string, error) {
+	var values []any
+	for _, triple := range state.Triples {
+		if triple.Predicate == vocabulary.TurnActionPlayer.String() {
+			values = append(values, triple.Object)
+		}
+	}
+	switch len(values) {
+	case 0:
+		return "", &RecordError{TurnEntityID: turnEntityID, Err: fmt.Errorf(
+			"carries no %s; it is written by the turn's atomic create, so a turn without one cannot be "+
+				"delivered to anybody", vocabulary.TurnActionPlayer)}
+	case 1:
+	default:
+		return "", &RecordError{TurnEntityID: turnEntityID, Err: fmt.Errorf(
+			"holds %d values for the single-valued %s; a turn belonging to two players would resolve for "+
+				"whichever one a reader happened to take", len(values), vocabulary.TurnActionPlayer)}
+	}
+	playerID, ok := values[0].(string)
+	if !ok || playerID == "" {
+		return "", &RecordError{TurnEntityID: turnEntityID, Err: fmt.Errorf(
+			"records a %T for %s, want a player entity id", values[0], vocabulary.TurnActionPlayer)}
+	}
+	return playerID, nil
 }
 
 // classify decides what a proposed transition means. A non-empty fault means the

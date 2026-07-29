@@ -24,9 +24,9 @@ func resolvedNotification(t *testing.T, entityID string) []byte {
 }
 
 func TestParseResolved_ReadsTheTurnTheRuleFiredFor(t *testing.T) {
-	event, err := parseResolved(resolvedNotification(t, "c360.semmachina.world1.starter.turn.turn-act-1"))
+	event, err := ParseResolvedEvent(resolvedNotification(t, "c360.semmachina.world1.starter.turn.turn-act-1"))
 	if err != nil {
-		t.Fatalf("parseResolved: %v", err)
+		t.Fatalf("ParseResolvedEvent: %v", err)
 	}
 	if event.TurnEntityID != "c360.semmachina.world1.starter.turn.turn-act-1" {
 		t.Fatalf("entity id = %q", event.TurnEntityID)
@@ -61,9 +61,9 @@ func TestParseResolved_RefusesANotificationThatCannotArchiveAnything(t *testing.
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			event, err := parseResolved(tc.data)
+			event, err := ParseResolvedEvent(tc.data)
 			if err == nil {
-				t.Fatalf("parseResolved accepted %+v", event)
+				t.Fatalf("ParseResolvedEvent accepted %+v", event)
 			}
 			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("rejection reason %q does not mention %q", err.Error(), tc.wantErr)
@@ -98,7 +98,7 @@ func TestResolvedEvent_ReadsTheSameWireShapeAsTheStageTriggerParser(t *testing.T
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			event, ledgerErr := parseResolved(tc.data)
+			event, ledgerErr := ParseResolvedEvent(tc.data)
 			trigger, stageErr := stage.ParseTrigger(tc.data)
 
 			if (ledgerErr == nil) != (stageErr == nil) {

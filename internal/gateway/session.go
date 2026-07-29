@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/c360studio/semstreams/pkg/types"
@@ -36,14 +37,20 @@ type Connection struct {
 	// Adapter names the transport, from the closed channel vocabulary.
 	Adapter vocabulary.ChannelAdapter
 	// ReplyTo is the adapter-specific delivery address stamped onto the action's
-	// channel binding.
+	// channel binding, and WHAT IT IS WORTH IS PER ADAPTER.
 	//
-	// For a WebSocket it is the connection id, and that is a DELIVERY HINT
-	// rather than a durable address: it is invalid the moment the socket drops.
-	// Task 9.2's egress must resolve the live connection from the player id at
-	// delivery time and must not treat this as an address it can dial. For an
-	// adapter that has a durable address — an email box, a chat channel — it is
-	// one, which is exactly why the per-adapter contract has to say which it is.
+	// For a WebSocket it is the connection id, and that is a DELIVERY HINT and
+	// not a durable address: it is invalid the moment the socket drops, so
+	// nothing may dial it. Targeted egress resolves the live connection from the
+	// PLAYER ID at delivery time instead (Gateway.SessionsFor), which is why a
+	// reconnect between submission and resolution is invisible.
+	//
+	// For an adapter whose transport has a durable address — an email box, a chat
+	// channel — it IS an address, and that adapter's sink may deliver to it
+	// directly, because there is no live session to resolve. The engine records
+	// it either way and decides nothing: which of the two an adapter is, is the
+	// adapter's own contract to state, and this comment is the fixed point both
+	// halves are stated against.
 	ReplyTo string
 }
 
@@ -161,15 +168,28 @@ func (r *Roster) Authenticate(_ context.Context, credential string) (string, err
 	return playerID, nil
 }
 
-// sessions is the live connection → session table.
+// sessions is the live session table, indexed BOTH ways.
 //
-// Keyed by CONNECTION, because that is what the transport has when a frame
-// arrives. It deliberately carries no player → connection index: resolving a
-// delivery target from a player id is task 9.2's, and what a SECOND connection
-// claiming the same player means is task 9.3's — building either here would be
-// guessing at a contract those tasks exist to state. What this table promises is
-// only what ingress needs: a connection either has a session or does not, and a
-// closed connection has none.
+// By CONNECTION because that is what the transport has when a frame arrives, and
+// by PLAYER because that is what a turn result is addressed to. Two questions,
+// one table, one lifecycle — and that is the whole design decision here.
+//
+// A separate egress-side registry was the alternative and it is worse in a way
+// that only appears at the wrong moment: the transport would have to register a
+// connection twice and drop it twice, so the two tables would drift, and a
+// connection present in the delivery index and absent from the session index is
+// a socket that can receive a player's fiction without being able to submit as
+// them. One table cannot drift from itself.
+//
+// The index deliberately offers NO way to enumerate every session. That is the
+// structural half of targeted delivery: the egress path is handed a lookup by
+// player id and nothing else, so broadcast is not a thing it chooses against —
+// it is a thing it cannot express. Upstream's output/websocket iterates its whole
+// client map, which is exactly the shape this omission forecloses.
+//
+// What a SECOND concurrent connection claiming one player means is still task
+// 9.3's contract to state; this holds both and delivers to both, which is the
+// answer that decides nothing.
 //
 // # It has no bound, no expiry, and no way to notice a connection that left
 //
@@ -189,16 +209,35 @@ func (r *Roster) Authenticate(_ context.Context, credential string) (string, err
 type sessions struct {
 	mu       sync.RWMutex
 	byConnID map[string]*Session
+	// byPlayerID is a set of connection ids per player. A SET rather than a
+	// slice because the same socket authenticating twice must not become two
+	// delivery targets — every result to that player would then be written down
+	// one wire twice — and because removal is by connection id.
+	byPlayerID map[string]map[string]bool
 }
 
 func newSessions() *sessions {
-	return &sessions{byConnID: map[string]*Session{}}
+	return &sessions{byConnID: map[string]*Session{}, byPlayerID: map[string]map[string]bool{}}
 }
 
+// put binds a connection to a player, replacing whatever that connection was
+// bound to before.
+//
+// The unbind-first step is not bookkeeping. A connection that re-authenticates
+// as a DIFFERENT player would otherwise stay in the first player's index, which
+// makes that player's next result deliverable to a socket that is now somebody
+// else's — a disclosure defect with no visible cause and no error anywhere.
 func (s *sessions) put(session *Session) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.unbind(session.Connection.ID)
 	s.byConnID[session.Connection.ID] = session
+	connections, ok := s.byPlayerID[session.PlayerID]
+	if !ok {
+		connections = map[string]bool{}
+		s.byPlayerID[session.PlayerID] = connections
+	}
+	connections[session.Connection.ID] = true
 }
 
 func (s *sessions) get(connID string) (*Session, bool) {
@@ -211,5 +250,55 @@ func (s *sessions) get(connID string) (*Session, bool) {
 func (s *sessions) remove(connID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.unbind(connID)
 	delete(s.byConnID, connID)
+}
+
+// unbind drops a connection from its player's index. The caller holds the lock.
+//
+// The empty player entry is deleted rather than left behind, so the index does
+// not accumulate one map per player who has ever connected. That is the only
+// unbounded growth this table could have that the connection index does not
+// already have — and the connection index's own lack of a bound is stated above
+// and owned by task 9.3.
+func (s *sessions) unbind(connID string) {
+	previous, ok := s.byConnID[connID]
+	if !ok {
+		return
+	}
+	connections := s.byPlayerID[previous.PlayerID]
+	delete(connections, connID)
+	if len(connections) == 0 {
+		delete(s.byPlayerID, previous.PlayerID)
+	}
+}
+
+// forPlayer returns COPIES of the sessions currently bound to a player, sorted
+// by connection id.
+//
+// Copies because the caller fans out over the answer while other connections
+// come and go, and a slice of pointers into the live table is a race the caller
+// cannot see. Sorted so delivery order is an assertable fact rather than a map
+// iteration.
+//
+// An empty answer is a normal outcome, not an error: a player who is not
+// connected is a player the durable retrieval surface answers, and at
+// email cadence "nobody is on the socket" is the usual case rather than a fault.
+func (s *sessions) forPlayer(playerID string) []Session {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	connections := s.byPlayerID[playerID]
+	if len(connections) == 0 {
+		return nil
+	}
+	out := make([]Session, 0, len(connections))
+	for connID := range connections {
+		if session, ok := s.byConnID[connID]; ok {
+			out = append(out, *session)
+		}
+	}
+	slices.SortFunc(out, func(a, b Session) int {
+		return strings.Compare(a.Connection.ID, b.Connection.ID)
+	})
+	return out
 }
