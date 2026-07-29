@@ -220,7 +220,14 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       the banded verdict schema and closed classes **in the executor**, not via provider
       strict-mode (F4); emit only rule-matchable scalar triples and carry banded intents by
       reference (F6); rejection test for out-of-vocabulary exit; `MaxIterations` cap with
-      explicit failure
+      explicit failure. Two constraints from 10.2: **the terminal tool must not ask the
+      model for identifiers the engine already knows** (turn, action, scene) — they cannot
+      be scripted deterministically and a live model would hallucinate them, so the executor
+      injects identity and the model supplies judgment only. And decide deliberately whether
+      the adjudicator exits through upstream's existing `decide` tool — which F4 names as
+      the ready-made closed-vocabulary seam, with a rule-supplied allowlist enforced in the
+      executor — or a custom terminal tool; the mock's scenario pack uses placeholder tool
+      names that must be renamed to match whichever is chosen
 - [ ] 7.3 Configure the narrator loop + terminal tool (prose ref + rule-opaque metadata
       only, no mutation-capable tools); prose-first-ref-last write ordering per narration
       spec
@@ -299,11 +306,28 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       from a half-imported world is the failure this prevents — and the context assembler
       (7.1) is the silent reader: stub-filtering catches referenced-but-unborn entities, but
       never-published ones just make a scene quietly smaller
-- [ ] 10.2 Implement the mock model endpoint (HTTP stub honoring the model-endpoint
-      contract, scripted by persona role + scenario fixture; re-derived, no semdragon
-      imports)
-- [ ] 10.3 E2E scenarios (token-free, full production wire): no-roll turn; miss / partial /
-      full band turns; invalid-effect rejection turn; duplicate action delivery;
+- [x] 10.2 **Pulled forward ahead of 7.2/7.3** so the persona loops are testable end-to-end
+      as written. `internal/mockmodel`: HTTP stub on the OpenAI-compatible chat-completions
+      contract the pinned client actually speaks, responses built from the framework's own
+      wire types. Selection is **structural** (model + declared tool names, never prompt
+      text — `AgentRequest.Role` is not forwarded over HTTP); subsuming matches are rejected
+      at load, and unmatched/unscripted/exhausted/streaming are all loud 400s with stable
+      codes. **There is no default response.** Script exhaustion is the duplicate-delivery
+      assertion: a re-invoked persona gets a refusal naming the role rather than quietly
+      buying a second billed call. Bad output is first-class — out-of-vocabulary arguments,
+      raw bytes no encoder would produce, prose with no exit, truncation, provider errors,
+      and `repeat` for a persona that never terminates (so 7.2's `MaxIterations` has
+      something real to stop). Determinism proven behaviourally *and* by an AST scan banning
+      clocks and randomness. Re-derived from the semstreams contract; semdragon not read
+      (M6). 31 mutations, 4 survivors fixed — see F18
+- [ ] 10.3 E2E scenarios (token-free, full production wire). **Band scenarios are selected
+      by seed, not by script** (F19): a verdict declares all three bands and the seeded dice
+      choose, so supply the (campaign_seed, turn_id) pair whose derived roll lands in each
+      band and pin them as fixture constants — if they stop producing their bands, seeded
+      replay has broken. **Assert provider shape at the wire** where fidelity matters (F18):
+      the client normalizes token totals, finish reasons, and malformed arguments, so
+      asserting through it hides the defects the mock exists to produce. Scenarios: no-roll
+      turn; miss / partial / full band turns; invalid-effect rejection turn; duplicate action delivery;
       crash-resume at each phase (kill between roll and apply at minimum); reconnect
       retrieval; email-cadence gap (clock-independent processing)
 - [ ] 10.4 CI workflow: lint (revive-clean), `go test -race ./...`, mock-LLM e2e; no live

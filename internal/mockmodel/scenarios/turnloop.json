@@ -1,0 +1,619 @@
+{
+  "description": "Turn-loop scenarios for the token-free end-to-end suite. THREE THINGS TO KNOW BEFORE EDITING. (1) Tool names and argument shapes are DATA, not contract: the adjudicator's and narrator's terminal tools are defined where those loops are configured, and this file follows them. Nothing in the stub reads these names. (2) Effect targets are six-part entity IDs, so they are bound to one world instance — org 'c360', namespace 'world1', template 'starter'. An end-to-end run under different instance config edits them here. (3) A verdict CANNOT choose the outcome band: it declares intents for all three and the seeded dice pick one. The miss/partial/full scenarios differ only in the narrator's voice, so the run that plays one must supply the campaign seed and turn id whose roll lands in that band.",
+  "roles": [
+    {
+      "name": "adjudicator",
+      "description": "The fiction adjudicator, on the mid model slot per F5. Matched on the endpoint's model name, which is deployment configuration, so a retarget to a live model is a model_registry edit.",
+      "match": {"model": "semmachina-mock-adjudicator"}
+    },
+    {
+      "name": "narrator",
+      "description": "The narrator, prose only, no mutation-capable tool. Matched the same way.",
+      "match": {"model": "semmachina-mock-narrator"}
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "no-roll",
+      "description": "The adjudicator declines the dice (D12: the reported gate is authoritative), so the verdict declares exactly one auto band and the turn resolves without a roll.",
+      "scripts": [
+        {
+          "role": "adjudicator",
+          "steps": [
+            {
+              "kind": "tool_call",
+              "description": "Certain action, nothing at stake: Rook picks up the crowbar he is standing over.",
+              "usage": {"prompt_tokens": 1180, "completion_tokens": 96},
+              "tool_calls": [
+                {
+                  "name": "submit_verdict",
+                  "arguments": {
+                    "scalars": {
+                      "plausibility": "certain",
+                      "risk": "none",
+                      "consequence": "none",
+                      "requires_roll": false
+                    },
+                    "modifiers": [],
+                    "bands": {
+                      "auto": [
+                        {
+                          "type": "add_relationship",
+                          "target": "c360.semmachina.world1.starter.character.rook",
+                          "relation": "carries",
+                          "object": "c360.semmachina.world1.starter.item.rations"
+                        }
+                      ]
+                    },
+                    "rationale": "Nobody is watching the supper and it is within arm's reach. There is nothing here for the dice to decide."
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "role": "narrator",
+          "steps": [
+            {
+              "kind": "tool_call",
+              "usage": {"prompt_tokens": 940, "completion_tokens": 74},
+              "tool_calls": [
+                {
+                  "name": "submit_narration",
+                  "arguments": {
+                    "prose": "The bread is still warm under the cloth. Rook takes it without breaking stride, and the winch keeps squealing behind him."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "miss",
+      "description": "A rolled turn narrated as a miss. The adjudicator step is identical across the three band scenarios by design — the band is the dice's answer, not the persona's — so the run must choose a seed and turn id that roll 6 or under.",
+      "scripts": [
+        {
+          "role": "adjudicator",
+          "steps": [
+            {
+              "kind": "tool_call",
+              "usage": {"prompt_tokens": 1240, "completion_tokens": 210},
+              "tool_calls": [
+                {
+                  "name": "submit_verdict",
+                  "arguments": {
+                    "scalars": {
+                      "plausibility": "plausible",
+                      "risk": "moderate",
+                      "consequence": "setback",
+                      "requires_roll": true
+                    },
+                    "modifiers": [
+                      {"source": "equipment", "value": 1, "note": "the crowbar bites on the winch housing"},
+                      {"source": "condition", "value": -1, "note": "Hollis is already watching him"}
+                    ],
+                    "bands": {
+                      "miss": [
+                        {
+                          "type": "set_status",
+                          "target": "c360.semmachina.world1.starter.character.rook",
+                          "status": "restrained"
+                        }
+                      ],
+                      "partial": [
+                        {
+                          "type": "set_attribute",
+                          "target": "c360.semmachina.world1.starter.character.rook",
+                          "attribute": "stamina",
+                          "value": 4
+                        }
+                      ],
+                      "full": [
+                        {
+                          "type": "move_entity",
+                          "target": "c360.semmachina.world1.starter.character.rook",
+                          "location": "c360.semmachina.world1.starter.scene.gatehouse"
+                        }
+                      ]
+                    },
+                    "rationale": "The winch will move for a crowbar, but not quietly, and the sentry is three strides away."
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "role": "narrator",
+          "steps": [
+            {
+              "kind": "tool_call",
+              "usage": {"prompt_tokens": 1010, "completion_tokens": 88},
+              "tool_calls": [
+                {
+                  "name": "submit_narration",
+                  "arguments": {
+                    "prose": "The crowbar slips. Iron rings on iron, and Hollis has a hand on Rook's collar before the sound finishes crossing the yard."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "partial",
+      "description": "The same verdict, narrated as a 7-9. The run supplies a seed and turn id that roll into the partial band.",
+      "scripts": [
+        {
+          "role": "adjudicator",
+          "steps": [
+            {
+              "kind": "tool_call",
+              "usage": {"prompt_tokens": 1240, "completion_tokens": 210},
+              "tool_calls": [
+                {
+                  "name": "submit_verdict",
+                  "arguments": {
+                    "scalars": {
+                      "plausibility": "plausible",
+                      "risk": "moderate",
+                      "consequence": "setback",
+                      "requires_roll": true
+                    },
+                    "modifiers": [
+                      {"source": "equipment", "value": 1, "note": "the crowbar bites on the winch housing"},
+                      {"source": "condition", "value": -1, "note": "Hollis is already watching him"}
+                    ],
+                    "bands": {
+                      "miss": [
+                        {
+                          "type": "set_status",
+                          "target": "c360.semmachina.world1.starter.character.rook",
+                          "status": "restrained"
+                        }
+                      ],
+                      "partial": [
+                        {
+                          "type": "set_attribute",
+                          "target": "c360.semmachina.world1.starter.character.rook",
+                          "attribute": "stamina",
+                          "value": 4
+                        }
+                      ],
+                      "full": [
+                        {
+                          "type": "move_entity",
+                          "target": "c360.semmachina.world1.starter.character.rook",
+                          "location": "c360.semmachina.world1.starter.scene.gatehouse"
+                        }
+                      ]
+                    },
+                    "rationale": "The winch will move for a crowbar, but not quietly, and the sentry is three strides away."
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "role": "narrator",
+          "steps": [
+            {
+              "kind": "tool_call",
+              "usage": {"prompt_tokens": 1010, "completion_tokens": 102},
+              "tool_calls": [
+                {
+                  "name": "submit_narration",
+                  "arguments": {
+                    "prose": "The gate lifts a hand's width and stops, and Rook is breathing hard through it. Wren does not look up from the winch, which is its own kind of answer."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "full",
+      "description": "The same verdict, narrated as a 10+. The run supplies a seed and turn id that roll into the full band.",
+      "scripts": [
+        {
+          "role": "adjudicator",
+          "steps": [
+            {
+              "kind": "tool_call",
+              "usage": {"prompt_tokens": 1240, "completion_tokens": 210},
+              "tool_calls": [
+                {
+                  "name": "submit_verdict",
+                  "arguments": {
+                    "scalars": {
+                      "plausibility": "plausible",
+                      "risk": "moderate",
+                      "consequence": "setback",
+                      "requires_roll": true
+                    },
+                    "modifiers": [
+                      {"source": "equipment", "value": 1, "note": "the crowbar bites on the winch housing"},
+                      {"source": "condition", "value": -1, "note": "Hollis is already watching him"}
+                    ],
+                    "bands": {
+                      "miss": [
+                        {
+                          "type": "set_status",
+                          "target": "c360.semmachina.world1.starter.character.rook",
+                          "status": "restrained"
+                        }
+                      ],
+                      "partial": [
+                        {
+                          "type": "set_attribute",
+                          "target": "c360.semmachina.world1.starter.character.rook",
+                          "attribute": "stamina",
+                          "value": 4
+                        }
+                      ],
+                      "full": [
+                        {
+                          "type": "move_entity",
+                          "target": "c360.semmachina.world1.starter.character.rook",
+                          "location": "c360.semmachina.world1.starter.scene.gatehouse"
+                        }
+                      ]
+                    },
+                    "rationale": "The winch will move for a crowbar, but not quietly, and the sentry is three strides away."
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "role": "narrator",
+          "steps": [
+            {
+              "kind": "tool_call",
+              "usage": {"prompt_tokens": 1010, "completion_tokens": 95},
+              "tool_calls": [
+                {
+                  "name": "submit_narration",
+                  "arguments": {
+                    "prose": "The winch takes the crowbar like it was waiting for one. The gate comes up smooth and quiet, and for four long strides nobody in the yard is looking north."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "invalid-effect",
+      "description": "The verdict is well-formed prose-side and proposes an effect type outside the closed vocabulary. The applier must reject the whole batch and fail the turn; this is the case F4 says provider strict-mode will not catch for us.",
+      "scripts": [
+        {
+          "role": "adjudicator",
+          "steps": [
+            {
+              "kind": "tool_call",
+              "usage": {"prompt_tokens": 1240, "completion_tokens": 130},
+              "tool_calls": [
+                {
+                  "name": "submit_verdict",
+                  "arguments": {
+                    "scalars": {
+                      "plausibility": "plausible",
+                      "risk": "low",
+                      "consequence": "complication",
+                      "requires_roll": false
+                    },
+                    "modifiers": [],
+                    "bands": {
+                      "auto": [
+                        {
+                          "type": "teleport_entity",
+                          "target": "c360.semmachina.world1.starter.character.rook",
+                          "location": "c360.semmachina.world1.starter.scene.gatehouse"
+                        }
+                      ]
+                    },
+                    "rationale": "An effect type nobody registered, proposed with total confidence — which is exactly how a model proposes one."
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "role": "narrator",
+          "steps": [
+            {
+              "kind": "tool_call",
+              "description": "The narrator still runs on a rejected turn: it voices what actually happened, which is nothing.",
+              "usage": {"prompt_tokens": 880, "completion_tokens": 60},
+              "tool_calls": [
+                {
+                  "name": "submit_narration",
+                  "arguments": {
+                    "prose": "Rook hesitates at the winch, and the moment passes. Nothing in the yard has changed."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "duplicate-delivery",
+      "description": "One turn's budget, exactly: one adjudication and one narration. The assertion IS the budget — a redelivered action that adjudicates twice runs off the end of this script and gets a refusal naming the role, instead of quietly buying a second call.",
+      "scripts": [
+        {
+          "role": "adjudicator",
+          "steps": [
+            {
+              "kind": "tool_call",
+              "usage": {"prompt_tokens": 1180, "completion_tokens": 96},
+              "tool_calls": [
+                {
+                  "name": "submit_verdict",
+                  "arguments": {
+                    "scalars": {
+                      "plausibility": "certain",
+                      "risk": "none",
+                      "consequence": "none",
+                      "requires_roll": false
+                    },
+                    "modifiers": [],
+                    "bands": {
+                      "auto": [
+                        {
+                          "type": "add_relationship",
+                          "target": "c360.semmachina.world1.starter.character.rook",
+                          "relation": "carries",
+                          "object": "c360.semmachina.world1.starter.item.rations"
+                        }
+                      ]
+                    },
+                    "rationale": "Nothing at stake; the interesting part of this turn is the delivery, not the judgment."
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "role": "narrator",
+          "steps": [
+            {
+              "kind": "tool_call",
+              "usage": {"prompt_tokens": 940, "completion_tokens": 70},
+              "tool_calls": [
+                {
+                  "name": "submit_narration",
+                  "arguments": {
+                    "prose": "Rook pockets the supper. Wren pretends to have seen nothing, which she is getting good at."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "crash-resume",
+      "description": "Same one-turn budget as duplicate-delivery, for the kill-and-restart cases. A resumed stage whose artifact ref already landed must NOT re-run its persona, and the proof is that this script still has an unconsumed step count of zero at the end rather than a second refusal.",
+      "scripts": [
+        {
+          "role": "adjudicator",
+          "steps": [
+            {
+              "kind": "tool_call",
+              "usage": {"prompt_tokens": 1240, "completion_tokens": 205},
+              "tool_calls": [
+                {
+                  "name": "submit_verdict",
+                  "arguments": {
+                    "scalars": {
+                      "plausibility": "plausible",
+                      "risk": "moderate",
+                      "consequence": "setback",
+                      "requires_roll": true
+                    },
+                    "modifiers": [
+                      {"source": "equipment", "value": 1, "note": "the crowbar bites on the winch housing"}
+                    ],
+                    "bands": {
+                      "miss": [
+                        {
+                          "type": "set_status",
+                          "target": "c360.semmachina.world1.starter.character.rook",
+                          "status": "restrained"
+                        }
+                      ],
+                      "partial": [
+                        {
+                          "type": "set_attribute",
+                          "target": "c360.semmachina.world1.starter.character.rook",
+                          "attribute": "stamina",
+                          "value": 4
+                        }
+                      ],
+                      "full": [
+                        {
+                          "type": "remove_relationship",
+                          "target": "c360.semmachina.world1.starter.character.hollis",
+                          "relation": "hostile-to",
+                          "object": "c360.semmachina.world1.starter.character.rook"
+                        }
+                      ]
+                    },
+                    "rationale": "A rolled turn, so there is a phase between the verdict and the effects to be killed in."
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "role": "narrator",
+          "steps": [
+            {
+              "kind": "tool_call",
+              "usage": {"prompt_tokens": 1010, "completion_tokens": 90},
+              "tool_calls": [
+                {
+                  "name": "submit_narration",
+                  "arguments": {
+                    "prose": "The gate gives, and Hollis decides — slowly, visibly — that he did not see which way the courier went."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "malformed-exit",
+      "description": "The adjudicator's first exit is structurally wrong — it reports a roll and then declares the single auto band a no-roll verdict would have — and its second is correct. Two steps on purpose: the tool boundary rejects the first with an invalid-argument error the model can self-correct from, so this scenario is what proves the rejection is a retry rather than a dead turn. Note the tool schema alone cannot catch this one; the coherence between requires_roll and the band set is a validator's job.",
+      "scripts": [
+        {
+          "role": "adjudicator",
+          "steps": [
+            {
+              "kind": "tool_call",
+              "usage": {"prompt_tokens": 1240, "completion_tokens": 88},
+              "tool_calls": [
+                {
+                  "name": "submit_verdict",
+                  "arguments": {
+                    "scalars": {
+                      "plausibility": "unlikely",
+                      "risk": "high",
+                      "consequence": "harm",
+                      "requires_roll": true
+                    },
+                    "modifiers": [],
+                    "bands": {
+                      "auto": [
+                        {
+                          "type": "set_status",
+                          "target": "c360.semmachina.world1.starter.character.rook",
+                          "status": "wounded"
+                        }
+                      ]
+                    },
+                    "rationale": "A verdict that calls for the dice and then declares the band set of a turn that did not."
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "tool_call",
+              "description": "The corrected exit, after the tool boundary handed back an invalid-argument error.",
+              "usage": {"prompt_tokens": 1480, "completion_tokens": 190},
+              "tool_calls": [
+                {
+                  "name": "submit_verdict",
+                  "arguments": {
+                    "scalars": {
+                      "plausibility": "unlikely",
+                      "risk": "high",
+                      "consequence": "harm",
+                      "requires_roll": true
+                    },
+                    "modifiers": [
+                      {"source": "position", "value": -1, "note": "the sentry is already facing him"}
+                    ],
+                    "bands": {
+                      "miss": [
+                        {
+                          "type": "set_status",
+                          "target": "c360.semmachina.world1.starter.character.rook",
+                          "status": "wounded"
+                        }
+                      ],
+                      "partial": [
+                        {
+                          "type": "set_attribute",
+                          "target": "c360.semmachina.world1.starter.character.rook",
+                          "attribute": "health",
+                          "value": 6
+                        }
+                      ],
+                      "full": []
+                    },
+                    "rationale": "Same judgment, declared in a shape the engine can act on."
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "role": "narrator",
+          "steps": [
+            {
+              "kind": "tool_call",
+              "usage": {"prompt_tokens": 1010, "completion_tokens": 84},
+              "tool_calls": [
+                {
+                  "name": "submit_narration",
+                  "arguments": {
+                    "prose": "Hollis moves first. The spear butt catches Rook across the ribs, and the crowbar rings off the cobbles somewhere behind him."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "never-terminates",
+      "description": "A persona that keeps reaching for context and never exits, so the loop's MaxIterations cap (M5) has something real to stop. The repeated step answers forever, which is the only way to tell a cap that works from a cap that was never reached.",
+      "scripts": [
+        {
+          "role": "adjudicator",
+          "steps": [
+            {
+              "kind": "tool_call",
+              "repeat": true,
+              "usage": {"prompt_tokens": 1240, "completion_tokens": 28},
+              "tool_calls": [
+                {
+                  "name": "read_scene",
+                  "arguments": {"scene_id": "c360.semmachina.world1.starter.scene.gatehouse"}
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "prose-instead-of-exit",
+      "description": "The adjudicator answers in prose and never calls its terminal tool. Nothing in the response is structured, so the executor's own handling — not the schema — is what has to catch it.",
+      "scripts": [
+        {
+          "role": "adjudicator",
+          "steps": [
+            {
+              "kind": "text",
+              "content": "Rook could probably lever the winch, though Hollis might notice. Let's say it's a 7 or better to get through.",
+              "usage": {"prompt_tokens": 1240, "completion_tokens": 34}
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -365,6 +365,34 @@ distinct rules — `types.ValidateEntityID` for mapped IDs, `vocabulary.ParsePre
 every predicate in `entities.jsonl` — and must reject bad predicates at import time with a
 reason naming the offending line, rather than letting them fail later at materialization.
 
+### F18 — A tolerant client hides exactly the defects a mock exists to produce
+
+The framework's model client normalizes: it recomputes `total_tokens`, infers a tool call
+from the presence of `tool_calls` regardless of `finish_reason`, and substitutes `{}` for
+both empty and malformed tool arguments. Every one of those is correct client behavior and
+every one of them makes a **wrong response indistinguishable from a right one when asserted
+through the client**. Three mock mutations survived on exactly that basis — a zeroed token
+total, a `stop` finish reason on a tool call, and truncated argument bytes — and were only
+caught once the assertions moved to the wire.
+
+The rule that follows, and it applies to 10.3's E2E as much as to the mock: **assert
+provider shape at the wire, not client-observable behavior through the client.** A mock
+whose fidelity is only ever checked through a tolerant consumer will drift into emitting
+responses no real provider would send, and the first live-model run is where that surfaces.
+
+### F19 — The mock cannot choose an outcome band; the seed does
+
+A verdict declares intents for *all three* bands and the seeded dice select one (D3), and
+modifier sums are bounded to `[-2, +4]` precisely so a verdict cannot pre-determine the
+result. So `miss` / `partial` / `full` are not scriptable at the model boundary — a scripted
+verdict differs across bands only in the narrator's voice.
+
+Consequence for 10.3: the per-band E2E scenarios are selected by supplying the
+**(campaign_seed, turn_id) pair whose derived roll lands in the wanted band**, not by
+scripting the model. That is seed search, done once and pinned as fixture constants. It is
+also a small proof of the determinism claim in its own right — if the pairs stop producing
+their bands, seeded replay has broken.
+
 ### F17 — Flat per-turn cost is true of tokens and not yet of bytes on the wire
 
 Context assembly is where the flat-per-turn-cost claim is actually enforced: a fixed

@@ -671,8 +671,7 @@ func TestAssemble_ReportsAMemberTheGraphDidNotReturn(t *testing.T) {
 	ghost := id(t, "character", "ghost")
 	// An edge into the scene from an entity that does not exist: the index has
 	// the edge, the entity store has nothing.
-	g.put(ghost, fact(vocabulary.WorldLocationCurrent, id(t, "scene", "gatehouse")))
-	delete(g.entities, ghost)
+	g.rememberEdge(ghost, vocabulary.WorldLocationCurrent, id(t, "scene", "gatehouse"))
 	g.entities[id(t, "character", "rook")].Triples = append(
 		g.entities[id(t, "character", "rook")].Triples, message.Triple{
 			Subject: id(t, "character", "rook"), Predicate: vocabulary.WorldRelationKnows.String(),
