@@ -427,12 +427,61 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 
 ## 9. Player I/O adapters
 
-- [ ] 9.1 Implement the WebSocket ingress adapter: normalize to `PlayerAction` (identity
-      fields, arrival timestamp, channel block), publish to the stream; test that
-      `player_id` survives reconnect (identity ≠ connection)
-- [ ] 9.2 Implement the egress adapter: deliver narration + resolution summary to the
-      channel binding; reconnect retrieval of the last completed turn from durable state
-      (not adapter memory)
+**Scope correction (recorded 2026-07-29, before implementation).** These two tasks were
+authored assuming SemStreams' `input/websocket` + `output/websocket` pair (verified to exist
+in 1.3). Verification since says the EGRESS half cannot be used: `output/websocket`
+broadcasts every message to every connected client — `output/websocket/doc.go:229` lists
+"No per-client subject filtering" as a documented limitation, and `broadcastToClients`
+iterates the whole client map. Composing it would satisfy "the result was delivered" while
+showing one player's narration to every player in the campaign. Nothing in upstream's open
+changes proposes selective routing, so a version bump does not fix it. The session gateway
+below is SemMachina's, and per-recipient delivery is filed upstream as a generic ask rather
+than pretended to be a game concern.
+
+Still an ENGINE SPIKE with a raw client — the proposal's "No creator UI" non-goal stands and
+the Svelte creator surface remains project.md Sequencing stage 3. What changed is that the
+PROTOCOL is specified rather than assumed, because the protocol is what the eventual client
+speaks and it is expensive to retrofit.
+
+- [ ] 9.0 Define the public player protocol before writing an adapter, as `internal/payload`
+      types with the same registry discipline as every other payload (`new-payload` skill):
+      a versioned **`SubmitAction`** carrying only client-owned fields (action text, an
+      idempotency key) and a **`TurnResult`** covering successful AND failed terminal turns.
+      `PlayerAction` stays the ENGINE's contract and is never the wire format — every one of
+      its identity fields is server-owned, and `action_id` is the sharpest: it is derived
+      deterministically so a redelivered channel message makes one turn rather than two, so
+      a client that could choose it could pre-claim another player's action id and have that
+      player's turn silently absorbed as a duplicate. A request carrying a server-owned field
+      is REFUSED, not sanitized, so a confused client learns rather than being quietly
+      corrected. Design `TurnResult` against the resolution card project.md stage 3 names
+      (plausibility, risk, modifiers, roll, consequence) — free now, retrofit later
+- [ ] 9.1 Implement the **player-session gateway** (SemMachina's, not SemStreams'):
+      authenticate a session to a `player_id` graph entity, map that identity to the current
+      connection, validate `SubmitAction`, derive `action_id`, stamp arrival time and the
+      channel binding, publish the canonical `PlayerAction`. Test that `player_id` survives
+      reconnect (identity ≠ connection). **Admission control is part of this task, not a
+      follow-up**: refuse an action while that player holds a non-terminal turn, answering a
+      structured `turn_in_progress` naming the active `turn_id`. It belongs at ingress
+      because that is the only place a player is still connected to be told — `turn/intake.go`
+      already argues this from the other side, in the comment explaining why a TERM there is
+      the quietest failure in the component. Queueing is a later change; refusing is the MVP
+- [ ] 9.2 Implement **targeted** egress: deliver a turn's result to the player it belongs to
+      and to no other connected player, resolving the connection from `player_id` at
+      DELIVERY time rather than from an identifier captured at submission.
+      `ChannelBinding.ReplyTo` is a durable address where the adapter has one (email, a chat
+      channel) and is not one for a WebSocket, so the per-adapter contract must say which it
+      is rather than leaving `content.Store`'s "the egress adapter resolves the player's
+      delivery target from it" to mean both. Retrieval from durable state, never adapter
+      memory: by `action_id` or `turn_id`, plus **last TERMINAL result** — not "last
+      completed", because a failed turn has no narration by design and a surface that answers
+      only for completed turns leaves the player who most needs an answer with silence
+      indistinguishable from a turn still running. The ledger already archives failed turns
+- [ ] 9.3 Local-only security posture, stated and tested rather than assumed: what
+      authenticates a session on an instance-per-world box, what happens to an unauthenticated
+      socket, and what a second connection claiming the same `player_id` does. MVP may answer
+      these narrowly — it may NOT leave them undefined, because every one of them is a
+      disclosure decision and the egress path above is where a wrong answer shows up as one
+      player reading another's fiction
 
 ## 10. Composition, mock-LLM E2E, and gates
 
