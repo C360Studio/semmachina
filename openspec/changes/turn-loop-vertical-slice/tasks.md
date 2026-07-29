@@ -268,6 +268,18 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       the guard answers "did this stage finish", the recorder answers "is this transition
       legal", and a skip decision taken while the phase is still `accepted` would have the
       guard say advance while the recorder refuses it as an illegal stage skip
+- [ ] 8.1a **Stranded-turn reconciliation (F22).** The `on_recovery` backstop the stage
+      comments claim does not exist: bootstrap replay fires only for rules *currently
+      matching*, and a turn parked mid-stage matches none, because every mid-chain rule is
+      phase AND artifact and the artifact is what is missing. Unacked JetStream triggers
+      resume a **crashed stage**; nothing resumes a **stranded phase** — and the persona
+      stages ack after publishing, so a loop that dies leaves neither. Today a persona
+      failing for any non-cap reason (a model error, far commoner than cap exhaustion)
+      strands the turn permanently with a player waiting, so bounded execution's "never a
+      silent stall" is unmet for that class. Build the reconciliation that finds turns whose
+      phase is non-terminal with no stage running, correct the three comments and this file's
+      claim, and move the loop-failure notification onto a durable consumer — with one
+      consumer and a billed consequence, the fan-out argument for core NATS is weak
 - [ ] 8.1b Two cleanups 8.1 surfaced: (a) the starter world's `rules/00-turn-sequencing.json`
       stub is now misleading — turn sequencing lives in `internal/rulepack` because it is the
       *engine's* state machine and a downloaded world must not be able to author or break the
@@ -275,7 +287,17 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       relax the loader's "at least one rule file" requirement; (b) add the closed
       `vocabulary.FailureReason` for a persona loop that fails for a reason **other** than
       its cap — today that case is logged loudly and leaves the turn in its stage until the
-      next boot's recovery replay, because there is no code to record
+      next boot's recovery replay — which per F22 does not happen — because there is no code
+      to record; (c) tighten `checkArtifactGate`: it currently enforces "gated on something
+      besides the phase", not "gated on the previous stage's artifact", so a rule matching a
+      *birth-record* fact like `turn.action.player` — present the whole time — loads cleanly
+      and reintroduces F21's race while looking gated. Derive the expected artifact set per
+      phase from the vocabulary; (d) check FSM-edge legality for `eq`-gated hops, so a pack
+      cannot express `accepted → narrating` (loud at runtime today, but one derivation from
+      being impossible); (e) three pack gates have no regression test at all — the
+      `logic != "and"` refusal, the on_enter/on_recovery subject agreement, and
+      `TerminateDelivery` on a poison trigger, whose test passes whether or not the message
+      is terminated
 - [ ] 8.2 Record the roll-gate agreement on `TurnManifest` — reported gate, advised gate,
       and the **mapping version**, which does not exist yet: `RollGateExpectation` carries
       no version and `vocabulary.RequiresRoll` has no version constant, so add one here

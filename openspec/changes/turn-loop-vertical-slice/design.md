@@ -365,6 +365,34 @@ distinct rules — `types.ValidateEntityID` for mapped IDs, `vocabulary.ParsePre
 every predicate in `entities.jsonl` — and must reject bad predicates at import time with a
 reason naming the offending line, rather than letting them fail later at materialization.
 
+### F22 — `on_recovery` rescues a crashed *stage*, never a stranded *phase*
+
+The bootstrap replay fires `on_recovery` only for a rule that is **currently matching** at
+boot — upstream requires `Bootstrap && hadPrevState && currentlyMatching` together. A turn
+parked in `adjudicating` with no verdict matches **no rule in the pack**, because every
+mid-chain rule is a conjunction of a phase and an artifact (F21) and the artifact is exactly
+what is missing. Proven by probe, not inference: a turn parked mid-stage, a second rule
+processor booted against the same broker, twenty seconds, no re-trigger.
+
+So the real resume mechanism is **JetStream redelivery of an unacked stage trigger**, which
+is durable and correct — but it only covers a stage that crashed *while holding its
+trigger*. The persona stages ack after publishing the task, so once the task is out there is
+no unacked trigger and no matching rule, and nothing at boot reconciles the turn.
+
+Consequences worth stating plainly, because two decisions rested on the false claim:
+
+- A persona loop that fails for **any reason other than its cap** — a model error, far more
+  common than cap exhaustion — strands the turn permanently with a player waiting. The
+  bounded-execution requirement's "never a silent stall" is **not met** for that class today.
+- A missed loop-failure notification has the same outcome for cap exhaustion, which
+  undercuts the argument that a best-effort core-NATS notification is safe because recovery
+  replay would catch what it drops.
+
+The fix is a reconciliation pass, not more comments: something must find turns whose phase
+is non-terminal and whose stage is not running. Anything that "resumes on the next boot"
+should be assumed absent until a probe says otherwise — this is the second time a recovery
+story has been believed on the strength of a plausible mechanism name.
+
 ### F21 — A mid-chain rule gated on the phase alone races the stage it follows
 
 Every phase except `accepted` is written on stage **entry**, so a rule matching
