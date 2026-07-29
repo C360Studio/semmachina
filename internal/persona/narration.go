@@ -115,9 +115,14 @@ func (e *NarrationExecutor) Execute(ctx context.Context, call agentic.ToolCall) 
 	}
 	if _, err := e.graph.MergeTriples(ctx, identity.TurnEntityID, triples); err != nil {
 		// The prose is stored and unreferenced. That is the survivable half of
-		// the ordering: a resumed narration re-puts identical bytes at the same
-		// derived key and commits the reference, and nothing in between ever
-		// pointed at an object that was not there.
+		// the ordering, and the survival does not depend on the retry producing
+		// the same bytes: a re-dispatched call writes this narration again, while
+		// a resumed narration STAGE re-runs the model and writes different prose.
+		// Both land at the same derived key on a replacing lane, so the turn ends
+		// up carrying one narration and one reference to it — replace-writes
+		// converge on one value, not on the same value. What the ordering
+		// guarantees is the half that matters here: no reference ever pointed at
+		// an object that was not there.
 		return transientFailure(call, "record the narration reference on the turn", err)
 	}
 

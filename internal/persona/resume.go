@@ -72,9 +72,13 @@ type Resumption struct {
 // No compare-and-swap is required for this, which is the other half of why it is
 // worth doing. Two spawners racing the same resumed stage both read the same
 // reference and both skip; two that both find it absent both run, and the
-// terminal tool's derived key and replacing lane make the second one converge on
-// the first. The check removes a cost, not a correctness hazard, and it does not
-// need a primitive the query surface cannot currently offer (F15).
+// terminal tool's derived key and replacing lane mean the SECOND one's artifact
+// overwrites the first's. That is convergence on one artifact, not on the first
+// artifact: two runs of a persona are two model calls and the loser's judgment is
+// discarded, which is a cost rather than a corruption. The turn is left carrying
+// exactly one verdict, or exactly one narration, and one reference to it. The
+// check removes that cost, not a correctness hazard, and it does not need a
+// primitive the query surface cannot currently offer (F15).
 type Guard struct {
 	graph TurnReader
 }

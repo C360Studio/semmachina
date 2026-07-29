@@ -1,6 +1,7 @@
 package payload_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -157,6 +158,66 @@ func TestVerdict_RejectsModifierSetsThatPredetermineTheBand(t *testing.T) {
 				t.Fatalf("rejection reason %q does not name the summed bound", err.Error())
 			}
 		})
+	}
+}
+
+// The summed bound masks the per-modifier one in every other case here, so the
+// per-modifier check needs a case only it can catch: a set whose SUM is legal
+// and whose members are not. +5 paired with -3 sums to +2, which is inside
+// [-2, +4], and rides through untouched if the member bound is not enforced.
+//
+// It matters because the bound is advertised to the model as `minimum`/`maximum`
+// inside a deliberately NON-strict schema — the banded verdict cannot be
+// strict-mode conformant — so nothing between the model and the graph enforces
+// it except this validation. It is checked on both carriers for the same reason
+// the note budget is: a bound enforced on one of them is a bound the other
+// silently does not have.
+func TestModifier_RejectsAMemberOutsideItsOwnBoundWhenTheSummedBoundIsSatisfied(t *testing.T) {
+	modifiers := []payload.Modifier{
+		{Source: vocabulary.ModifierTrait, Value: payload.MaxModifierValue + 2},
+		{Source: vocabulary.ModifierEquipment, Value: payload.MinModifierValue},
+	}
+
+	// Guard: the set must be legal under every OTHER modifier rule, or it proves
+	// nothing about the per-modifier bound.
+	if len(modifiers) > payload.MaxModifiers {
+		t.Fatalf("the case uses %d modifiers, beyond the cap; it would fail for the wrong reason", len(modifiers))
+	}
+	total := payload.SumModifiers(modifiers)
+	if total < payload.MinModifierTotal || total > payload.MaxModifierTotal {
+		t.Fatalf("the case sums to %d, outside [%d, %d]; the summed bound would catch it and the per-modifier "+
+			"bound would go on being untested", total, payload.MinModifierTotal, payload.MaxModifierTotal)
+	}
+
+	want := fmt.Sprintf("outside [%d, %d]", payload.MinModifierValue, payload.MaxModifierValue)
+
+	t.Run("verdict", func(t *testing.T) {
+		verdict := validVerdict()
+		verdict.Modifiers = modifiers
+		assertMemberBoundRejected(t, decode(t, publishUnvalidated(t, verdict)), want)
+	})
+
+	t.Run("roll_result", func(t *testing.T) {
+		spec := mechanicSpec(t)
+		roll := validRollResult()
+		roll.Modifiers = modifiers
+		// Internally consistent, so it can only fail on the bound.
+		roll.ModifierTotal = total
+		roll.Total = roll.Dice[0] + roll.Dice[1] + total
+		roll.Band = spec.BandForTotal(roll.Total)
+		assertMemberBoundRejected(t, decode(t, publishUnvalidated(t, roll)), want)
+	})
+}
+
+func assertMemberBoundRejected(t *testing.T, decoded message.Payload, want string) {
+	t.Helper()
+	err := decoded.Validate()
+	if err == nil {
+		t.Fatalf("a %T carrying a modifier outside the per-modifier bound was accepted; a single declared "+
+			"justification can now be any size the model likes", decoded)
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("rejection reason %q does not name the per-modifier bound %q", err.Error(), want)
 	}
 }
 

@@ -444,6 +444,68 @@ func TestNarratePrompt_RefusesAnOutcomeItCannotEstablish(t *testing.T) {
 	})
 }
 
+// A single-valued predicate holding two values is the signature of a write that
+// took an appending lane, and this reader must not resolve it by guessing.
+//
+// The effects mark is the dangerous one. Read as ABSENT — which is what any
+// "exactly one" test degrades to at two — the narrator is told "Nothing was
+// committed. The world is exactly as described above" while the effects are on
+// the graph: narration disagreeing with authoritative state, manufactured by the
+// engine, which is the exact drift this product exists to detect.
+func TestNarratePrompt_RefusesADuplicatedSingleValuedFact(t *testing.T) {
+	rolled := []message.Triple{
+		fact(vocabulary.TurnRollBand, string(vocabulary.BandPartial)),
+		fact(vocabulary.TurnRollTotal, 8),
+	}
+	batch := payload.BatchIDForTurn(testTurnID)
+
+	cases := map[string]struct {
+		turn      []message.Triple
+		predicate vocabulary.Predicate
+	}{
+		"two effects marks": {
+			turn: append(slices.Clone(rolled),
+				fact(vocabulary.TurnEffectsBatch, batch),
+				fact(vocabulary.TurnEffectsBatch, batch),
+			),
+			predicate: vocabulary.TurnEffectsBatch,
+		},
+		"two roll bands": {
+			turn: []message.Triple{
+				fact(vocabulary.TurnRollBand, string(vocabulary.BandPartial)),
+				fact(vocabulary.TurnRollBand, string(vocabulary.BandFull)),
+				fact(vocabulary.TurnRollTotal, 8),
+			},
+			predicate: vocabulary.TurnRollBand,
+		},
+		"two failure reasons": {
+			turn: append(slices.Clone(rolled),
+				fact(vocabulary.TurnPhaseCurrent, string(vocabulary.PhaseFailed)),
+				fact(vocabulary.TurnFailureReason, string(vocabulary.FailureEffectEntityKind)),
+				fact(vocabulary.TurnFailureReason, string(vocabulary.FailurePersonaCapExhausted)),
+			),
+			predicate: vocabulary.TurnFailureReason,
+		},
+	}
+
+	for name, testCase := range cases {
+		t.Run(name, func(t *testing.T) {
+			fixture := newPromptFixture(t, testCase.turn...)
+			fixture.storeVerdict(t, rollingVerdict())
+
+			request, err := fixture.builder.Narrate(t.Context(), fixture.view)
+			if err == nil {
+				t.Fatalf("a turn holding two values for the single-valued %s was rendered into a prompt, so the "+
+					"narrator was told something about the world nobody checked:\n%s",
+					testCase.predicate, request.Prompt)
+			}
+			if !strings.Contains(err.Error(), testCase.predicate.String()) {
+				t.Fatalf("the refusal is %q; it must name the predicate that was written twice", err)
+			}
+		})
+	}
+}
+
 // A persona judging one room about an action taken in another is judging a
 // premise the world does not hold.
 func TestPrompt_RefusesAViewAssembledForAnotherScene(t *testing.T) {

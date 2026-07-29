@@ -3,6 +3,7 @@ package persona_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -899,6 +900,122 @@ func TestRecordCapExhausted_EndsTheTurnWithAClosedCodeAndAStoredExplanation(t *t
 	}
 	if !strings.HasPrefix(j.entries[0], "put ") || !strings.HasPrefix(j.entries[1], "fail ") {
 		t.Fatalf("the write order was %v, want the detail stored before the turn was failed", j.entries)
+	}
+}
+
+// The fallback must not fail into the stall it exists to prevent.
+//
+// LastError is whatever the loop reported when it gave up, which routinely wraps
+// model-adjacent text, and LoopID is whatever the spawner was handed. The stored
+// explanation has a hard byte budget that the content store enforces BEFORE it
+// writes anything, so an unbounded composition here does not produce a long
+// explanation: it produces a refused write, a return before the turn is ever
+// failed, and a turn left sitting in its stage with a player waiting on it.
+func TestRecordCapExhausted_StoresAnExplanationEvenWhenTheLoopsLastWordsAreHuge(t *testing.T) {
+	for _, spec := range persona.Specs() {
+		t.Run(string(spec.Role), func(t *testing.T) {
+			artifacts := newFakeArtifacts(&journal{})
+			failer := &fakeFailer{}
+
+			// Every caller-supplied fragment at its worst: a refusal that quotes a
+			// whole rejected batch back, and a loop id nobody bounded.
+			transition, err := persona.RecordCapExhausted(t.Context(), failer, artifacts, testIdentity(),
+				persona.CapExhaustion{
+					Role:       spec.Role,
+					LoopID:     strings.Repeat("L", content.MaxFailureMessageBytes),
+					Iterations: spec.MaxIterations,
+					LastError: "risk: \"catastrophic\" is not in the closed vocabulary. " +
+						strings.Repeat("and here is the whole refused batch again. ", 200),
+				})
+			if err != nil {
+				t.Fatalf("RecordCapExhausted: %v", err)
+			}
+			if transition.Phase != vocabulary.PhaseFailed {
+				t.Fatalf("the turn ended in phase %q", transition.Phase)
+			}
+			if failer.detail.IsZero() {
+				t.Fatal("the turn failed with no reference to an explanation; the diagnosis was dropped rather " +
+					"than trimmed to fit")
+			}
+
+			stored := artifacts.failures[failer.detail.Key]
+			if stored == nil {
+				t.Fatalf("nothing was stored at %s", failer.detail)
+			}
+			if len(stored.Message) > content.MaxFailureMessageBytes {
+				t.Fatalf("the stored explanation is %d bytes, past the %d-byte budget the store enforces",
+					len(stored.Message), content.MaxFailureMessageBytes)
+			}
+			// Trimming must take the tail. The head names the persona and the exit
+			// it never reached, and the front of the loop's last words is the
+			// sentence that says which field it could not get right.
+			for _, want := range []string{string(spec.Role), spec.Tool.Name, "catastrophic"} {
+				if !strings.Contains(stored.Message, want) {
+					t.Fatalf("the stored explanation lost %q; trimming took the informative end:\n%s",
+						want, stored.Message)
+				}
+			}
+		})
+	}
+}
+
+// The two fragment budgets and the fixed wording have to fit inside the message
+// budget together, and nothing about that is self-evident from any one of them.
+// This is the arithmetic, checked: the widest explanation this engine can compose
+// still passes the contract the store enforces.
+func TestCapExhaustion_FitsTheStoredBudgetAtItsWidest(t *testing.T) {
+	for _, spec := range persona.Specs() {
+		artifacts := newFakeArtifacts(&journal{})
+		if _, err := persona.RecordCapExhausted(t.Context(), &fakeFailer{}, artifacts, testIdentity(),
+			persona.CapExhaustion{
+				Role:       spec.Role,
+				LoopID:     strings.Repeat("L", persona.MaxLoopIDBytes),
+				Iterations: spec.MaxIterations,
+				LastError:  strings.Repeat("E", persona.MaxLastErrorBytes),
+			}); err != nil {
+			t.Fatalf("the widest %s explanation does not fit the stored budget: %v. The fragment budgets and the "+
+				"fixed wording share one %d-byte message; trimming the wording or the budgets is the remedy.",
+				spec.Role, err, content.MaxFailureMessageBytes)
+		}
+	}
+}
+
+// And when the store refuses for a reason no bound can fix — it is unreachable —
+// the turn must still END. A cap exhaustion that returns without failing the turn
+// leaves it exactly where the cap was supposed to rescue it from, and a closed
+// reason code with no explanation is a poorer record but a finished turn.
+func TestRecordCapExhausted_EndsTheTurnEvenWhenTheExplanationCannotBeStored(t *testing.T) {
+	artifacts := newFakeArtifacts(&journal{})
+	artifacts.failureErr = errors.New("content store unreachable")
+	failer := &fakeFailer{}
+
+	transition, err := persona.RecordCapExhausted(t.Context(), failer, artifacts, testIdentity(),
+		persona.CapExhaustion{
+			Role:       persona.RoleAdjudicator,
+			LoopID:     "loop-7",
+			Iterations: persona.AdjudicatorMaxIterations,
+			LastError:  "risk: \"catastrophic\" is not in the closed vocabulary",
+		})
+	if transition.Phase != vocabulary.PhaseFailed {
+		t.Fatalf("the detail store refused and the turn stayed in %q with a player waiting on it; replacing that "+
+			"stall is the cap's whole job", transition.Phase)
+	}
+	if failer.reason != vocabulary.FailurePersonaCapExhausted {
+		t.Fatalf("the recorded reason is %q, want the closed cap-exhaustion code", failer.reason)
+	}
+	if !failer.detail.IsZero() {
+		t.Fatalf("the turn carries reference %s to an explanation nobody stored", failer.detail)
+	}
+
+	// The turn is resolved and the store is not: a caller has to be able to tell
+	// those apart, because only one of them is worth retrying.
+	var lost *persona.DetailLostError
+	if !errors.As(err, &lost) {
+		t.Fatalf("the lost explanation was reported as %v, which no caller can route on", err)
+	}
+	if lost.Transition.Phase != vocabulary.PhaseFailed {
+		t.Fatalf("the reported transition is %q; a caller reading it would think the turn is still running",
+			lost.Transition.Phase)
 	}
 }
 

@@ -249,10 +249,9 @@ type outcome struct {
 func outcomeOf(view *scene.View, verdict *payload.Verdict) (outcome, error) {
 	result := outcome{Verdict: verdict}
 
-	bands := view.Turn.Objects(vocabulary.TurnRollBand)
-	if len(bands) > 1 {
-		return outcome{}, fmt.Errorf("turn %s holds %d values for the single-valued %s",
-			view.TurnEntityID, len(bands), vocabulary.TurnRollBand)
+	bands, err := atMostOne(view, vocabulary.TurnRollBand)
+	if err != nil {
+		return outcome{}, err
 	}
 
 	switch {
@@ -289,9 +288,23 @@ func outcomeOf(view *scene.View, verdict *payload.Verdict) (outcome, error) {
 		result.Total = total
 	}
 
-	result.Committed = len(view.Turn.Objects(vocabulary.TurnEffectsBatch)) == 1
+	// Absence is MEANING for both of the marks below — "nothing committed" and
+	// "the turn did not fail" — which is exactly why neither may be read with a
+	// bare "exactly one" test. Two values would degrade to absent, and for the
+	// effects mark that means telling the narrator "nothing was committed" while
+	// the effects are on the graph: prose disagreeing with authoritative state,
+	// manufactured by the engine, which is the drift this engine exists to detect.
+	batches, err := atMostOne(view, vocabulary.TurnEffectsBatch)
+	if err != nil {
+		return outcome{}, err
+	}
+	result.Committed = len(batches) == 1
 
-	if reasons := view.Turn.Objects(vocabulary.TurnFailureReason); len(reasons) == 1 {
+	reasons, err := atMostOne(view, vocabulary.TurnFailureReason)
+	if err != nil {
+		return outcome{}, err
+	}
+	if len(reasons) == 1 {
 		value, ok := reasons[0].(string)
 		if !ok {
 			return outcome{}, fmt.Errorf("turn %s records a %T failure reason, want a string",
@@ -304,6 +317,27 @@ func outcomeOf(view *scene.View, verdict *payload.Verdict) (outcome, error) {
 		result.Failure = reason
 	}
 	return result, nil
+}
+
+// atMostOne reads a single-valued predicate off the assembled turn, refusing the
+// duplicated case outright.
+//
+// scene.Entity.Objects does not de-duplicate, so two values is the signature of a
+// write that took an appending lane. A reader that answers "which one" by taking
+// the first is choosing what the campaign remembers; one that answers by treating
+// the predicate as ABSENT is worse still, because absence is a meaningful answer
+// here and the reader would be stating the opposite of the truth. Neither is
+// recoverable at this layer, so both are refused.
+func atMostOne(view *scene.View, predicate vocabulary.Predicate) ([]any, error) {
+	objects := view.Turn.Objects(predicate)
+	if len(objects) > 1 {
+		return nil, fmt.Errorf(
+			"turn %s holds %d values for the single-valued %s; a fact written on an appending lane leaves this "+
+				"reader either picking one at random or reading the predicate as absent, and the narrator would "+
+				"be told about a world nobody checked",
+			view.TurnEntityID, len(objects), predicate)
+	}
+	return objects, nil
 }
 
 // singleInt reads one numeric scalar off the assembled turn.
