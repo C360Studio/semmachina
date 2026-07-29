@@ -443,7 +443,7 @@ the Svelte creator surface remains project.md Sequencing stage 3. What changed i
 PROTOCOL is specified rather than assumed, because the protocol is what the eventual client
 speaks and it is expensive to retrofit.
 
-- [ ] 9.0 Define the public player protocol before writing an adapter, as `internal/payload`
+- [x] 9.0 Define the public player protocol before writing an adapter, as `internal/payload`
       types with the same registry discipline as every other payload (`new-payload` skill):
       a versioned **`SubmitAction`** carrying only client-owned fields (action text, an
       idempotency key) and a **`TurnResult`** covering successful AND failed terminal turns.
@@ -455,7 +455,7 @@ speaks and it is expensive to retrofit.
       is REFUSED, not sanitized, so a confused client learns rather than being quietly
       corrected. Design `TurnResult` against the resolution card project.md stage 3 names
       (plausibility, risk, modifiers, roll, consequence) — free now, retrofit later
-- [ ] 9.1 Implement the **player-session gateway** (SemMachina's, not SemStreams'):
+- [x] 9.1 Implement the **player-session gateway** (SemMachina's, not SemStreams'):
       authenticate a session to a `player_id` graph entity, map that identity to the current
       connection, validate `SubmitAction`, derive `action_id`, stamp arrival time and the
       channel binding, publish the canonical `PlayerAction`. Test that `player_id` survives
@@ -481,7 +481,22 @@ speaks and it is expensive to retrofit.
       socket, and what a second connection claiming the same `player_id` does. MVP may answer
       these narrowly — it may NOT leave them undefined, because every one of them is a
       disclosure decision and the egress path above is where a wrong answer shows up as one
-      player reading another's fiction
+      player reading another's fiction.
+      **Two obligations 9.1 deliberately left here rather than solving in the wrong layer**,
+      recorded so the transport author inherits them instead of inferring them from a comment:
+      (a) `gateway.MaxRequestBytes` is a limit **the transport must apply to its own reader**
+      (`websocket.Conn.SetReadLimit`, `http.MaxBytesReader`, or the equivalent). `Gateway.Submit`
+      takes a `[]byte`, so the frame is already wholly in memory by the time its own check runs —
+      that check prevents the second allocation `json.Unmarshal` would make and is a second line
+      of defence, NOT the bound. An adapter that reads "the gateway bounds the frame" and skips
+      its reader limit has moved the bound one allocation too late; (b) the session table has
+      **no bound, no expiry, and no way to notice a connection that left** — an entry is created
+      by `Authenticate` and removed only by `Disconnect`, so a transport that drops a socket
+      without calling `Disconnect` leaks it permanently. Not solved in 9.1 on purpose: a TTL, a
+      cap, and an eviction policy are all decisions about what happens to a player who goes
+      quiet, and this project's pacing rule makes an idle-session timeout the exact
+      interactive-pacing assumption email-cadence play forbids. Connection lifecycle belongs
+      with the rest of the posture here
 
 ## 10. Composition, mock-LLM E2E, and gates
 

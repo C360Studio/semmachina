@@ -150,21 +150,32 @@ func (s *SubmitAction) Validate() error {
 		return err
 	}
 	if err := requireNonEmpty("text", s.Text); err != nil {
-		return err
+		return &FieldError{Name: "text", Detail: err.Error()}
 	}
 	// A blank action is refused at the boundary rather than adjudicated. This
 	// is the untrusted edge, and an action of nothing but spaces is a billed
 	// persona call whose prompt input is empty — cost is a policy, and the
 	// cheapest place to decline a turn that says nothing is before it starts.
 	if strings.TrimSpace(s.Text) == "" {
-		return fmt.Errorf("text is %d bytes of whitespace and declares no action", len(s.Text))
+		return fieldErrorf("text", nil,
+			"text is %d bytes of whitespace and declares no action", len(s.Text))
 	}
 	if len(s.Text) > MaxActionTextBytes {
-		return fmt.Errorf("text is %d bytes, which exceeds the %d-byte action-text budget",
-			len(s.Text), MaxActionTextBytes)
+		return fieldErrorf("text", nil,
+			"text is %d bytes, which exceeds the %d-byte action-text budget", len(s.Text), MaxActionTextBytes)
 	}
 	return validateIdempotencyKey(s.IdempotencyKey)
 }
+
+// RequireIdempotencyKey is validateIdempotencyKey for a caller outside this
+// package.
+//
+// Exported for the one use the character rule below was written for: the gateway
+// ECHOES the key back on a refusal, including on a refusal of a request that
+// never became a SubmitAction, so it holds a raw client value with no struct
+// behind it and needs this rule before it writes that value into an answer and
+// into an operator diagnostic.
+func RequireIdempotencyKey(key string) error { return validateIdempotencyKey(key) }
 
 // validateIdempotencyKey holds the replay token to being a token.
 //
@@ -175,19 +186,21 @@ func (s *SubmitAction) Validate() error {
 // with the session's player_id and encodes the result, so the entity-ID alphabet
 // is the gateway's problem and never the client's.
 func validateIdempotencyKey(key string) error {
-	if err := requireNonEmpty("idempotency_key", key); err != nil {
-		return err
+	const field = "idempotency_key"
+	if err := requireNonEmpty(field, key); err != nil {
+		return &FieldError{Name: field, Detail: err.Error()}
 	}
 	if len(key) > MaxIdempotencyKeyBytes {
-		return fmt.Errorf("idempotency_key is %d bytes, which exceeds the %d-byte key budget",
+		return fieldErrorf(field, nil, "idempotency_key is %d bytes, which exceeds the %d-byte key budget",
 			len(key), MaxIdempotencyKeyBytes)
 	}
 	if !utf8.ValidString(key) {
-		return fmt.Errorf("idempotency_key is not valid UTF-8, so it is not a token this engine can echo back")
+		return fieldErrorf(field, nil,
+			"idempotency_key is not valid UTF-8, so it is not a token this engine can echo back")
 	}
 	for _, r := range key {
 		if r < 0x20 || r == 0x7f {
-			return fmt.Errorf(
+			return fieldErrorf(field, nil,
 				"idempotency_key contains the control character U+%04X; the key is echoed back in refusals and "+
 					"in operator diagnostics, so it must be a name rather than a payload", r)
 		}
@@ -248,15 +261,15 @@ func (s *SubmitAction) UnmarshalJSON(data []byte) error {
 	names := slices.Sorted(maps.Keys(fields))
 	for _, name := range names {
 		if _, owned := serverOwnedActionFields[name]; owned {
-			return fmt.Errorf(
-				"%w: %q is set by the gateway from the authenticated session, not by the client, and a request "+
+			return fieldErrorf(name, ErrServerOwnedField,
+				"%q is set by the gateway from the authenticated session, not by the client, and a request "+
 					"that names one is refused rather than corrected so a confused client learns and a hostile "+
-					"one is stopped", ErrServerOwnedField, name)
+					"one is stopped", name)
 		}
 	}
 	for _, name := range names {
 		if _, known := clientOwnedSubmitFields[name]; !known {
-			return fmt.Errorf("%w: %q is not a field of %s", ErrUnknownField, name, PlayerProtocolV1)
+			return fieldErrorf(name, ErrUnknownField, "%q is not a field of %s", name, PlayerProtocolV1)
 		}
 	}
 

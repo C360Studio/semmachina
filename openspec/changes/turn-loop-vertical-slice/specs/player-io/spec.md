@@ -72,6 +72,29 @@ to them.
 - **WHEN** a player resubmits the same action with the same idempotency key
 - **THEN** it resolves to the same `action_id` and does not create a second turn
 
+### Requirement: Every submission is answered with one closed response document
+A gateway SHALL answer every submission with a single versioned response document whose
+outcome is drawn from a closed set — accepted or refused — and a refusal SHALL name its
+reason with a closed code, including the case where the player already holds a live turn,
+plus, where the cause is a field, that field structurally rather than in prose.
+
+One document with a discriminator rather than a shape per outcome, for the same reason
+`TurnResult` covers success and failure together: a client that must guess which shape
+arrived will guess wrong on the path it exercises least, which is the refusal path. Closed
+codes and a structural field reference are what let a client act on a refusal — retry,
+correct a field, or wait — instead of matching on a message it will misparse the day the
+wording improves.
+
+#### Scenario: A refusal names its cause structurally
+- **WHEN** a submission is refused because a field is invalid
+- **THEN** the response carries a closed refusal code and identifies the offending field as
+  data, not only inside a human-readable message
+
+#### Scenario: An accepted submission is distinguishable without inference
+- **WHEN** a submission is accepted
+- **THEN** the response states that outcome explicitly rather than leaving it to be inferred
+  from the absence of a refusal
+
 ### Requirement: A turn's result is delivered to exactly the player it belongs to
 The egress path SHALL deliver a turn's result to the player that turn belongs to and to no
 other connected player. Delivery SHALL resolve the player's current connection from

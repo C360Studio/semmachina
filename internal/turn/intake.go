@@ -168,7 +168,7 @@ func NewIntake(
 //
 // Termination covers ONE permanent class, not all of them. Handle terminates
 // exactly on *RejectedActionError — an action that can never become a turn — and
-// everything else naks and redelivers on a 30-second delay, forever. Two of
+// everything else naks and redelivers on a 30-second delay, forever. Three of
 // those redeliver-forever cases are deterministic and will never succeed on
 // their own:
 //
@@ -179,6 +179,11 @@ func NewIntake(
 //     predicate, a rejected envelope. Accept's default branch wraps that as an
 //     ordinary error, because from here a refusal is indistinguishable from the
 //     transport failure this policy exists to survive.
+//   - the turn was created and the write pointing its PLAYER at it failed. The
+//     turn exists, so nothing is lost and a redelivery is a no-op plus a retry
+//     of exactly that write — which is what heals a crash in the gap between the
+//     two. Acknowledging instead would leave the ingress admission gate silently
+//     degraded for that player, with nothing anywhere saying so.
 //
 // Redelivering those forever is the deliberate choice. Both are RECOVERABLE by
 // repairing the thing that is broken — the entity, the registration, the

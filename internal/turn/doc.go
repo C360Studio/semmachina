@@ -22,6 +22,26 @@
 // order's would be: an acknowledged action with no turn is a player's move that
 // simply never happened.
 //
+// Accepting a turn writes one fact outside the turn entity: the pointer on the
+// PLAYER saying which turn they now hold, which is the ingress admission gate's
+// whole durable state (vocabulary.PlayerTurnCurrent). It is a second write, in
+// that order, because graph-ingest's merge lane is per-entity and a foreign
+// subject cannot ride inside the turn's atomic create. A failure in the gap
+// leaves the player pointing at their PREVIOUS, terminal turn, so ingress admits
+// their next action — fail-open, and healed by the redelivery, which finds the
+// turn already created and finally lands the pointer. The reverse order would
+// leave a pointer at a turn that was never created, which is a player locked out
+// of their own campaign.
+//
+// That gap costs ONE extra turn, and the bound is a property of the write rather
+// than of the timing. A redelivery arrives late by construction — thirty seconds
+// late, on the nak delay, which is long enough for the player to have started
+// another turn — so the pointer only moves when the player is not already
+// holding a DIFFERENT unfinished turn. Without that second condition the late
+// write repoints them backwards, the newer turn is abandoned, and when the older
+// one resolves the gate reopens while the newer is still running: one extra turn
+// per redelivery instead of one in total. See Recorder.pointPlayerAtTurn.
+//
 // Resume comes from the other side of the seam. The turn's phase is a KV fact,
 // so a restart re-delivers it, and the rule pack matches on it to re-enter the
 // stage that was in flight. The action stream is not what resumes a turn — it is

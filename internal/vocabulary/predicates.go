@@ -152,6 +152,44 @@ const (
 	// template that named its own player could be instantiated exactly once,
 	// which would make "worlds are data" false at the first campaign.
 	PlayerCharacterCurrent Predicate = "player.character.current"
+
+	// PlayerTurnCurrent names the turn this player most recently had accepted.
+	// Its object is a turn ENTITY ID, and it is single-valued: it is written
+	// through the merge lane, so it replaces rather than appends.
+	//
+	// It exists so the player-session gateway can answer "does this player
+	// already hold a live turn?" in TWO reads instead of a history scan. The
+	// turn points at the player (TurnActionPlayer), so without this the question
+	// is an INCOMING lookup on the player that returns every turn they have ever
+	// taken, filtered by phase — O(history) on the request path, which is fine at
+	// boot and wrong on every submission.
+	//
+	// # It names WHICH turn, deliberately not WHETHER one is active
+	//
+	// The obvious shape is a boolean written on accept and cleared on a terminal
+	// phase, and it is the wrong shape for one reason: it must be CLEARED, and a
+	// derived flag goes stale exactly when clearing fails. A player locked out of
+	// their own campaign by an uncleared triple is a silent stall with no
+	// diagnosis, and nothing in the engine would ever correct it.
+	//
+	// A pointer needs no clearing at all. The predicate always names the most
+	// recent accepted turn, and whether that turn is still running is read from
+	// the TURN — which owns TurnPhaseCurrent and is the authority on its own
+	// terminality. Nothing here caches the answer; it caches the QUESTION's
+	// address. A stale pointer therefore degrades to "the gateway looks at an
+	// older, terminal turn and admits the action", which is the same fail-OPEN
+	// direction every other guard in the slice takes when it loses a race.
+	//
+	// # Who writes it
+	//
+	// The turn recorder, on accept, immediately after the turn entity exists —
+	// never the gateway before publishing. A writer that stamped the pointer
+	// before the turn existed would have to decide what an absent turn means, and
+	// both answers are bad: "admit" reopens the double-turn it exists to close,
+	// and "refuse" strands the player forever the first time a publish fails
+	// after the write. With the recorder as the only writer, the pointer never
+	// names a turn that does not exist and that case never has to be decided.
+	PlayerTurnCurrent Predicate = "player.turn.current"
 )
 
 // World predicates written by effect intents.
@@ -220,6 +258,7 @@ var allPredicates = []Predicate{
 	WorldEntityKind,
 	WorldEntityDescription,
 	PlayerCharacterCurrent,
+	PlayerTurnCurrent,
 	CharacterStatusCurrent,
 	WorldLocationCurrent,
 	CharacterAttributeHealth,
@@ -354,6 +393,20 @@ var (
 	// recorder owns.
 	turnResumePredicates = []Predicate{TurnResumeAttempts}
 )
+
+// playerTurnPredicates is the pointer the turn recorder writes on the PLAYER
+// entity when it accepts a turn: which turn that player most recently had
+// accepted, and nothing else.
+//
+// It is the one projection in this file whose subject is not the turn entity,
+// which is why it is named here rather than folded into the turn lists above: a
+// list that mixed the two subjects would let a caller project a turn fact onto a
+// player, and the graph would take it.
+var playerTurnPredicates = []Predicate{PlayerTurnCurrent}
+
+// PlayerTurnPredicates returns the predicates the turn recorder writes on the
+// player entity.
+func PlayerTurnPredicates() []Predicate { return slices.Clone(playerTurnPredicates) }
 
 // TurnAcceptedPredicates returns the predicates the turn's birth record writes.
 func TurnAcceptedPredicates() []Predicate { return slices.Clone(turnAcceptedPredicates) }

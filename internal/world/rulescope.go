@@ -135,6 +135,14 @@ const (
 //     land in the same domain. Reserving `campaign.` whole would refuse a world
 //     rule for so much as reading the clock, and it would do it before any world
 //     shipped and made the naming expensive to change.
+//   - `player.` is NOT, for the campaign's reason and with a sharper harm.
+//     `player.turn.` is the ingress admission gate's pointer, so a world rule
+//     that could write it could repoint a player at a terminal turn (granting
+//     them a second live turn) or at a live one (locking them out of their own
+//     campaign) — with no player-visible refusal, because the gate would answer
+//     from data the world authored. `player.character.` is the played-character
+//     binding and is exactly the kind of world fact a world may react to, so the
+//     reservation stops at the category.
 func enginePredicateNamespaces() ([]reservedDomain, error) {
 	sources := []struct {
 		predicate vocabulary.Predicate
@@ -154,6 +162,14 @@ func enginePredicateNamespaces() ([]reservedDomain, error) {
 			why: "the campaign seed is minted once at instantiation and every roll derives from it, so a " +
 				"world rule that could touch it could make replay stop reproducing (the rest of the " +
 				"campaign domain, the world clock included, is world content and stays authorable)",
+		},
+		{
+			predicate: vocabulary.PlayerTurnCurrent,
+			width:     domainAndCategory,
+			why: "this is the ingress admission gate's pointer at the turn a player currently holds, so a " +
+				"world rule that could write it could hand a player a second live turn or lock them out " +
+				"of their own campaign (the rest of the player domain, the played-character binding " +
+				"included, is world content and stays authorable)",
 		},
 	}
 

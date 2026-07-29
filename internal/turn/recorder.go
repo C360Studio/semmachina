@@ -206,6 +206,7 @@ func (r *Recorder) Accept(ctx context.Context, action *payload.PlayerAction) (Ac
 	}
 
 	result, err := r.store.CreateEntity(ctx, entity)
+	acceptance := Acceptance{TurnID: turnID, TurnEntityID: turnEntityID}
 	switch {
 	case err == nil:
 		// Degraded means the write committed and only the read-back failed, so
@@ -218,10 +219,8 @@ func (r *Recorder) Accept(ctx context.Context, action *payload.PlayerAction) (Ac
 				return Acceptance{}, err
 			}
 		}
-		return Acceptance{
-			TurnID: turnID, TurnEntityID: turnEntityID,
-			Created: true, Phase: vocabulary.PhaseAccepted,
-		}, nil
+		acceptance.Created = true
+		acceptance.Phase = vocabulary.PhaseAccepted
 
 	case errors.Is(err, graphio.ErrEntityExists):
 		// The action was accepted before. Read the phase rather than assuming
@@ -232,11 +231,110 @@ func (r *Recorder) Accept(ctx context.Context, action *payload.PlayerAction) (Ac
 		if phaseErr != nil {
 			return Acceptance{}, phaseErr
 		}
-		return Acceptance{TurnID: turnID, TurnEntityID: turnEntityID, Phase: phase}, nil
+		acceptance.Phase = phase
 
 	default:
 		return Acceptance{}, fmt.Errorf("create turn %s: %w", turnEntityID, err)
 	}
+
+	if err := r.pointPlayerAtTurn(ctx, action.PlayerID, acceptance); err != nil {
+		return Acceptance{}, err
+	}
+	return acceptance, nil
+}
+
+// pointPlayerAtTurn records on the PLAYER entity which turn they now hold.
+//
+// # Why the turn recorder owns a write to another entity
+//
+// Because it is the only thing that knows the turn became a fact. The pointer's
+// entire value is that it never names a turn that does not exist, and the moment
+// that becomes true is here — after the atomic create, inside the same call that
+// performed it. A gateway that stamped the pointer before publishing would have
+// to decide what an absent turn means, and both answers are bad: "admit" reopens
+// the second turn it exists to close, and "refuse" locks the player out forever
+// the first time a publish fails after the write.
+//
+// # After the create, never before or inside it
+//
+// Inside is not available — the create is atomic on the TURN entity and
+// graph-ingest's merge lane is per-entity, so a foreign subject in it is split
+// onto the appending lane and the failure is swallowed (F14). So it is a second
+// write, and the ORDER is the turn first. A crash in the gap leaves the pointer
+// naming the player's PREVIOUS turn, which is terminal, so the gate admits their
+// next action: fail-open, one extra turn, self-healing on the next accept. The
+// reverse order would leave a pointer at a turn that was never created, which is
+// the lockout this design exists to make impossible.
+//
+// # Written on a duplicate too, and the two conditions it takes to be safe
+//
+// Written on a duplicate because that is what heals the crash gap above: the
+// action was never acknowledged, so it is redelivered, the create loses to the
+// existing turn, and this call finally lands the pointer.
+//
+// Which makes this call LATE by construction, and it takes two questions to know
+// whether it is too late. Both are necessary and neither is sufficient:
+//
+//   - Has THIS turn ended? A turn that has ended is not one anybody holds, so a
+//     redelivery of a finished action must not repoint the player at it.
+//   - Does the player already hold a DIFFERENT turn that has not ended? This is
+//     the converse the first question does not answer, and it is false exactly
+//     when two turns are unfinished at once — which the failure path above
+//     creates without a crash and without a hostile client. The pointer write
+//     for T1 fails and the action naks for thirty seconds; the gate reads a
+//     terminal pointer, admits A2, and T2 becomes the live turn; A1 then
+//     redelivers into a still-running T1. Repointing at T1 there abandons T2, and
+//     when T1 resolves the gate reopens while T2 is still running — so the
+//     documented "one extra turn" becomes a cascade, one per redelivery.
+//
+// The second question is asked on BOTH branches, not just the duplicate one. A
+// create that fails transiently and succeeds on redelivery reaches the identical
+// state through the identical failure, and a fresh turn has no recorded phase to
+// look stale with: the player's own pointer is the only thing that can tell this
+// call it is late.
+//
+// It costs one read of the player and, when they hold a turn, one of that turn.
+// That is per accepted turn on the intake path — not on the player's submission
+// path, where the gateway's own two reads live — and a turn costs a model call.
+//
+// The check is CONVERGENT, like every other guard here: another accept can land
+// between the read and the write. That is the same missing compare-and-swap the
+// package doc names, and it degrades the same way, toward one extra turn rather
+// than toward a lockout.
+//
+// # A failure here is transient, not a rejected action
+//
+// It returns an ordinary error, so intake naks and redelivers rather than
+// terminating: the turn exists and the player's move is safe, the redelivery
+// retries exactly this write, and the failure is loud on the consumer's own
+// counters. The alternative — swallowing it — would leave the admission gate
+// silently degraded for that player with nothing anywhere to say so.
+func (r *Recorder) pointPlayerAtTurn(ctx context.Context, playerID string, acceptance Acceptance) error {
+	if acceptance.Phase.IsTerminal() {
+		return nil
+	}
+	late, err := r.holdsAnotherLiveTurn(ctx, playerID, acceptance.TurnEntityID)
+	if err != nil {
+		return err
+	}
+	if late {
+		return nil
+	}
+	pointer := &payload.PlayerTurn{
+		PlayerID:     playerID,
+		TurnID:       acceptance.TurnID,
+		TurnEntityID: acceptance.TurnEntityID,
+	}
+	triples, err := pointer.Triples(playerID, Source, r.now().UTC())
+	if err != nil {
+		return err
+	}
+	if _, err := r.store.MergeTriples(ctx, playerID, triples); err != nil {
+		return fmt.Errorf(
+			"point player %s at turn %s: %w; the turn exists, so this is retried on redelivery rather than "+
+				"failing the action", playerID, acceptance.TurnEntityID, err)
+	}
+	return nil
 }
 
 // acceptedEntity builds the turn's birth record.
@@ -268,7 +366,7 @@ func (r *Recorder) acceptedEntity(
 
 // confirmAccepted checks a created turn read back in the phase it was born in.
 func confirmAccepted(stored *graph.EntityState, turnEntityID string) error {
-	phase, err := phaseOf(stored, turnEntityID)
+	phase, err := PhaseOf(stored, turnEntityID)
 	if err != nil {
 		return fmt.Errorf("turn %s was created but its phase did not store: %w", turnEntityID, err)
 	}
@@ -292,10 +390,20 @@ func (r *Recorder) Current(ctx context.Context, turnEntityID string) (vocabulary
 	if err != nil {
 		return "", fmt.Errorf("read turn entity %s: %w", turnEntityID, err)
 	}
-	return phaseOf(state, turnEntityID)
+	return PhaseOf(state, turnEntityID)
 }
 
-func phaseOf(state *graph.EntityState, turnEntityID string) (vocabulary.TurnPhase, error) {
+// PhaseOf reads a turn's recorded phase off an entity somebody else fetched.
+//
+// It is exported so the second reader of this fact — the player-session
+// gateway's admission gate, which asks whether a player's current turn is still
+// running — asks the question exactly the way the recorder does. A second
+// implementation would be a second opinion about what an anomalous turn record
+// means, and the anomalies are the whole content of this function: a turn
+// holding two phases, none, or nothing but a referential stub each has a
+// deliberate answer, and "take the first triple you find" is the wrong one three
+// times over.
+func PhaseOf(state *graph.EntityState, turnEntityID string) (vocabulary.TurnPhase, error) {
 	if state == nil {
 		return "", &RecordError{TurnEntityID: turnEntityID, Err: errors.New("read back as nil")}
 	}
@@ -332,6 +440,103 @@ func phaseOf(state *graph.EntityState, turnEntityID string) (vocabulary.TurnPhas
 		return "", &RecordError{TurnEntityID: turnEntityID, Err: err}
 	}
 	return phase, nil
+}
+
+// holdsAnotherLiveTurn reports whether the player's pointer already names a turn
+// that is not this one and has not ended.
+//
+// Every way of failing to find out resolves toward WRITING the pointer rather
+// than toward leaving it where it is, and that polarity is deliberate:
+//
+//   - The player entity is absent. Nothing is held. (The turn's own birth record
+//     names the player, so graph-ingest has usually minted a referential stub by
+//     now; a stub holds no facts and answers the same way.)
+//   - A held turn is absent. A turn nobody can find is not one that is running.
+//   - A held turn's record is unreadable — two phases, none, a stub. Moving the
+//     pointer HEALS that: leaving it would strand the player behind a turn the
+//     gateway cannot read, which is the lockout this whole design refuses.
+//
+// Only a transport failure is returned as an error, because that one is
+// answerable later: intake naks, redelivers, and asks again.
+func (r *Recorder) holdsAnotherLiveTurn(ctx context.Context, playerID, exceptTurnEntityID string) (bool, error) {
+	state, err := r.store.GetEntity(ctx, playerID)
+	switch {
+	case errors.Is(err, graphio.ErrEntityNotFound):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("read player %s to place their turn pointer: %w", playerID, err)
+	}
+
+	held, _ := HeldTurns(state)
+	for _, turnEntityID := range held {
+		if turnEntityID == exceptTurnEntityID {
+			continue
+		}
+		live, err := r.turnIsLive(ctx, turnEntityID)
+		if err != nil {
+			return false, err
+		}
+		if live {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// turnIsLive reports whether a turn exists and has not ended.
+func (r *Recorder) turnIsLive(ctx context.Context, turnEntityID string) (bool, error) {
+	state, err := r.store.GetEntity(ctx, turnEntityID)
+	switch {
+	case errors.Is(err, graphio.ErrEntityNotFound):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("read turn %s to place a player's turn pointer: %w", turnEntityID, err)
+	}
+
+	phase, err := PhaseOf(state, turnEntityID)
+	var record *RecordError
+	if errors.As(err, &record) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return !phase.IsTerminal(), nil
+}
+
+// HeldTurns lists the turn entity ids a player's pointer names, and counts the
+// ones it could not read.
+//
+// A slice rather than a single value, because "how many values does this
+// predicate hold" is what distinguishes a merge-lane write from an append-lane
+// one, and a reader that took the first would answer a coin flip.
+//
+// Exported because it has two callers asking the same question from opposite
+// sides — the recorder deciding whether it is too late to move the pointer, and
+// the player-session gateway deciding whether to admit an action. A second
+// implementation would be a second opinion about what an anomalous pointer
+// means, and the anomalies are the whole content of this function.
+//
+// The unreadable count is returned rather than dropped so a caller can say so:
+// a pointer nothing can read is a pointer nothing checks, and "ignored" plus
+// "silent" is how a player ends up holding two live turns with nothing anywhere
+// explaining why.
+func HeldTurns(state *graph.EntityState) (held []string, unreadable int) {
+	if state == nil {
+		return nil, 0
+	}
+	for _, triple := range state.Triples {
+		if triple.Predicate != vocabulary.PlayerTurnCurrent.String() {
+			continue
+		}
+		turnEntityID, ok := triple.Object.(string)
+		if !ok || turnEntityID == "" {
+			unreadable++
+			continue
+		}
+		held = append(held, turnEntityID)
+	}
+	return held, unreadable
 }
 
 // Outcome is what a transition attempt did. It never reaches the graph — the

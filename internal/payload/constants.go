@@ -61,6 +61,20 @@ const (
 	// message shape nothing sends and nothing reads.
 	CategoryTurnState = "turn_state"
 
+	// CategoryPlayerTurn is the pointer a player entity carries at the turn they
+	// currently hold, and it is deliberately NOT registered for the reason
+	// CategoryTurnState is not: no message of this type is ever published. It
+	// exists so the ingress admission gate's one durable fact reaches the graph
+	// through the shared triple projection instead of as a hand-built triple —
+	// and this is the projection with the FOREIGN SUBJECT, the only one in the
+	// engine that does not land on a turn entity, so hand-building it would skip
+	// the one pairing check that stops a live turn being granted to a bystander.
+	//
+	// Named beside the registered categories so the (domain, category, version)
+	// namespace has one home; as a bare literal elsewhere a future collision
+	// would be invisible.
+	CategoryPlayerTurn = "player_turn"
+
 	// CategoryTurnResume is the stranded-turn pass's attempt-counter record, and
 	// it is deliberately NOT registered for the reason CategoryTurnState is not:
 	// no message of this type is ever published. It exists so a counter reaches
@@ -154,6 +168,14 @@ func requireIDSegment(field, value string) error {
 	}
 	return nil
 }
+
+// RequireActionID is requireActionID under the field name every caller means.
+//
+// Exported for the player-session gateway, which MINTS action ids rather than
+// receiving them: the derivation has to prove its own output survives the gates
+// downstream of it, and a gateway that re-stated the rule would be a second
+// spelling of the one bound that keeps the turn id inside an entity-ID segment.
+func RequireActionID(actionID string) error { return requireActionID("action_id", actionID) }
 
 // requireActionID validates an action identifier as a segment AND validates
 // the turn identifier derived from it, because the derived value is the one

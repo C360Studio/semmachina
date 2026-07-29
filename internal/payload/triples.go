@@ -105,7 +105,7 @@ type tripleProjection struct {
 	// payload is validated before anything is projected. A payload that
 	// cannot pass its own contract must not reach the graph in fragments.
 	payload message.Payload
-	// subject is the entity the triples land on (the turn entity).
+	// subject is the entity the triples land on — by default the turn entity.
 	subject string
 	// turnID is the turn these triples describe. It is stamped on every triple
 	// as the correlation context AND checked against subject, because the two
@@ -115,6 +115,24 @@ type tripleProjection struct {
 	// what makes a stage handed turn A's entity with turn B's payload a refusal
 	// instead of a world change filed under the wrong turn's paperwork.
 	turnID string
+	// playerSubject NAMES the player entity when a projection lands on the
+	// player rather than on the turn, and it is the whole of that mode.
+	//
+	// Exactly one projection needs it: the pointer the turn recorder writes on a
+	// player saying which turn they currently hold. Its subject is a player and
+	// its turnID names the turn it points AT, so the default pairing —
+	// "the subject's instance segment is this turn id" — is false of a perfectly
+	// correct write and would refuse it.
+	//
+	// It is a NAME rather than a boolean, and the polarity is deliberate on both
+	// counts. A boolean would say only "skip the turn check", leaving the subject
+	// unpaired with anything, so a projection handed player A's entity with
+	// player B's payload would land on A and look right. Naming the player makes
+	// the check the same SHAPE as the turn's — the payload states who it is
+	// about, the caller states where it goes, and disagreeing is a refusal. And
+	// because the zero value is empty, a caller who forgets the field gets the
+	// STRICT turn pairing and a loud failure, never a silently unchecked subject.
+	playerSubject string
 	// source names the producing component.
 	source string
 	// at stamps every triple. Passed in rather than read from the clock so a
@@ -175,7 +193,7 @@ func (p tripleProjection) build() ([]message.Triple, error) {
 	if err := p.payload.Validate(); err != nil {
 		return nil, err
 	}
-	if err := RequireTurnEntityID(p.turnID, p.subject); err != nil {
+	if err := p.checkSubject(); err != nil {
 		return nil, err
 	}
 	if err := requireNonEmpty("triple source", p.source); err != nil {
@@ -213,6 +231,31 @@ func (p tripleProjection) build() ([]message.Triple, error) {
 		return nil, err
 	}
 	return append(triples, p.triple(p.refPredicate, p.ref)), nil
+}
+
+// checkSubject pairs the entity these triples land on with the payload that
+// claims them. There is no unpaired mode: a projection either lands on the turn
+// its turn_id names or on the player its payload names.
+func (p tripleProjection) checkSubject() error {
+	if p.playerSubject == "" {
+		return RequireTurnEntityID(p.turnID, p.subject)
+	}
+	// The turn id is still checked, because it is stamped on every triple as
+	// the correlation context and an unchecked one would put a malformed
+	// correlation on a perfectly valid fact.
+	if err := requireIDSegment("turn_id", p.turnID); err != nil {
+		return err
+	}
+	if err := requireEntityID("player entity id", p.subject); err != nil {
+		return err
+	}
+	if p.subject != p.playerSubject {
+		return fmt.Errorf(
+			"triples land on entity %q but the payload is about player %q; a projection writes the facts one "+
+				"payload states onto the entity that payload names, or it writes one player's state onto another",
+			p.subject, p.playerSubject)
+	}
+	return nil
 }
 
 // checkPredicateSet proves the projection is exactly the registered one.

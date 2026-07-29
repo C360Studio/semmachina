@@ -695,6 +695,183 @@ func TestIntegration_AFailedTurnRecordsAClosedReasonAndAResolvableDetailReferenc
 	}
 }
 
+// The ingress admission gate's one durable fact, written where it can be wrong.
+// The pointer takes the entity merge lane; the mutation API offers a second lane
+// accepting the same triples that APPENDS, and through it a player's second turn
+// leaves them holding two pointers, with a success response and no error.
+func TestIntegration_AcceptingATurnPointsTheRealPlayerEntityAtIt(t *testing.T) {
+	live := startTurns(t)
+	action := live.action("act-1")
+	live.bornPlayer(t, action.PlayerID)
+
+	acceptance := live.accept(t, "act-1")
+	state := live.harness.AwaitEntity(t, action.PlayerID)
+
+	pointers := testinfra.ObjectsFor(state, vocabulary.PlayerTurnCurrent.String())
+	if len(pointers) != 1 || pointers[0] != acceptance.TurnEntityID {
+		t.Fatalf("the player holds %v, want exactly [%s]", pointers, acceptance.TurnEntityID)
+	}
+	if state.IsStub() {
+		t.Fatal("writing the pointer left the player reading as a referential stub; the gateway would " +
+			"refuse to authenticate them from their own turn")
+	}
+}
+
+// A MEASUREMENT, not an assumption: what a real graph does when the pointer's
+// subject was never imported.
+//
+// It matters because the answer decides whether intake acknowledges. The pointer
+// write is a second write after the atomic create, and a failure there is
+// transient — intake naks and redelivers forever, loudly. If a real graph
+// refused a merge onto an entity nobody created, then a turn accepted for an
+// unimported player would nak-loop rather than complete, and every unit test
+// here would still be green because a fake has no referential-stub lane.
+//
+// What actually happens: the turn's own birth record carries turn.action.player,
+// so graph-ingest materializes a referential STUB at the player's key, and the
+// merge lands on that. The write succeeds, intake acknowledges, and the player
+// entity stays a stub — which the gateway refuses to authenticate, so nothing
+// downstream mistakes it for a real player.
+func TestIntegration_APointerAtAnUnimportedPlayerLandsOnTheStubRatherThanFailing(t *testing.T) {
+	live := startTurns(t)
+	action := live.action("act-1")
+
+	acceptance, err := live.recorder.Accept(t.Context(), action)
+	if err != nil {
+		t.Fatalf("accepting a turn for an unimported player failed, so intake would nak forever: %v", err)
+	}
+	live.harness.AwaitEntity(t, acceptance.TurnEntityID)
+
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		state, err := live.harness.QueryEntity(t.Context(), action.PlayerID)
+		if err == nil && len(testinfra.ObjectsFor(state, vocabulary.PlayerTurnCurrent.String())) == 1 {
+			if !state.IsStub() {
+				t.Fatalf("the unimported player %s reads as a REAL entity; the gateway would authenticate "+
+					"somebody nothing ever imported", action.PlayerID)
+			}
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("the pointer never landed at the unimported player %s", action.PlayerID)
+}
+
+// The property the in-memory fake states and cannot prove, measured here.
+//
+// It matters because it is the only thing that makes an append anomaly
+// RECOVERABLE. If a merge replaced only one of the values a triple-add lane left
+// behind, a player who once ended up holding two current-turn pointers would
+// hold two forever, and the ingress gate would answer a coin flip about whether
+// they may act for the rest of the campaign. The fake in turn_test.go models
+// replace-ALL because of this test, not the other way round.
+func TestIntegration_AMergeConvergesAPredicateThatAlreadyHoldsTwoValues(t *testing.T) {
+	live := startTurns(t)
+	action := live.action("act-1")
+	live.bornPlayer(t, action.PlayerID)
+
+	entity := func(instance string) string {
+		id, err := vocabulary.ComposeEntityID(testOrg, live.namespace, testTemplate, turn.TypeSegment, instance)
+		if err != nil {
+			t.Fatalf("ComposeEntityID: %v", err)
+		}
+		return id
+	}
+	first, second, latest := entity("turn-a"), entity("turn-b"), entity("turn-c")
+
+	live.appendPointer(t, action.PlayerID, "turn-a", first)
+	live.appendPointer(t, action.PlayerID, "turn-b", second)
+	live.awaitPointerCount(t, action.PlayerID, 2)
+
+	pointer := &payload.PlayerTurn{
+		PlayerID: action.PlayerID, TurnID: "turn-c", TurnEntityID: latest,
+	}
+	triples, err := pointer.Triples(action.PlayerID, turn.Source, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("compose the pointer: %v", err)
+	}
+	if _, err := live.store.MergeTriples(t.Context(), action.PlayerID, triples); err != nil {
+		t.Fatalf("MergeTriples: %v", err)
+	}
+
+	live.awaitPointerCount(t, action.PlayerID, 1)
+	state := live.harness.AwaitEntity(t, action.PlayerID)
+	got := testinfra.ObjectsFor(state, vocabulary.PlayerTurnCurrent.String())
+	if got[0] != latest {
+		t.Fatalf("the merge left the player pointing at %v, want [%s]", got, latest)
+	}
+}
+
+// appendPointer writes a current-turn pointer through the APPENDING lane.
+func (w *liveTurns) appendPointer(t *testing.T, playerID, turnID, turnEntityID string) {
+	t.Helper()
+	pointer := &payload.PlayerTurn{PlayerID: playerID, TurnID: turnID, TurnEntityID: turnEntityID}
+	triples, err := pointer.Triples(playerID, turn.Source, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("compose the pointer: %v", err)
+	}
+	request, err := json.Marshal(graph.AddTriplesBatchRequest{Triples: triples})
+	if err != nil {
+		t.Fatalf("encode add_batch: %v", err)
+	}
+	reply, err := w.harness.Client.RequestClassified(
+		t.Context(), graphingest.SubjectTripleAddBatch, request, 5*time.Second)
+	if err != nil {
+		t.Fatalf("add_batch: %v", err)
+	}
+	var response graph.AddTriplesBatchResponse
+	if err := json.Unmarshal(reply, &response); err != nil {
+		t.Fatalf("decode add_batch response: %v", err)
+	}
+	if len(response.FailedSubjects) != 0 {
+		t.Fatalf("add_batch reported failed subjects: %v", response.FailedSubjects)
+	}
+}
+
+// awaitPointerCount polls until the player holds exactly n current-turn pointers.
+func (w *liveTurns) awaitPointerCount(t *testing.T, playerID string, n int) {
+	t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	var last []any
+	for time.Now().Before(deadline) {
+		state, err := w.harness.QueryEntity(t.Context(), playerID)
+		if err == nil {
+			last = testinfra.ObjectsFor(state, vocabulary.PlayerTurnCurrent.String())
+			if len(last) == n {
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("player %s holds %v, want %d pointer(s)", playerID, last, n)
+}
+
+// bornPlayer materializes a player as a REAL entity through graph-ingest.
+func (w *liveTurns) bornPlayer(t *testing.T, playerID string) {
+	t.Helper()
+	at := time.Now().UTC()
+	entity := &graph.EntityState{
+		ID: playerID,
+		MessageType: message.Type{
+			Domain: payload.Domain, Category: payload.CategoryWorldEntity, Version: payload.SchemaVersion,
+		},
+		Version:   1,
+		UpdatedAt: at,
+		Triples: []message.Triple{{
+			Subject:    playerID,
+			Predicate:  vocabulary.WorldEntityKind.String(),
+			Object:     string(vocabulary.EntityKindPlayer),
+			Source:     "integration-world-import",
+			Timestamp:  at,
+			Confidence: 1.0,
+		}},
+	}
+	if _, err := w.store.CreateEntity(t.Context(), entity); err != nil {
+		t.Fatalf("create the player entity: %v", err)
+	}
+	w.harness.AwaitEntity(t, playerID)
+}
+
 // The player's words have to be reachable from the graph alone after the turn
 // exists — that is the entire content of "acknowledged only after the turn
 // durably exists", applied to the move rather than to the paperwork.

@@ -98,6 +98,21 @@ func TestLoadPackage_RefusesAWorldRuleThatReachesTheEnginesTurnFacts(t *testing.
 				`{"field":"campaign.seed.value","operator":"eq","value":"7"}`, "on_enter", ``),
 			names: []string{"world_reads_seed", "campaign.seed.value", "condition[0]"},
 		},
+		// Not the turn loop either, and the harm is sharper than the seed's:
+		// player.turn.current is the INGRESS admission gate's pointer, so a world
+		// rule that could write it could hand a player a second live turn or lock
+		// them out of their own campaign — with no player-visible refusal, because
+		// the gate would be answering from data the world authored.
+		"add_triple repointing a player's current turn": {
+			rule: ruleJSON("world_repoints_player", ``, "on_enter",
+				`{"type":"add_triple","predicate":"player.turn.current","object":"$entity.id"}`),
+			names: []string{"world_repoints_player", "player.turn.current", "on_enter[0]"},
+		},
+		"condition on a player's current turn": {
+			rule: ruleJSON("world_reads_player_turn",
+				`{"field":"player.turn.current","operator":"exists","value":true}`, "on_enter", ``),
+			names: []string{"world_reads_player_turn", "player.turn.current", "condition[0]"},
+		},
 		"cron rule writing the turn phase": {
 			rule: `{"id":"world_cron_writes_phase","type":"cron","name":"case","enabled":true,` +
 				`"schedule":"@hourly","actions":[` +
@@ -354,6 +369,30 @@ func TestLoadPackage_ReservesTheCampaignSeedWithoutReservingTheCampaignClock(t *
 			`"max_iterations":1}`)
 	if err := loadWithRule(t, clockRule); err != nil {
 		t.Fatalf("LoadPackage refused a world reaction on the campaign clock, which is world content: %v", err)
+	}
+}
+
+// The player namespace is reserved at TURN granularity for the campaign seed's
+// reason, and this pair is what makes the distinction real rather than stated.
+//
+// player.turn.current is the ingress admission gate's state. player.character.*
+// is the played-character binding — an ordinary world fact, and exactly the kind
+// of thing a world reaction should be able to read. A gate that reserved
+// `player.` whole would refuse a world for reacting to who somebody is playing.
+func TestLoadPackage_ReservesThePlayersTurnWithoutReservingTheirCharacter(t *testing.T) {
+	turnRule := ruleJSON("world_reads_player_turn",
+		`{"field":"player.turn.current","operator":"exists","value":true}`, "on_enter", ``)
+	if err := loadWithRule(t, turnRule); err == nil {
+		t.Fatal("LoadPackage accepted a world rule branching on the ingress admission gate's pointer")
+	}
+
+	characterRule := ruleJSON("world_greets_the_played_character",
+		`{"field":"player.character.current","operator":"exists","value":true}`, "on_enter",
+		`{"type":"add_triple","predicate":"world.relation.knows","object":"$entity.id",`+
+			`"max_iterations":1}`)
+	if err := loadWithRule(t, characterRule); err != nil {
+		t.Fatalf("LoadPackage refused a world reaction on the played-character binding, "+
+			"which is world content: %v", err)
 	}
 }
 

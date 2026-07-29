@@ -79,6 +79,43 @@ var (
 	ErrUnknownField = errors.New("unknown field")
 )
 
+// FieldError names the request field a refusal is about, alongside the sentinel
+// that classifies it.
+//
+// It exists because a gateway has to put the field NAME in a structured answer,
+// and the alternative is scraping it out of a message this package is otherwise
+// free to reword. That is the shape a client would end up parsing, and a reworded
+// diagnosis would silently stop naming a field the client was told to fix.
+//
+// It wraps the sentinel rather than replacing it, so errors.Is keeps working for
+// callers that only want the class.
+type FieldError struct {
+	// Name is the json field the client sent, or the one whose contract failed.
+	Name string
+	// Err is the classifying sentinel: ErrServerOwnedField, ErrUnknownField, or
+	// nil for a field that simply failed its own contract.
+	Err error
+	// Detail is the human-readable diagnosis. It is composed from the request
+	// and from this package's own contract, never from anything internal, so it
+	// is safe to hand back to the client that sent the field.
+	Detail string
+}
+
+func (e *FieldError) Error() string {
+	if e.Err == nil {
+		return e.Detail
+	}
+	return fmt.Sprintf("%s: %s", e.Err, e.Detail)
+}
+
+// Unwrap exposes the classifying sentinel to errors.Is.
+func (e *FieldError) Unwrap() error { return e.Err }
+
+// fieldErrorf builds a FieldError with a formatted diagnosis.
+func fieldErrorf(name string, sentinel error, format string, args ...any) *FieldError {
+	return &FieldError{Name: name, Err: sentinel, Detail: fmt.Sprintf(format, args...)}
+}
+
 // ParsePlayerProtocolVersion accepts only versions this engine speaks.
 //
 // An ABSENT version is refused rather than defaulted to v1. A default would mean

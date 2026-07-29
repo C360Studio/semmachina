@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -86,10 +87,39 @@ type fakeStore struct {
 
 	creates int
 	merges  int
+	// mergesBySubject counts merges per entity. Accepting a turn now writes to
+	// TWO entities — the turn, and the player it points at — so "did this
+	// transition write?" stopped being answerable from a global counter.
+	mergesBySubject map[string]int
 }
 
+// mergesInto reports how many merges landed on one entity.
+func (s *fakeStore) mergesInto(entityID string) int { return s.mergesBySubject[entityID] }
+
+// newFakeStore starts with the PLAYER entity already in the graph, because a
+// world always has one: the importer materializes players before play starts,
+// and the gateway refuses to mint a session for a player that is not a real,
+// non-stub entity. A fake with no player would make the recorder's pointer write
+// fail on every accept for a reason production cannot produce.
 func newFakeStore() *fakeStore {
-	return &fakeStore{entities: map[string]*graph.EntityState{}, journal: &journal{}}
+	store := &fakeStore{
+		entities:        map[string]*graph.EntityState{},
+		journal:         &journal{},
+		mergesBySubject: map[string]int{},
+	}
+	store.entities[testPlayerID] = &graph.EntityState{
+		ID:          testPlayerID,
+		MessageType: message.Type{Domain: payload.Domain, Category: payload.CategoryWorldEntity, Version: payload.SchemaVersion},
+		Version:     1,
+		Triples: []message.Triple{{
+			Subject:   testPlayerID,
+			Predicate: vocabulary.WorldEntityKind.String(),
+			Object:    string(vocabulary.EntityKindPlayer),
+			Source:    "world-import",
+			Timestamp: testTime,
+		}},
+	}
+	return store
 }
 
 func (s *fakeStore) CreateEntity(_ context.Context, entity *graph.EntityState) (graphio.CreateResult, error) {
@@ -127,6 +157,8 @@ func (s *fakeStore) MergeTriples(
 	_ ...graphio.MergeOption,
 ) (*graph.EntityState, error) {
 	s.merges++
+	s.mergesBySubject[entityID]++
+	s.journal.add("merge " + entityID)
 	if s.mergeErr != nil {
 		return nil, s.mergeErr
 	}
@@ -138,19 +170,35 @@ func (s *fakeStore) MergeTriples(
 		if triple.Subject != entityID {
 			return nil, fmt.Errorf("triple %q targets %q, not %q", triple.Predicate, triple.Subject, entityID)
 		}
-		replaced := false
-		for idx := range stored.Triples {
-			if stored.Triples[idx].Predicate == triple.Predicate {
-				stored.Triples[idx] = triple
-				replaced = true
-				break
+		// EVERY prior value of the predicate is dropped, not just the first.
+		// Measured against real graph-ingest, not assumed: a merge onto an
+		// entity already holding two values of one predicate leaves ONE (see
+		// TestIntegration_AMergeConvergesAPredicateThatAlreadyHoldsTwoValues).
+		// A fake that replaced only the first would keep the stale value and
+		// make an append anomaly look permanent to every unit test.
+		kept := stored.Triples[:0]
+		for _, existing := range stored.Triples {
+			if existing.Predicate != triple.Predicate {
+				kept = append(kept, existing)
 			}
 		}
-		if !replaced {
-			stored.Triples = append(stored.Triples, triple)
-		}
+		stored.Triples = append(kept, triple)
 	}
 	return clone(stored), nil
+}
+
+// turnEntities lists the TURN entities the store holds. The store is seeded
+// with the world's player, so "how many entities exist" stopped being the same
+// question as "was a turn created".
+func (s *fakeStore) turnEntities() []string {
+	var ids []string
+	for id := range s.entities {
+		if strings.Contains(id, "."+turn.TypeSegment+".") {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	return ids
 }
 
 func clone(entity *graph.EntityState) *graph.EntityState {
@@ -170,6 +218,9 @@ func (s *appendingStore) MergeTriples(
 	triples []message.Triple,
 	_ ...graphio.MergeOption,
 ) (*graph.EntityState, error) {
+	s.merges++
+	s.mergesBySubject[entityID]++
+	s.journal.add("merge " + entityID)
 	stored, ok := s.entities[entityID]
 	if !ok {
 		return nil, fmt.Errorf("merge into %s: %w", entityID, graphio.ErrEntityNotFound)
@@ -331,12 +382,19 @@ func TestAccept_TheActionReferenceRidesInsideTheAtomicCreate(t *testing.T) {
 		t.Fatalf("Accept: %v", err)
 	}
 
-	// One create and no follow-up write: a create-then-add-the-reference
-	// sequence would leave a window in which the turn exists carrying no
-	// pointer, and every guard would read that turn as complete.
-	if store.creates != 1 || store.merges != 0 {
-		t.Fatalf("the turn's birth took %d create(s) and %d merge(s); the reference must ride inside the "+
-			"create, or the crash window the atomic create closes is reopened", store.creates, store.merges)
+	// One create and NO follow-up write to the turn: a create-then-add-the-
+	// reference sequence would leave a window in which the turn exists carrying
+	// no pointer, and every guard would read that turn as complete. The one
+	// merge the accept does issue lands on the PLAYER, which is a different
+	// entity and cannot be folded into the turn's atomic create at all.
+	if store.creates != 1 || store.mergesInto(acceptance.TurnEntityID) != 0 {
+		t.Fatalf("the turn's birth took %d create(s) and %d merge(s) into the turn; the reference must ride "+
+			"inside the create, or the crash window the atomic create closes is reopened",
+			store.creates, store.mergesInto(acceptance.TurnEntityID))
+	}
+	if store.mergesInto(testPlayerID) != 1 {
+		t.Fatalf("accepting a turn issued %d write(s) to the player; the admission gate reads exactly one "+
+			"pointer there", store.mergesInto(testPlayerID))
 	}
 
 	stored, err := store.GetEntity(t.Context(), acceptance.TurnEntityID)
@@ -370,7 +428,7 @@ func TestAccept_StoresTheActionBeforeCreatingTheTurn(t *testing.T) {
 		t.Fatalf("Accept: %v", err)
 	}
 
-	if len(store.journal.entries) != 2 {
+	if len(store.journal.entries) != 3 {
 		t.Fatalf("the turn's birth issued %d writes: %v", len(store.journal.entries), store.journal.entries)
 	}
 	if !strings.HasPrefix(store.journal.entries[0], "put ") {
@@ -379,6 +437,15 @@ func TestAccept_StoresTheActionBeforeCreatingTheTurn(t *testing.T) {
 	}
 	if !strings.HasPrefix(store.journal.entries[1], "create ") {
 		t.Fatalf("the second write was %q, want the turn create", store.journal.entries[1])
+	}
+	// The player pointer goes LAST, and the order is the guarantee. A crash in
+	// the gap leaves the pointer naming the player's previous, terminal turn, so
+	// the admission gate admits their next action: fail-open, self-healing on the
+	// redelivery. The reverse order would leave the pointer at a turn that was
+	// never created, which is a player locked out of their own campaign.
+	if store.journal.entries[2] != "merge "+testPlayerID {
+		t.Fatalf("the third write was %q, want the player pointer; a pointer written before the turn exists "+
+			"names a turn that may never exist", store.journal.entries[2])
 	}
 }
 
@@ -405,8 +472,8 @@ func TestAccept_ARedeliveryRePutsTheActionAndStillCreatesNoSecondTurn(t *testing
 	if len(actions.stored) != 1 {
 		t.Fatalf("two deliveries left %d stored actions: %v", len(actions.stored), actions.stored)
 	}
-	if len(store.entities) != 1 {
-		t.Fatalf("two deliveries left %d turn entities", len(store.entities))
+	if ids := store.turnEntities(); len(ids) != 1 {
+		t.Fatalf("two deliveries left %d turn entities: %v", len(ids), ids)
 	}
 }
 
@@ -459,8 +526,8 @@ func TestAccept_ASecondDeliveryCreatesNoSecondTurn(t *testing.T) {
 	if second.TurnEntityID != first.TurnEntityID {
 		t.Fatalf("the duplicate resolved to %q, the first to %q", second.TurnEntityID, first.TurnEntityID)
 	}
-	if len(store.entities) != 1 {
-		t.Fatalf("two deliveries left %d entities", len(store.entities))
+	if ids := store.turnEntities(); len(ids) != 1 {
+		t.Fatalf("two deliveries left %d turn entities: %v", len(ids), ids)
 	}
 }
 
@@ -536,8 +603,8 @@ func TestAccept_RejectsAnActionThatCannotBecomeATurn(t *testing.T) {
 				t.Fatalf("rejection is a %T, not a RejectedActionError; only that type terminates the "+
 					"delivery, so anything else redelivers a poison message forever", err)
 			}
-			if len(store.entities) != 0 {
-				t.Fatal("a rejected action still created a turn entity")
+			if ids := store.turnEntities(); len(ids) != 0 {
+				t.Fatalf("a rejected action still created turn entities %v", ids)
 			}
 		})
 	}
@@ -776,8 +843,8 @@ func TestAdvance_RefusesToSkipAStage(t *testing.T) {
 			if !errors.As(err, &illegal) {
 				t.Fatalf("refusal is a %T, want an IllegalTransitionError so a wiring bug is loud", err)
 			}
-			if store.merges != 0 {
-				t.Fatal("a refused transition still wrote")
+			if store.mergesInto(acceptance.TurnEntityID) != 0 {
+				t.Fatal("a refused transition still wrote to the turn")
 			}
 		})
 	}
@@ -847,8 +914,8 @@ func TestAdvance_RefusesTheTwoPhasesThatAreNotItsToWrite(t *testing.T) {
 			if illegal.Fault != tc.fault {
 				t.Fatalf("refusal carries fault %q, want %q", illegal.Fault, tc.fault)
 			}
-			if store.merges != 0 {
-				t.Fatal("a refused transition still wrote")
+			if store.mergesInto(acceptance.TurnEntityID) != 0 {
+				t.Fatal("a refused transition still wrote to the turn")
 			}
 		})
 	}
@@ -932,8 +999,8 @@ func TestAdvance_RefusesATurnEntityAddressingADifferentTurn(t *testing.T) {
 	if err == nil {
 		t.Fatal("a phase was recorded for a turn the entity does not address")
 	}
-	if store.merges != 0 {
-		t.Fatal("a mismatched pair still wrote")
+	if store.merges != 1 {
+		t.Fatalf("a mismatched pair issued %d write(s) beyond the accept's player pointer", store.merges-1)
 	}
 }
 
@@ -963,8 +1030,8 @@ func TestFail_RecordsThePhaseAndTheClosedReasonTogether(t *testing.T) {
 	}
 	// One write, not two: a crash between them would leave a failed turn nobody
 	// can explain, or a reason on a turn still reporting itself as running.
-	if store.merges != 3 {
-		t.Fatalf("the turn took %d merges; the failure must be one of them", store.merges)
+	if got := store.mergesInto(acceptance.TurnEntityID); got != 3 {
+		t.Fatalf("the turn took %d merges; the failure must be one of them", got)
 	}
 }
 
@@ -983,8 +1050,8 @@ func TestFail_RefusesAReasonOutsideTheClosedSet(t *testing.T) {
 			t.Fatalf("reason %q was recorded on the turn entity", reason)
 		}
 	}
-	if store.merges != 0 {
-		t.Fatal("a refused reason still wrote to the turn")
+	if got := store.mergesInto(acceptance.TurnEntityID); got != 0 {
+		t.Fatalf("a refused reason wrote to the turn %d time(s)", got)
 	}
 }
 
@@ -1022,8 +1089,8 @@ func TestFail_RefusesADetailThatIsNotAResolvableReference(t *testing.T) {
 		vocabulary.FailureEffectInvalid, notAReference); err == nil {
 		t.Fatal("a reference with no key was recorded on the turn entity")
 	}
-	if store.merges != 2 {
-		t.Fatalf("the refused failure wrote to the turn (%d merges, want the 2 advances)", store.merges)
+	if got := store.mergesInto(acceptance.TurnEntityID); got != 2 {
+		t.Fatalf("the refused failure wrote to the turn (%d merges, want the 2 advances)", got)
 	}
 }
 
@@ -1215,8 +1282,8 @@ func TestIntakeHandle_ASecondDeliveryAcksAndCreatesNoSecondTurn(t *testing.T) {
 			t.Fatalf("delivery %d: %v", attempt+1, err)
 		}
 	}
-	if len(store.entities) != 1 {
-		t.Fatalf("three deliveries left %d turn entities", len(store.entities))
+	if ids := store.turnEntities(); len(ids) != 1 {
+		t.Fatalf("three deliveries left %d turn entities: %v", len(ids), ids)
 	}
 	stored, _ := store.GetEntity(t.Context(), testTurnEntityID)
 	if got := objectsFor(stored, vocabulary.TurnPhaseCurrent); len(got) != 1 {
@@ -1281,8 +1348,8 @@ func TestIntakeHandle_TerminatesDeliveriesThatCanNeverSucceed(t *testing.T) {
 			if !errors.As(err, &permanent) {
 				t.Fatalf("failure is a %T, not a PermanentDeliveryError; it would be redelivered forever", err)
 			}
-			if len(store.entities) != 0 {
-				t.Fatal("a terminated delivery still created a turn")
+			if ids := store.turnEntities(); len(ids) != 0 {
+				t.Fatalf("a terminated delivery still created turn entities %v", ids)
 			}
 		})
 	}
