@@ -57,6 +57,16 @@ const (
 	// known ids, with per-id omissions reported rather than silently shortening
 	// the list (ADR-084).
 	SubjectQueryBatch = "graph.ingest.query.batch"
+	// SubjectQueryPrefix is the paginated enumeration of every entity under an
+	// entity-ID prefix.
+	//
+	// It answers the one question the other two cannot: "which entities of this
+	// kind exist?" — where the caller holds no id list to batch and no reverse
+	// edge to follow. The campaign ledger's boot reconciliation is exactly that
+	// shape: it has to find terminal turns nobody told it about, and the
+	// alternative to asking upstream is scanning ENTITY_STATES by hand, which
+	// would be a local index over data the substrate already keys.
+	SubjectQueryPrefix = "graph.ingest.query.prefix"
 	// SubjectIndexQueryIncoming is graph-index's reverse-edge read: every
 	// (source, predicate) pointing AT an entity.
 	//
@@ -321,6 +331,60 @@ func (s *Store) GetEntities(ctx context.Context, ids []string) (BatchResult, err
 		}
 	}
 	return result, nil
+}
+
+// PrefixPage is one page of an entity-ID prefix enumeration.
+type PrefixPage struct {
+	// Entities are the entities on this page, whole, sorted by ID.
+	Entities []graph.EntityState
+	// NextCursor continues the enumeration. Empty means exhausted.
+	//
+	// It must be FOLLOWED, not treated as an optimization: upstream trims a
+	// page against a response byte budget as well as a count limit, so a caller
+	// that read one page and stopped would silently see a prefix of the world
+	// and call it the whole thing.
+	NextCursor string
+}
+
+// EntitiesWithPrefix enumerates entities under a dot-delimited entity-ID prefix,
+// one page at a time.
+//
+// The prefix carries NO trailing dot — upstream appends one when it filters, so
+// supplying it would look for a segment named "". Passing a full six-part ID is
+// legal and returns that single entity.
+//
+// cursor is empty for the first page and thereafter the previous page's
+// NextCursor; limit <= 0 takes the server default. Pages are sorted by entity
+// ID, which is what makes the cursor meaningful at all.
+func (s *Store) EntitiesWithPrefix(
+	ctx context.Context,
+	prefix, cursor string,
+	limit int,
+) (PrefixPage, error) {
+	if prefix == "" {
+		return PrefixPage{}, errors.New(
+			"prefix query requires a prefix; an empty one enumerates every entity in the world, which is a " +
+				"scan wearing a query's clothes")
+	}
+	request, err := json.Marshal(graph.PrefixQueryRequest{Prefix: prefix, Cursor: cursor, Limit: limit})
+	if err != nil {
+		return PrefixPage{}, fmt.Errorf("encode prefix query for %s: %w", prefix, err)
+	}
+
+	reply, err := s.requester.RequestClassified(ctx, SubjectQueryPrefix, request, s.timeout)
+	if err != nil {
+		return PrefixPage{}, fmt.Errorf("prefix query for %s: %w", prefix, err)
+	}
+	var response graph.PrefixQueryResponse
+	if err := json.Unmarshal(reply, &response); err != nil {
+		return PrefixPage{}, fmt.Errorf("decode prefix query response for %s: %w", prefix, err)
+	}
+	// The authoritative-state contract applies to every decoded entity here
+	// exactly as it does on the single and batch reads.
+	if err := graph.ValidateDecodedEntityStates(response.Entities); err != nil {
+		return PrefixPage{}, err
+	}
+	return PrefixPage{Entities: response.Entities, NextCursor: response.NextCursor}, nil
 }
 
 // IncomingRelationships returns every edge pointing AT an entity.

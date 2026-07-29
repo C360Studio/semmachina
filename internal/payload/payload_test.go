@@ -276,7 +276,22 @@ func validTurnManifest() *payload.TurnManifest {
 		RollRef:        "obj://rolls/turn-act-1",
 		EffectBatchRef: "obj://effects/batch-turn-act-1",
 		NarrationRef:   "obj://prose/turn-act-1",
+		RollGate:       validRollGate(),
 		RecordedAt:     testTime,
 		WorldTime:      1720000000,
 	}
+}
+
+// validRollGate is the fixture's roll-gate agreement, derived from the same
+// scalars validVerdict reports so the two fixtures describe one turn.
+//
+// (plausible, high) advises a roll and the verdict reports one, so Reported and
+// Advised agree here; the disagreement cases are exercised where they belong,
+// in the manifest's own tests.
+func validRollGate() *payload.RollGateExpectation {
+	gate, err := validVerdict().Scalars.RollGate()
+	if err != nil {
+		panic("the verdict fixture's scalars are outside the vocabulary: " + err.Error())
+	}
+	return &gate
 }

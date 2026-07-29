@@ -365,6 +365,22 @@ distinct rules — `types.ValidateEntityID` for mapped IDs, `vocabulary.ParsePre
 every predicate in `entities.jsonl` — and must reject bad predicates at import time with a
 reason naming the offending line, rather than letting them fail later at materialization.
 
+### F23 — A single-turn replay test cannot see call-order dependence
+
+The dice purity scan bans a **PCG-typed field** on the roller, not *state in general* — so a
+plain `int` call counter mixed into the seed passes it. And a replay test that plays **one**
+turn cannot catch that either: producer and replayer are each making their first call, so
+they agree. Golden vectors do not help when the perturbation leaves call one untouched.
+
+The fix is cheap and belongs in any determinism test: play **several** turns through one
+producer and replay them in a **different order**. That turns call-order dependence from
+invisible into a failing diff, and it is the only shape that distinguishes "this function is
+deterministic" from "this function agrees with itself when asked the same way twice".
+
+The general lesson, third of its kind here: a structural scan proves the absence of the
+mechanisms it names, never the absence of the property you want. It is a good tripwire and a
+bad proof. The behavioral test has to carry the claim.
+
 ### F22 — `on_recovery` rescues a crashed *stage*, never a stranded *phase*
 
 The bootstrap replay fires `on_recovery` only for a rule that is **currently matching** at

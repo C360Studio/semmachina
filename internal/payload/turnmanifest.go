@@ -50,6 +50,23 @@ type TurnManifest struct {
 	// FailureReason is required on a failed turn and forbidden otherwise.
 	FailureReason string `json:"failure_reason,omitempty"`
 
+	// RollGate records what the adjudicator said about the dice, what the
+	// advisory mapping said, and which version of that mapping said it.
+	//
+	// It is a POINTER because absence is a real state and must not be spelled
+	// the same way as "impossible, unknown, they agreed": a turn that failed
+	// before adjudication has no verdict and therefore no gate to record, and a
+	// zero-valued struct would archive that turn as having reported no roll
+	// under an empty mapping.
+	//
+	// It is derivable from the stored verdict TODAY, which is exactly why it
+	// looks like a redundant field and is not. See RollGateExpectation.Mapping:
+	// the mapping is advisory and expected to be tuned with play, and a value
+	// this archive derived on read would silently change its account of every
+	// historical turn the day the table moved. The ledger's job is to say what
+	// was true then.
+	RollGate *RollGateExpectation `json:"roll_gate,omitempty"`
+
 	// RecordedAt is the real-time stamp.
 	RecordedAt time.Time `json:"recorded_at"`
 	// WorldTime is the in-fiction time stamp. Always present, always zero
@@ -96,6 +113,18 @@ func (m *TurnManifest) Validate() error {
 		if m.FailureReason == "" {
 			return errors.New("a failed turn requires failure_reason")
 		}
+		// A CLOSED code, never a sentence. The turn recorder already refuses
+		// anything else on the way to the graph, and the same rule holds here
+		// for a different reason: the ledger is where a campaign's history is
+		// read back, so a free-text reason would put LLM- or applier-authored
+		// prose into the archive's only structured account of why a turn ended —
+		// and every consumer downstream of the ledger (the chronicler, the
+		// writer loop, a metrics pass over failure rates) would inherit it as
+		// data it cannot group on. The error is returned unwrapped because it
+		// names the kind — "failure_reason" — itself.
+		if _, err := vocabulary.ParseFailureReason(m.FailureReason); err != nil {
+			return err
+		}
 	case vocabulary.PhaseComplete:
 		if m.FailureReason != "" {
 			return errors.New("a complete turn must not carry failure_reason")
@@ -105,6 +134,21 @@ func (m *TurnManifest) Validate() error {
 		}
 		if m.NarrationRef == "" {
 			return errors.New("a complete turn requires narration_ref")
+		}
+		// A completed turn was adjudicated by definition — it carries a verdict
+		// — so the gate it was adjudicated under is knowable and must be
+		// recorded. Making it required exactly where it is derivable is the
+		// point: it is the turns that HAVE a verdict whose derived advice would
+		// silently change when the mapping is tuned.
+		if m.RollGate == nil {
+			return errors.New(
+				"a complete turn requires roll_gate; it carries a verdict, so the gate it ran under is known, " +
+					"and deriving it later would re-decide history when the advisory mapping is tuned")
+		}
+	}
+	if m.RollGate != nil {
+		if err := m.RollGate.Validate(); err != nil {
+			return fmt.Errorf("roll_gate: %w", err)
 		}
 	}
 

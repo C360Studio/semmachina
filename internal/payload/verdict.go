@@ -73,8 +73,9 @@ func (s VerdictScalars) Validate() error {
 }
 
 // RollGateExpectation records one verdict's reported roll gate beside the
-// mapping's advice for the same classes. It is a comparison, never a verdict
-// on the verdict: Reported is what the engine acts on.
+// mapping's advice for the same classes, and the VERSION of the mapping that
+// advice came from. It is a comparison, never a verdict on the verdict:
+// Reported is what the engine acts on.
 //
 // This exists as a typed, serializable value rather than a log line because
 // the divergence rate is the measurement that tells us whether the
@@ -91,10 +92,51 @@ type RollGateExpectation struct {
 	Reported bool `json:"reported"`
 	// Advised is vocabulary.RequiresRoll's expectation for the same classes.
 	Advised bool `json:"advised"`
+	// Mapping is the VERSION of the advisory mapping Advised was computed
+	// under.
+	//
+	// Without it this whole struct is redundant: the classes and the reported
+	// gate are already on the stored verdict, so any reader could recompute
+	// Advised on demand. The version is what makes the recomputation WRONG to
+	// rely on. The mapping is advisory and expected to be tuned with play
+	// (D12), so the day it changes, a derived Advised silently flips for every
+	// turn already in the archive — a campaign's history quietly re-deciding
+	// whether its adjudicator ever disagreed with the engine. Stamped, the
+	// record says what was true at the time, and a reader can tell a v1
+	// disagreement from a v2 one instead of averaging them.
+	Mapping vocabulary.RollGateMapping `json:"mapping"`
 }
 
 // Agrees reports whether the persona's gate matched the mapping's advice.
 func (e RollGateExpectation) Agrees() bool { return e.Reported == e.Advised }
+
+// Validate holds a recorded expectation to its own contract.
+//
+// The advice is re-derived under the record's OWN mapping version, never under
+// the engine's current one. That is the whole reason the version is on the
+// record: checking it against today's table would re-decide a historical turn's
+// disagreement every time the mapping is tuned — the archive quietly rewriting
+// itself, which is the failure this field exists to prevent. Asking the named
+// version instead means an old manifest stays verifiable against the table it
+// actually ran under, and a version this engine no longer holds is refused
+// outright rather than silently re-judged.
+//
+// What it deliberately does NOT check is Reported against Advised. A verdict
+// whose reported gate disagrees with the mapping is VALID and proceeds (D12);
+// the disagreement is the measurement, not a defect.
+func (e RollGateExpectation) Validate() error {
+	advised, err := vocabulary.AdviseRollGate(e.Mapping, e.Plausibility, e.Risk)
+	if err != nil {
+		return err
+	}
+	if advised != e.Advised {
+		return fmt.Errorf(
+			"roll gate records advised=%v under mapping %s, but that mapping advises %v for (%s, %s); "+
+				"a recorded expectation is a comparison that happened, not one recomputed later",
+			e.Advised, e.Mapping, advised, e.Plausibility, e.Risk)
+	}
+	return nil
+}
 
 // RollGate returns the reported gate beside the mapping's advice.
 //
@@ -111,6 +153,7 @@ func (s VerdictScalars) RollGate() (RollGateExpectation, error) {
 		Risk:         s.Risk,
 		Reported:     s.RequiresRoll,
 		Advised:      advised,
+		Mapping:      vocabulary.RollGateMappingVersion(),
 	}, nil
 }
 

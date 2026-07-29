@@ -175,3 +175,54 @@ func TestChannelAdapter_OnlyRegisteredAdaptersAreAccepted(t *testing.T) {
 		}
 	}
 }
+
+// The ledger composes a manifest from the TURN ENTITY, which carries no action
+// id, so the inverse derivation is what pairs the archived turn with the action
+// that caused it. It has to be exact in both directions or the archive names an
+// action nobody submitted.
+func TestActionIDForTurn_RoundTripsEveryLegalActionID(t *testing.T) {
+	for _, actionID := range []string{
+		"a", "act-1", "act_1", "A1", "1", "turn-nested",
+		strings.Repeat("x", payload.MaxActionIDBytes),
+	} {
+		turnID := payload.TurnIDForAction(actionID)
+		got, err := payload.ActionIDForTurn(turnID)
+		if err != nil {
+			t.Fatalf("ActionIDForTurn(%q) from action %q: %v", turnID, actionID, err)
+		}
+		if got != actionID {
+			t.Fatalf("round trip: action %q became turn %q became action %q", actionID, turnID, got)
+		}
+	}
+}
+
+// A turn id with no action behind it must be an error, never a pass-through:
+// returning the input would archive a dangling identity that looks perfectly
+// well formed.
+func TestActionIDForTurn_RefusesATurnIDNoActionDerived(t *testing.T) {
+	cases := []struct {
+		name    string
+		turnID  string
+		wantErr string
+	}{
+		{name: "no prefix at all", turnID: "act-1", wantErr: "does not begin with"},
+		{name: "prefix and nothing else", turnID: payload.TurnIDPrefix, wantErr: "action_id"},
+		{name: "empty", turnID: "", wantErr: "turn_id"},
+		{name: "not an id segment", turnID: "turn-a.b", wantErr: "turn_id"},
+		{name: "overlong", turnID: strings.Repeat("t", vocabulary.MaxIDSegmentBytes+1), wantErr: "turn_id"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := payload.ActionIDForTurn(tc.turnID)
+			if err == nil {
+				t.Fatalf("ActionIDForTurn(%q) returned %q instead of refusing", tc.turnID, got)
+			}
+			if got != "" {
+				t.Fatalf("a refused derivation still produced %q", got)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("rejection reason %q does not mention %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}

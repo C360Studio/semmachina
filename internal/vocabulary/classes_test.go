@@ -149,6 +149,16 @@ func closedSets() []closedSet {
 			},
 			sampleBad: "the target entity does not exist",
 		},
+		{
+			kind:    vocabulary.KindRollGateMapping,
+			members: strs(vocabulary.RollGateMappings()),
+			parse:   asStringParser(vocabulary.ParseRollGateMapping),
+			// A version this engine never had is a corrupt or foreign ledger
+			// record, not an old one — so the near-misses are the plausible
+			// spellings of "some other table decided this".
+			nearMiss:  []string{"roll-gate", "roll-gate/v2", "v1", "ROLL-GATE/V1", "requires_roll"},
+			sampleBad: "roll-gate/v2",
+		},
 	}
 }
 

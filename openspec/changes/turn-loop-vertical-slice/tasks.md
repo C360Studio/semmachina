@@ -298,7 +298,7 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       `logic != "and"` refusal, the on_enter/on_recovery subject agreement, and
       `TerminateDelivery` on a poison trigger, whose test passes whether or not the message
       is terminated
-- [ ] 8.2 Record the roll-gate agreement on `TurnManifest` — reported gate, advised gate,
+- [x] 8.2 Record the roll-gate agreement on `TurnManifest` — reported gate, advised gate,
       and the **mapping version**, which does not exist yet: `RollGateExpectation` carries
       no version and `vocabulary.RequiresRoll` has no version constant, so add one here
       rather than discovering it mid-ledger. Resolves a question 7.2 raised rather than
@@ -310,7 +310,7 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       `CAMPAIGN_LEDGER` stream (no age/size eviction),
       one manifest per resolved turn keyed by `turn_id` (including failed turns),
       duplicate-append dropped; world-time field present (zero)
-- [ ] 8.3 Implement a minimal replay reader proving replay honesty: re-execute the roll
+- [x] 8.3 Implement a minimal replay reader proving replay honesty: re-execute the roll
       from a manifest byte-identically; read narration from the preserved ref
 
 ## 9. Player I/O adapters

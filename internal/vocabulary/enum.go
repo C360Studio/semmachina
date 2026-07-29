@@ -46,6 +46,9 @@ const (
 	KindRNG Kind = "rng"
 	// KindFailureReason is the machine-readable reason a turn failed.
 	KindFailureReason Kind = "failure_reason"
+	// KindRollGateMapping is the versioned advisory (plausibility, risk) → roll
+	// mapping a recorded expectation was computed under.
+	KindRollGateMapping Kind = "roll_gate_mapping"
 )
 
 // UnknownValueError reports a value outside a closed set. Every Parse* helper
@@ -126,6 +129,7 @@ var registeredEnums = []enumSet{
 	mechanicEnum,
 	rngEnum,
 	failureReasonEnum,
+	rollGateMappingEnum,
 }
 
 // Sets returns every closed value set keyed by kind. This is the projection

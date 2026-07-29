@@ -570,3 +570,79 @@ func TestIncomingRelationships_DecodesTheQueryEnvelope(t *testing.T) {
 			"an empty room and reports no error", edges)
 	}
 }
+
+// ------------------------------------------------------- the prefix enumeration
+
+// The cursor is not an optimisation to skip. Upstream trims a page against a
+// response BYTE budget as well as a count limit, so a caller that read one page
+// and stopped would see a prefix of the world and call it the whole thing — and
+// for the ledger's boot reconciliation that reads as a campaign whose later
+// turns never happened.
+func TestEntitiesWithPrefix_PassesTheCursorThroughAndReturnsTheNextOne(t *testing.T) {
+	body, err := json.Marshal(graph.PrefixQueryResponse{
+		Entities:   []graph.EntityState{*validEntity()},
+		NextCursor: graph.EncodeCursor(testEntityID),
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	requester := &fakeRequester{reply: body}
+
+	page, err := newStore(t, requester).EntitiesWithPrefix(
+		t.Context(), "c360.semmachina.world1.starter.turn", "cursor-from-the-last-page", 7)
+	if err != nil {
+		t.Fatalf("EntitiesWithPrefix: %v", err)
+	}
+	if requester.subject != graphio.SubjectQueryPrefix {
+		t.Fatalf("the prefix read went to %q", requester.subject)
+	}
+
+	var sent graph.PrefixQueryRequest
+	if err := json.Unmarshal(requester.request, &sent); err != nil {
+		t.Fatalf("decode the request the store sent: %v", err)
+	}
+	if sent.Cursor != "cursor-from-the-last-page" {
+		t.Fatalf("the store sent cursor %q; a dropped cursor restarts the scan at page one forever", sent.Cursor)
+	}
+	if sent.Limit != 7 {
+		t.Fatalf("the store sent limit %d, want 7", sent.Limit)
+	}
+	// The prefix travels WITHOUT a trailing dot: upstream appends one when it
+	// filters, so sending one would look for a segment named "".
+	if strings.HasSuffix(sent.Prefix, ".") {
+		t.Fatalf("the store sent prefix %q with a trailing dot", sent.Prefix)
+	}
+
+	if len(page.Entities) != 1 || page.Entities[0].ID != testEntityID {
+		t.Fatalf("page held %+v", page.Entities)
+	}
+	if page.NextCursor == "" {
+		t.Fatal("the next cursor was dropped; the caller would stop after one page")
+	}
+}
+
+func TestEntitiesWithPrefix_RefusesAnEmptyPrefix(t *testing.T) {
+	requester := &fakeRequester{}
+	if _, err := newStore(t, requester).EntitiesWithPrefix(t.Context(), "", "", 0); err == nil {
+		t.Fatal("an empty prefix was accepted; it enumerates every entity in the world")
+	}
+	if requester.requests != 0 {
+		t.Fatal("the store issued a request for an empty prefix")
+	}
+}
+
+// Stored bytes are untrusted input on every read path, and this one returns
+// whole entities a persona or an archive would treat as fact.
+func TestEntitiesWithPrefix_RefusesAPoisonedEntityInThePage(t *testing.T) {
+	poisoned := *validEntity()
+	poisoned.ID = ""
+	body, err := json.Marshal(graph.PrefixQueryResponse{Entities: []graph.EntityState{poisoned}})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	if _, err := newStore(t, &fakeRequester{reply: body}).EntitiesWithPrefix(
+		t.Context(), "c360.semmachina.world1.starter.turn", "", 0); err == nil {
+		t.Fatal("a page carrying an entity that fails the decoded-state contract was accepted")
+	}
+}

@@ -142,6 +142,35 @@ func TurnIDForAction(actionID string) string {
 	return TurnIDPrefix + actionID
 }
 
+// ActionIDForTurn inverts TurnIDForAction.
+//
+// It exists because the campaign ledger composes a manifest from the TURN
+// ENTITY — the authoritative record of what happened — and the turn entity does
+// not carry the action id: it carries a reference to the stored action. Deriving
+// the action id here is what lets the ledger writer name both identities without
+// a second store read, and it is exact rather than approximate because the
+// forward derivation is a constant prefix and nothing else.
+//
+// A turn id that does not carry the prefix is an ERROR and never a
+// pass-through. Silently returning the input would mint an action id for a turn
+// that was never derived from an action, and the manifest would archive a
+// dangling identity that looks perfectly well formed.
+func ActionIDForTurn(turnID string) (string, error) {
+	if err := requireIDSegment("turn_id", turnID); err != nil {
+		return "", err
+	}
+	actionID, ok := strings.CutPrefix(turnID, TurnIDPrefix)
+	if !ok {
+		return "", fmt.Errorf(
+			"turn id %q does not begin with %q, so no action id derives from it; turn and action are 1:1 and "+
+				"the derivation is the only thing that pairs them", turnID, TurnIDPrefix)
+	}
+	if err := requireActionID("action_id", actionID); err != nil {
+		return "", err
+	}
+	return actionID, nil
+}
+
 // RequireTurnEntityID asserts that a turn entity ID addresses the turn a
 // payload claims.
 //
