@@ -268,7 +268,7 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       the guard answers "did this stage finish", the recorder answers "is this transition
       legal", and a skip decision taken while the phase is still `accepted` would have the
       guard say advance while the recorder refuses it as an illegal stage skip
-- [ ] 8.1a **Stranded-turn reconciliation (F22).** The `on_recovery` backstop the stage
+- [x] 8.1a **Stranded-turn reconciliation (F22).** The `on_recovery` backstop the stage
       comments claim does not exist: bootstrap replay fires only for rules *currently
       matching*, and a turn parked mid-stage matches none, because every mid-chain rule is
       phase AND artifact and the artifact is what is missing. Unacked JetStream triggers
@@ -279,20 +279,60 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       silent stall" is unmet for that class. Build the reconciliation that finds turns whose
       phase is non-terminal with no stage running, correct the three comments and this file's
       claim, and move the loop-failure notification onto a durable consumer — with one
-      consumer and a billed consequence, the fan-out argument for core NATS is weak
+      consumer and a billed consequence, the fan-out argument for core NATS is weak.
+      **Landed as `internal/resume`.** The probe went further than F22 did: bootstrap replay
+      rescues **none** of the three parked shapes, including the one whose artifact is
+      present, because upstream's durable stale-replay guard skips any evaluation whose
+      source revision it already recorded — and a parked turn is exactly a turn nobody has
+      written to since. `TestBootstrapReplay_RescuesNoParkedTurn` keeps the measurement.
+      **Built twice and rescoped once, and the reason is worth more than the code was.** The
+      first two versions asked the rule pack (`rulepack.Matcher`, since deleted) whether a
+      rule matched the turn and inferred a MESSAGE from the answer — first that the hop had
+      gone missing, so republish it (two billed adjudicator spawns on the first hop, where
+      no artifact exists for the resume guard to skip on); then that the hop was durably
+      pending, so leave it (strands every turn whose rule fired and whose publish did not).
+      Both are underivable: `natsclient` publishes fail on an open circuit breaker, a
+      disconnected client, or a refused PubAck, the breaker short-circuits a whole batch
+      after it opens, the rule engine persists match state whether or not its action
+      succeeded, and a rule action has its own `max_iterations`. Each patch to the inference
+      surfaced another route, which is the signal that the inference was the defect.
+      **So the pass now MEASURES**, across every durable queue that can deliver work for a
+      turn rather than one of them — `TURN_STAGES` and `AGENT`, because a stage acks its
+      trigger when it PUBLISHES the persona task and the real work then sits unacked where
+      upstream redelivers it. It reads each subject from its consumer's acknowledgement
+      floor (finding the loop's consumer by FILTER SUBJECT, since its name is an unexported
+      sanitisation plus an operator suffix — semstreams#733), and disposes on that: queued means the substrate owns it, counted and
+      untouched; nothing queued with the artifact absent is stranded and gets a stage
+      re-triggered under `resume.MaxAttempts`, then `vocabulary.FailureTurnStranded` — its
+      own stage, or for a turn still in `accepted` the FIRST stage, which is the single
+      unconditional derivation the pass makes (index 0 only; any other index is a route
+      table);
+      nothing queued with the artifact present has the sighting counted and ends once the
+      budget is gone, because re-running that stage would resume a phase the turn is already
+      in and skip on the artifact — and ending on a single reading could fail a turn whose
+      work landed between the queue measurement and the turn read. Nothing
+      derives a hop from the pack — `PhaseRank`/`PhasePredecessors` are deliberately unused.
+      Ordering settled by probe, not argument: bootstrap replay's timing relative to the
+      processor's `Start` is a race (measured 1.02s after, and measured already-landed), so
+      composition starts the rule processor first and the pass waits for the stage stream to
+      go quiet before reading. Upstream has no bootstrap-replay completion signal — an
+      engine ask
 - [ ] 8.1b Two cleanups 8.1 surfaced: (a) the starter world's `rules/00-turn-sequencing.json`
       stub is now misleading — turn sequencing lives in `internal/rulepack` because it is the
       *engine's* state machine and a downloaded world must not be able to author or break the
       turn loop, so replace the stub with a genuinely world-scoped rule (a world reaction) or
-      relax the loader's "at least one rule file" requirement; (b) add the closed
+      relax the loader's "at least one rule file" requirement; ~~(b) add the closed
       `vocabulary.FailureReason` for a persona loop that fails for a reason **other** than
-      its cap — today that case is logged loudly and leaves the turn in its stage until the
-      next boot's recovery replay — which per F22 does not happen — because there is no code
-      to record; (c) tighten `checkArtifactGate`: it currently enforces "gated on something
+      its cap~~ **DONE in 8.1a** — `FailurePersonaLoopFailed` and `FailureTurnStranded` both
+      landed, and `LoopFailureWatcher` records the first rather than logging it. The claim
+      this line used to make — that the turn waits "until the next boot's recovery replay" —
+      was false in both halves: no replay fires for a parked turn, and there was no code to
+      record; (c) tighten `checkArtifactGate`: it currently enforces "gated on something
       besides the phase", not "gated on the previous stage's artifact", so a rule matching a
       *birth-record* fact like `turn.action.player` — present the whole time — loads cleanly
-      and reintroduces F21's race while looking gated. Derive the expected artifact set per
-      phase from the vocabulary; (d) check FSM-edge legality for `eq`-gated hops, so a pack
+      and reintroduces F21's race while looking gated. The per-phase artifact set it needs
+      now exists as `vocabulary.StageArtifacts`, built for 8.1a and deliberately shared;
+      (d) check FSM-edge legality for `eq`-gated hops, so a pack
       cannot express `accepted → narrating` (loud at runtime today, but one derivation from
       being impossible); (e) three pack gates have no regression test at all — the
       `logic != "and"` refusal, the on_enter/on_recovery subject agreement, and
@@ -324,7 +364,22 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 
 ## 10. Composition, mock-LLM E2E, and gates
 
-- [ ] 10.1 Compose `cmd/semmachina`: flow config wiring importer, intake, rules, personas,
+- [ ] 10.1 Compose `cmd/semmachina`. **BOOT ORDER IS PART OF THE TASK, and violating it is
+      silent and destructive**: ensure the stage-trigger stream → start the rule
+      processor → run `resume.Reconcile` → bind the stage runners → bind intake. The
+      stranded-turn pass reads which turns the substrate still holds work for and acts on
+      what is missing from that set, so (a) the stream must exist or a re-trigger publish is
+      refused, (b) the rule processor must have STARTED, because its bootstrap replay
+      publishes into the very set the pass reads and *an unstarted processor is
+      indistinguishable from a quiet one* — the pass cannot detect the violation, it can
+      only be handed the wrong order — and (c) no player action may be accepted during the
+      pass, or a turn born mid-scan reads as stranded a millisecond after its creation.
+      Getting (b) wrong ends live turns: the pass fails a turn it believes nothing is coming
+      for, `failed` is terminal, and the replayed trigger is then declined. The gap between
+      "started" and "finished replaying" is the one part the pass enforces itself
+      (`WorkQueues.Settle` waits for the queues to stop moving); the ordering is the
+      composition's. See `internal/resume`'s package doc.
+      Flow config wiring importer, intake, rules, personas,
       dice, applier, ledger, adapters, **plus `graph-index`** — scene membership is asserted
       by the member (`world.location.current` → scene), so "who is here" is a reverse lookup
       the assembler answers via the incoming index rather than by scanning the world. Its

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/processor/rule/expression"
@@ -117,6 +118,17 @@ func checkDefinition(definition rule.Definition) error {
 	if len(definition.Conditions) == 0 {
 		return fmt.Errorf("declares no conditions")
 	}
+	// A cooldown short-circuits the rule engine's evaluation before any condition
+	// is read, so a hop carrying one fires SOMETIMES. That is the worst shape to
+	// debug in a turn loop — a chain that advances on one turn and stalls on the
+	// next, with nothing anywhere reporting a difference — and this pack has no
+	// use for one: every hop is edge-triggered on a fact that lands exactly once.
+	if definition.Cooldown != "" {
+		return fmt.Errorf(
+			"declares cooldown %q; a cooled-down rule is short-circuited before its conditions are read, so the "+
+				"hop it guards fires on some turns and not others with nothing reporting the difference",
+			definition.Cooldown)
+	}
 	for index, condition := range definition.Conditions {
 		if err := checkCondition(condition); err != nil {
 			return fmt.Errorf("condition[%d] on %s: %w", index, condition.Field, err)
@@ -182,6 +194,28 @@ func checkCondition(condition expression.ConditionExpression) error {
 			"is marked required; a required condition whose predicate is ABSENT evaluates to an error rather " +
 				"than to false, and every hop here reads a predicate that legitimately does not exist yet")
 	}
+	// A `$` in a condition VALUE is a substitution token, resolved against an
+	// execution context that exists only inside a rule evaluation
+	// (SubstituteConditionValues). It is refused because A LOAD-TIME GATE CANNOT
+	// VERIFY AN EDGE WHOSE TARGET IS A RUNTIME TEMPLATE: the FSM-edge check
+	// reads an `eq` condition's value to decide which phase a hop is gated on,
+	// and `"$message.phase"` makes that undeterminable — the pack would load
+	// carrying a hop whose legality nothing established.
+	//
+	// It is checked on EVERY condition rather than only on the phase one. The
+	// closed-set parse below runs only for turn.phase.current, so an artifact
+	// condition like {turn.verdict.requires-roll eq "$x"} would otherwise load
+	// clean and become a hop that quietly never fires — the same shape, one
+	// predicate over.
+	//
+	// This pack matches phases and artifact presence and has no use for a
+	// substitution anyway; refusing one is how that stays true.
+	if text, ok := condition.Value.(string); ok && strings.Contains(text, "$") {
+		return fmt.Errorf(
+			"compares against %q, which carries a substitution token. Substitution is resolved inside a rule "+
+				"evaluation, so a load-time gate cannot see what this hop is really gated on — and a hop whose "+
+				"target only exists at runtime is a hop whose legality nothing can check", text)
+	}
 
 	switch condition.Operator {
 	case "transition":
@@ -239,6 +273,25 @@ func checkCondition(condition expression.ConditionExpression) error {
 // checkActions holds every action to the three properties the chain depends on:
 // it publishes a reference and nothing else, it names a subject some stage
 // actually consumes, and it carries a cap.
+//
+// # What on_recovery is worth, stated accurately
+//
+// This gate used to be justified as the backstop for a turn interrupted
+// mid-stage, and that justification was wrong. Bootstrap replay promotes a rule
+// to a synthetic entry edge only when it was ALREADY matching, still matches,
+// and its entity has been written since the rule last evaluated it (upstream's
+// durable stale-replay guard skips the rest). A turn parked mid-stage matches
+// nothing — every mid-chain rule is a phase AND an artifact, and the artifact is
+// what is missing — and nothing has written to it since. Measured against a live
+// broker: three turns parked in three different shapes, a rule processor
+// restarted against them, twenty seconds, no re-trigger.
+//
+// The gate is KEPT because the narrow case it does cover is real and cheap to
+// keep: a hop whose entity changed between the rule firing and the process
+// dying re-fires at boot only for a rule that declares on_recovery
+// (shouldFireOnRecovery returns false for a rule with neither on_recovery nor
+// rerun_on_recovery). It is a safety net with a small mouth, not the backstop.
+// The backstop is internal/resume.
 func checkActions(definition rule.Definition) error {
 	lists := map[string][]rule.Action{
 		"on_enter":    definition.OnEnter,
@@ -252,8 +305,9 @@ func checkActions(definition rule.Definition) error {
 		case "on_enter", "on_recovery":
 			if len(actions) == 0 {
 				return fmt.Errorf(
-					"declares no %s actions; without on_recovery a turn interrupted mid-stage stays matching "+
-						"across the restart, produces no transition, and never fires again", label)
+					"declares no %s actions; on_enter is the hop itself, and on_recovery is the one bootstrap "+
+						"case that IS rescued — a rule that was already matching, whose entity has been written "+
+						"since it last evaluated, re-fires only for a rule that declares one", label)
 			}
 		default:
 			if len(actions) > 0 {

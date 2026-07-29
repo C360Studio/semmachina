@@ -49,9 +49,11 @@ func (w *archiveWorld) statusVerdict(status vocabulary.Status) map[string]any {
 // in RULE_STATE — not from the graph. With no recorded previous value a
 // transition condition returns false unconditionally, so a turn that reaches
 // `complete` against a fresh or cleared RULE_STATE never publishes the
-// notification, and the durable stale-replay guard means `on_recovery` does not
-// rescue it either. Without reconciliation that turn is simply absent from the
-// campaign's history and nothing anywhere reports it.
+// notification, and bootstrap replay does not rescue it either — the durable
+// stale-replay guard skips an evaluation whose source revision it has already
+// recorded, which is exactly a turn nobody has written to since (measured in
+// internal/resume, not inferred). Without reconciliation that turn is simply
+// absent from the campaign's history and nothing anywhere reports it.
 //
 // So: a turn that resolved with NO notification at all is archived by the boot
 // pass, which is exactly the shape of the lost-notification failure.

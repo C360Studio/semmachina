@@ -40,6 +40,19 @@ const (
 	// message shape nothing sends and nothing reads.
 	CategoryTurnState = "turn_state"
 
+	// CategoryTurnResume is the stranded-turn pass's attempt-counter record, and
+	// it is deliberately NOT registered for the reason CategoryTurnState is not:
+	// no message of this type is ever published. It exists so a counter reaches
+	// the graph through the shared triple projection rather than as a hand-built
+	// triple that would skip the turn-entity pairing check and the shape gate —
+	// and a counter is precisely the predicate where skipping the merge-lane
+	// discipline turns a bound into a turn holding N counters.
+	//
+	// It is named beside the registered categories so the (domain, category,
+	// version) namespace has one home; a bare literal in another package would
+	// make a future collision invisible.
+	CategoryTurnResume = "turn_resume"
+
 	// CategoryTurnNarration is the narrator's artifact-reference record, and it
 	// is deliberately NOT registered for exactly the reason CategoryTurnState is
 	// not: no message of this type is ever published. It exists so the narration

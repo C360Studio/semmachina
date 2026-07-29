@@ -11,9 +11,10 @@ package vocabulary
 // Explanatory detail belongs behind a reference; the graph gets the code.
 //
 // The set is seeded by the capability that produces each member, the same way
-// every other vocabulary here is seeded. Four are the effect applier's and one
-// is the bounded-cognition guarantee's; further reasons join them as the stages
-// that produce them land.
+// every other vocabulary here is seeded. Four are the effect applier's, two are
+// the bounded-cognition guarantee's, and one belongs to the boot-time
+// stranded-turn pass; further reasons join them as the stages that produce them
+// land.
 type FailureReason string
 
 // The closed failure-reason set.
@@ -48,12 +49,36 @@ const (
 	// with this code. Any detail about WHICH loop and how far it got rides behind
 	// TurnFailureRef.
 	FailurePersonaCapExhausted FailureReason = "persona-cap-exhausted"
+	// FailurePersonaLoopFailed reports a persona loop that ended without a
+	// terminal exit for a reason OTHER than its iteration cap — a model error, a
+	// provider refusal, a handler fault inside the loop.
+	//
+	// It is the far more common half of the same guarantee, and it had no code
+	// until now, which meant the far more common half was the one that stalled.
+	// Cap exhaustion is a loop that tried its whole budget; this is a loop that
+	// stopped trying, and from the turn's point of view they are the same event:
+	// nobody is going to produce the artifact this stage was spawned for. The
+	// cause is not on the graph — it is prose the loop reported — so it rides
+	// behind TurnFailureRef exactly as the cap's does, and the code says only
+	// which of the two endings happened.
+	FailurePersonaLoopFailed FailureReason = "persona-loop-failed"
+	// FailureTurnStranded reports a turn abandoned after the boot-time
+	// stranded-turn pass exhausted its re-trigger attempts.
+	//
+	// A stranded turn is one whose phase is non-terminal and whose stage is not
+	// running: nothing holds a trigger for it, no rule currently matches it, and
+	// no notification is owed. The reconciliation re-triggers it a bounded number
+	// of times, and this code is what the bound MEANS — a turn that has not
+	// produced its stage's artifact across that many separate boots is ended on
+	// the record rather than left waiting forever, which is the same trade cap
+	// exhaustion makes for a loop.
+	FailureTurnStranded FailureReason = "turn-stranded"
 )
 
 var failureReasonEnum = newEnum(KindFailureReason,
 	FailureEffectInvalid, FailureEffectEntityMissing,
 	FailureEffectEntityKind, FailureEffectCommitIncomplete,
-	FailurePersonaCapExhausted)
+	FailurePersonaCapExhausted, FailurePersonaLoopFailed, FailureTurnStranded)
 
 // FailureReasons returns the closed failure-reason set.
 func FailureReasons() []FailureReason { return failureReasonEnum.all() }

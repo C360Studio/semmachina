@@ -66,6 +66,22 @@ const (
 	// correctness bug, an unreferenced orphan object is only garbage.
 	TurnNarrationRef Predicate = "turn.narration.ref"
 
+	// TurnResumeAttempts counts how many times the boot-time stranded-turn pass
+	// has re-triggered this turn.
+	//
+	// SINGLE-VALUED, and that is the whole reason it is declared here rather than
+	// tracked wherever the pass happens to run. A counter is the one predicate
+	// shape where the append/merge lane distinction is not a subtlety but the
+	// entire semantics: written through the entity MERGE lane it replaces its own
+	// prior value and the turn holds one count, and written through a triple-add
+	// lane it appends and the turn holds N counters — with a success response, no
+	// error, and a bound that silently stops bounding anything.
+	//
+	// It is rule-matchable on purpose. The object is a number, not fiction, and a
+	// future rule pack thresholding on "this turn has been rescued twice" is
+	// exactly the kind of branch the rule layer is for. Nothing matches it today.
+	TurnResumeAttempts Predicate = "turn.resume.attempts"
+
 	// TurnFailureReason records why a turn entered the failed phase. Its object
 	// is a closed FailureReason code, never a sentence: the turn entity is
 	// rule-matching surface, and the shared triple projection gates an object's
@@ -196,6 +212,7 @@ var allPredicates = []Predicate{
 	TurnEffectsBatch,
 	TurnEffectsRef,
 	TurnNarrationRef,
+	TurnResumeAttempts,
 	TurnFailureReason,
 	TurnFailureRef,
 	CampaignSeedValue,
@@ -327,6 +344,15 @@ var (
 	// either a failed turn nobody can explain or a reason on a turn that is
 	// still reported as running.
 	turnFailurePredicates = []Predicate{TurnPhaseCurrent, TurnFailureReason}
+
+	// turnResumePredicates is the stranded-turn pass's attempt counter, written
+	// WITHOUT the phase.
+	//
+	// Deliberately without it: the pass re-triggers a turn into the phase it is
+	// already in, so it has no phase to record, and a write that resent the phase
+	// would make the boot pass a second owner of the single-valued fact the turn
+	// recorder owns.
+	turnResumePredicates = []Predicate{TurnResumeAttempts}
 )
 
 // TurnAcceptedPredicates returns the predicates the turn's birth record writes.
@@ -337,6 +363,9 @@ func TurnPhasePredicates() []Predicate { return slices.Clone(turnPhasePredicates
 
 // TurnFailurePredicates returns the predicates a terminal failure writes.
 func TurnFailurePredicates() []Predicate { return slices.Clone(turnFailurePredicates) }
+
+// TurnResumePredicates returns the predicates the stranded-turn pass writes.
+func TurnResumePredicates() []Predicate { return slices.Clone(turnResumePredicates) }
 
 // ValidatePredicate delegates to the semstreams predicate contract — the same
 // parser the ENTITY_STATES write gate runs. Callers get the identical

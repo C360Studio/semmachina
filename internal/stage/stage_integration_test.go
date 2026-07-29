@@ -18,7 +18,6 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/processor/rule"
 	ssvocab "github.com/c360studio/semstreams/vocabulary"
-	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semmachina/internal/campaign"
 	"github.com/c360studio/semmachina/internal/content"
@@ -313,15 +312,16 @@ func (l *loop) startPersonaBridge(t *testing.T, artifacts *content.Store) {
 	}
 
 	// The agentic-loop component owns this stream in production; here the
-	// stand-in owns it, for the same reason and at the same moment.
-	if _, err := l.harness.Client.EnsureStream(t.Context(), jetstream.StreamConfig{
-		Name:      stage.TaskStream,
-		Subjects:  []string{stage.TaskSubjectPrefix + "*"},
-		Storage:   jetstream.FileStorage,
-		Retention: jetstream.LimitsPolicy,
-	}); err != nil {
+	// stand-in owns it, for the same reason and at the same moment — and with
+	// the SAME configuration, because the stream carries both directions of the
+	// persona conversation. A stand-in that created it over `agent.task.*` alone
+	// would leave every loop-failure publish uncaptured, which is the shape the
+	// watcher's own boot check refuses.
+	agent, err := l.harness.Client.EnsureStream(t.Context(), stage.AgentStreamConfig())
+	if err != nil {
 		t.Fatalf("ensure the %s stream: %v", stage.TaskStream, err)
 	}
+	clearTaskConsumers(t, agent)
 
 	handle := func(msgCtx context.Context, data []byte) error {
 		task, ok := decodeTask(data)
@@ -332,7 +332,24 @@ func (l *loop) startPersonaBridge(t *testing.T, artifacts *content.Store) {
 		case l.spawned <- task:
 		default:
 		}
-		if l.paused(task) {
+		if l.held(task) {
+			// HOLD the delivery unacknowledged, which is what the real loop does
+			// while a persona is running: upstream acks only on completion and
+			// heartbeats InProgress until then, so a task in flight is a task
+			// still queued.
+			//
+			// This is the mode the stand-in did not have, and its absence is why
+			// nothing caught the pass measuring one queue while the work lived on
+			// two. A bridge that returns immediately ACKS — the task is gone from
+			// the substrate's point of view, which is a loop that RAN and gave up,
+			// not one that is still going.
+			<-msgCtx.Done()
+			return msgCtx.Err()
+		}
+		if l.dropped(task) {
+			// ACK and produce nothing: a loop that ran, failed, and gave up. The
+			// substrate holds nothing afterwards, which is what makes the turn
+			// genuinely stranded.
 			return nil
 		}
 		call := agentic.ToolCall{ID: task.TaskID, Name: task.Tools[0].Name, Metadata: task.Metadata}
@@ -369,25 +386,76 @@ func (l *loop) startPersonaBridge(t *testing.T, artifacts *content.Store) {
 	}, 5*time.Second, handle); err != nil {
 		t.Fatalf("bind the persona bridge: %v", err)
 	}
+	// DELETED on the way out. A durable consumer outlives the test that made it,
+	// and the boot pass takes the MINIMUM acknowledgement floor across every
+	// consumer on agent.task.* — so one leftover bridge with an untouched floor
+	// makes every task ever published read as still in flight, and every turn
+	// read as queued. A real deployment has one loop consumer; so must this.
+	t.Cleanup(func() {
+		stream, err := l.harness.Client.GetStream(context.Background(), persona.TaskStream)
+		if err != nil {
+			return
+		}
+		_ = stream.DeleteConsumer(context.Background(), "test-persona-bridge-"+l.namespace)
+	})
 }
 
-// pausedRoles lets a test hold a persona stage still so the turn stops in a
-// known phase.
-var pausedRoles atomic.Value
+// The two ways a persona stage can fail to finish, and they are NOT the same
+// fact about the substrate.
+//
+//   - DROPPED: the task is acknowledged and no artifact is produced. A loop that
+//     ran, failed, and gave up. Nothing is queued afterwards, so the turn is
+//     genuinely stranded and the boot pass is the only thing that will move it.
+//   - HELD: the task is never acknowledged. A persona still running, or a process
+//     that died holding it — upstream redelivers either way, so work IS queued and
+//     the boot pass must leave the turn alone.
+//
+// The stand-in only had the first, and every test that said "the loop died" was
+// really modelling the first. That is why nothing noticed the pass reading one
+// queue while the work lived on two.
+var (
+	droppedRoles atomic.Value
+	heldRoles    atomic.Value
+)
 
-func (l *loop) paused(task agentic.TaskMessage) bool {
-	roles, _ := pausedRoles.Load().(map[string]bool)
+func (l *loop) dropped(task agentic.TaskMessage) bool {
+	roles, _ := droppedRoles.Load().(map[string]bool)
 	return roles[task.Role]
 }
 
-func pause(t *testing.T, roles ...persona.Role) {
-	t.Helper()
-	held := map[string]bool{}
+func (l *loop) held(task agentic.TaskMessage) bool {
+	roles, _ := heldRoles.Load().(map[string]bool)
+	return roles[task.Role]
+}
+
+func roleSet(roles []persona.Role) map[string]bool {
+	set := map[string]bool{}
 	for _, role := range roles {
-		held[string(role)] = true
+		set[string(role)] = true
 	}
-	pausedRoles.Store(held)
-	t.Cleanup(func() { pausedRoles.Store(map[string]bool{}) })
+	return set
+}
+
+// drop makes the bridge acknowledge a role's tasks and produce nothing.
+func drop(t *testing.T, roles ...persona.Role) {
+	t.Helper()
+	droppedRoles.Store(roleSet(roles))
+	t.Cleanup(func() { droppedRoles.Store(map[string]bool{}) })
+}
+
+// hold makes the bridge keep a role's tasks unacknowledged for the test's
+// lifetime, exactly as a running persona does.
+func hold(t *testing.T, roles ...persona.Role) {
+	t.Helper()
+	heldRoles.Store(roleSet(roles))
+	t.Cleanup(func() { heldRoles.Store(map[string]bool{}) })
+}
+
+// undrop lets the bridge act again, so a test can show that releasing the
+// stand-in is NOT what restarts a stranded turn.
+func undrop(t *testing.T) {
+	t.Helper()
+	droppedRoles.Store(map[string]bool{})
 }
 
 func decodeTask(data []byte) (agentic.TaskMessage, bool) {
@@ -786,60 +854,150 @@ func TestTurnLoop_ARefusedEffectBatchEndsTheTurnExplicitly(t *testing.T) {
 	}
 }
 
-// A persona that never exits must not leave a player waiting. The loop's failure
-// event is published exactly as the agentic loop publishes it, and the turn ends
-// with the closed cap-exhaustion code.
-func TestTurnLoop_AnExhaustedPersonaEndsTheTurnRatherThanStalling(t *testing.T) {
-	world := startLoop(t)
-	pause(t, persona.RoleAdjudicator)
+// A persona that never exits must not leave a player waiting — whichever way it
+// failed. The loop's failure event is published exactly as the agentic loop
+// publishes it (JetStream, onto the AGENT stream), and the turn ends with the
+// closed code for that ending.
+//
+// The JetStream publish is the half that used to be a green lie. This test
+// published to core NATS and the watcher subscribed to core NATS, so it passed
+// while proving nothing about the path production takes: upstream publishes with
+// PublishToStream, which against a subject no stream captures delivers to core
+// subscribers and then FAILS its acknowledgement — measured, `nats: no response
+// from stream` — and upstream logs that and moves on. So the assertion that
+// matters is not only that the turn ended but that the delivery SETTLED.
+func TestTurnLoop_AFailedPersonaLoopEndsTheTurnRatherThanStalling(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		action string
+		reason string
+		want   vocabulary.FailureReason
+	}{
+		{
+			name:   "cap exhaustion",
+			action: "act-capped",
+			reason: stage.ReasonMaxIterations,
+			want:   vocabulary.FailurePersonaCapExhausted,
+		},
+		{
+			// The commoner half, and the one that had no code at all: a model
+			// error used to be logged while the turn waited for a recovery
+			// replay that does not happen.
+			name:   "any other reason",
+			action: "act-loop-failed",
+			reason: "handler_error",
+			want:   vocabulary.FailurePersonaLoopFailed,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			world := startLoop(t)
+			drop(t, persona.RoleAdjudicator)
 
-	_, entityID := world.submit(t, "act-capped", "I argue with the door for an hour.")
+			_, entityID := world.submit(t, tc.action, "I argue with the door for an hour.")
 
-	var task agentic.TaskMessage
-	select {
-	case task = <-world.spawned:
-	case <-time.After(45 * time.Second):
-		t.Fatal("the adjudicator was never spawned")
+			var task agentic.TaskMessage
+			select {
+			case task = <-world.spawned:
+			case <-time.After(45 * time.Second):
+				t.Fatal("the adjudicator was never spawned")
+			}
+			world.awaitPhase(t, entityID, vocabulary.PhaseAdjudicating)
+
+			loopID := "loop-" + task.TaskID
+			// A per-test subject filter and consumer name. These tests share one
+			// broker and therefore one AGENT stream, and the production
+			// consumer's DeliverPolicy is "all" precisely so a failure published
+			// while the engine was down still lands — which here would replay
+			// every other test's loop failure into this world's recorder.
+			// TestLoopFailureWatcher_BindsTheAgenticLoopsOwnStream pins the
+			// production filter and policy; this pins the behaviour.
+			watcher, err := stage.NewLoopFailureWatcher(
+				world.harness.Client, world.harness.Client,
+				message.NewDecoder(world.harness.Registry), world.recorder, world.content,
+				stage.WithLoopFailureSubject("agent.failed."+loopID),
+				stage.WithLoopFailureConsumerName("test-loop-failures-"+world.namespace),
+			)
+			if err != nil {
+				t.Fatalf("NewLoopFailureWatcher: %v", err)
+			}
+			if err := watcher.Start(context.Background()); err != nil {
+				t.Fatalf("start the loop-failure watcher: %v", err)
+			}
+			t.Cleanup(world.harness.Client.StopAllConsumers)
+
+			failure := &agentic.LoopFailedEvent{
+				LoopID:     loopID,
+				TaskID:     task.TaskID,
+				Outcome:    agentic.OutcomeFailed,
+				Reason:     tc.reason,
+				Error:      "the loop stopped without exiting through its terminal tool",
+				Role:       task.Role,
+				Iterations: persona.AdjudicatorMaxIterations,
+				Metadata:   task.Metadata,
+			}
+			data, err := json.Marshal(message.NewBaseMessage(failure.Schema(), failure, "agentic-loop"))
+			if err != nil {
+				t.Fatalf("encode loop failure: %v", err)
+			}
+			// PublishToStream, exactly as agentic-loop's publishResults does. It
+			// waits for the server's acknowledgement, so this line is also the
+			// assertion that the stream Start ensured actually captures the
+			// subject.
+			if err := world.harness.Client.PublishToStream(t.Context(), "agent.failed."+loopID, data); err != nil {
+				t.Fatalf("publish loop failure: %v; the AGENT stream does not capture the loop-failure subject", err)
+			}
+
+			state := world.awaitPhase(t, entityID, vocabulary.PhaseFailed)
+			if got := fmt.Sprint(testinfra.FirstObject(state, vocabulary.TurnFailureReason.String())); got !=
+				string(tc.want) {
+				t.Errorf("failure reason = %q, want %q", got, tc.want)
+			}
+			if testinfra.FirstObject(state, vocabulary.TurnFailureRef.String()) == nil {
+				t.Error("the ended turn carries no explanation reference")
+			}
+			awaitSettledConsumer(t, world.harness.Client, stage.TaskStream, "test-loop-failures-"+world.namespace)
+		})
 	}
-	world.awaitPhase(t, entityID, vocabulary.PhaseAdjudicating)
+}
 
-	watcher, err := stage.NewCapWatcher(
-		world.harness.Client, message.NewDecoder(world.harness.Registry), world.recorder, world.content)
+// awaitSettledConsumer proves a durable consumer actually ACKNOWLEDGED what it
+// was given.
+//
+// Without it, a JetStream publish into a subject no stream captures still
+// reaches a core subscriber, the handler still runs, the assertion about the
+// turn still passes — and nothing durable ever happened. Pending and
+// ack-pending both at zero is the difference.
+func awaitSettledConsumer(t *testing.T, client *natsclient.Client, streamName, consumerName string) {
+	t.Helper()
+	js, err := client.JetStream()
 	if err != nil {
-		t.Fatalf("NewCapWatcher: %v", err)
+		t.Fatalf("jetstream: %v", err)
 	}
-	subscription, err := watcher.Start(context.Background())
+	stream, err := js.Stream(t.Context(), streamName)
 	if err != nil {
-		t.Fatalf("start cap watcher: %v", err)
-	}
-	t.Cleanup(func() { _ = subscription.Unsubscribe() })
-
-	failure := &agentic.LoopFailedEvent{
-		LoopID:     "loop-" + task.TaskID,
-		TaskID:     task.TaskID,
-		Outcome:    agentic.OutcomeFailed,
-		Reason:     stage.ReasonMaxIterations,
-		Error:      "max iterations (3) reached",
-		Role:       task.Role,
-		Iterations: persona.AdjudicatorMaxIterations,
-		Metadata:   task.Metadata,
-	}
-	data, err := json.Marshal(message.NewBaseMessage(failure.Schema(), failure, "agentic-loop"))
-	if err != nil {
-		t.Fatalf("encode loop failure: %v", err)
-	}
-	if err := world.harness.Client.Publish(t.Context(), "agent.failed."+failure.LoopID, data); err != nil {
-		t.Fatalf("publish loop failure: %v", err)
+		t.Fatalf("stream %s: %v", streamName, err)
 	}
 
-	state := world.awaitPhase(t, entityID, vocabulary.PhaseFailed)
-	if got := fmt.Sprint(testinfra.FirstObject(state, vocabulary.TurnFailureReason.String())); got !=
-		string(vocabulary.FailurePersonaCapExhausted) {
-		t.Errorf("failure reason = %q, want %q", got, vocabulary.FailurePersonaCapExhausted)
+	deadline := time.Now().Add(30 * time.Second)
+	var last string
+	for time.Now().Before(deadline) {
+		consumer, err := stream.Consumer(t.Context(), consumerName)
+		if err != nil {
+			t.Fatalf("consumer %s: %v", consumerName, err)
+		}
+		info, err := consumer.Info(t.Context())
+		if err != nil {
+			t.Fatalf("consumer info: %v", err)
+		}
+		last = fmt.Sprintf("pending=%d ack_pending=%d delivered=%d redelivered=%d",
+			info.NumPending, info.NumAckPending, info.Delivered.Consumer, info.NumRedelivered)
+		if info.Delivered.Consumer > 0 && info.NumPending == 0 && info.NumAckPending == 0 {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
-	if testinfra.FirstObject(state, vocabulary.TurnFailureRef.String()) == nil {
-		t.Error("the cap-exhausted turn carries no explanation reference")
-	}
+	t.Fatalf("the loop-failure consumer never settled (%s); a delivery that is never acknowledged is a handler "+
+		"that ran while the message stayed in flight", last)
 }
 
 func drain(tasks chan agentic.TaskMessage) {

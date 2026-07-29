@@ -164,6 +164,7 @@ func TestEntityOnlyCategories_AreDeliberatelyUnregistered(t *testing.T) {
 		payload.CategoryCampaignEntity,
 		payload.CategoryTurnState,
 		payload.CategoryTurnNarration,
+		payload.CategoryTurnResume,
 	} {
 		if created := reg.Create(payload.Domain, category, payload.SchemaVersion); created != nil {
 			t.Fatalf("%s/%s/%s has a registered factory producing %T; that category names entity state "+

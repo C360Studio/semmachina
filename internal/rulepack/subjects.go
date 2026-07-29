@@ -62,6 +62,18 @@ func StagePhases() []vocabulary.TurnPhase {
 	return out
 }
 
+// StageConsumerName returns the durable consumer one stage binds.
+//
+// DERIVED here rather than composed at the binding site, because two components
+// now have to agree on it and they are not the same component. The stage runner
+// binds it; the boot-time stranded-turn pass reads its acknowledgement floor to
+// find out which triggers are still queued. A second copy of this string would
+// make the pass read a consumer nobody binds, report every queued trigger as
+// absent, and re-trigger a stage on top of work already coming to it.
+func StageConsumerName(phase vocabulary.TurnPhase) string {
+	return "semmachina-stage-" + string(phase)
+}
+
 // SubjectForPhase returns the trigger subject that drives a turn into a phase.
 //
 // It is DERIVED from the phase rather than tabulated, so the pack, the stream

@@ -980,6 +980,76 @@ func TestCapExhaustion_FitsTheStoredBudgetAtItsWidest(t *testing.T) {
 	}
 }
 
+// The other ending has THREE fragments sharing the same budget — the loop's own
+// reason code joins the loop id and its last words — so the arithmetic is
+// different and has to be checked separately.
+//
+// Every fragment here is deliberately OVER its own budget, and that is the point
+// rather than an exaggeration: none of the three is a value this engine chooses.
+// The loop id, the reason code, and the last error all arrive from upstream on
+// its schedule, so the only bound that means anything is one that holds when the
+// producer ignores it. An over-budget explanation is not a long message — it is a
+// refused store write, a turn that never fails, and a player waiting on a stage
+// nothing will run again.
+func TestLoopFailure_FitsTheStoredBudgetWhateverTheLoopSends(t *testing.T) {
+	oversize := content.MaxFailureMessageBytes * 2
+	for _, spec := range persona.Specs() {
+		artifacts := newFakeArtifacts(&journal{})
+		if _, err := persona.RecordLoopFailed(t.Context(), &fakeFailer{}, artifacts, testIdentity(),
+			persona.LoopFailure{
+				Role:       spec.Role,
+				LoopID:     strings.Repeat("L", oversize),
+				Reason:     strings.Repeat("R", oversize),
+				Iterations: spec.MaxIterations,
+				LastError:  strings.Repeat("E", oversize),
+			}); err != nil {
+			t.Fatalf("an oversized %s loop-failure explanation does not fit the stored budget: %v. Each fragment "+
+				"is clipped on the way IN so the whole message fits the store's %d-byte contract; a fragment "+
+				"that is not clipped makes this path refuse the write it exists to make.",
+				spec.Role, err, content.MaxFailureMessageBytes)
+		}
+	}
+}
+
+// The two endings are different facts about the turn, and the record has to say
+// which one happened — a loop that gave up is not a loop that ran out of budget.
+func TestRecordLoopFailed_UsesItsOwnClosedCodeAndKeepsUpstreamsReasonBehindTheReference(t *testing.T) {
+	artifacts := newFakeArtifacts(&journal{})
+	failer := &fakeFailer{}
+
+	if _, err := persona.RecordLoopFailed(t.Context(), failer, artifacts, testIdentity(),
+		persona.LoopFailure{
+			Role:       persona.RoleAdjudicator,
+			LoopID:     "loop-9",
+			Reason:     "handler_error",
+			Iterations: 1,
+			LastError:  "the provider returned 503",
+		}); err != nil {
+		t.Fatalf("RecordLoopFailed: %v", err)
+	}
+	if failer.reason != vocabulary.FailurePersonaLoopFailed {
+		t.Fatalf("recorded reason %q, want %q", failer.reason, vocabulary.FailurePersonaLoopFailed)
+	}
+	if failer.detail.IsZero() {
+		t.Fatal("the turn carries no explanation reference")
+	}
+	stored, ok := artifacts.failures[failer.detail.Key]
+	if !ok {
+		t.Fatalf("the turn points at %s, which the store never wrote", failer.detail)
+	}
+	if stored.Reason != vocabulary.FailurePersonaLoopFailed {
+		t.Errorf("the stored explanation carries reason %q", stored.Reason)
+	}
+	// Upstream's reason vocabulary is open and grows on its own schedule, so it
+	// belongs in the prose and never on the rule-matching surface.
+	if !strings.Contains(stored.Message, "handler_error") {
+		t.Errorf("the stored explanation does not quote the loop's own reason: %q", stored.Message)
+	}
+	if !strings.Contains(stored.Message, "503") {
+		t.Errorf("the stored explanation drops the loop's last words: %q", stored.Message)
+	}
+}
+
 // And when the store refuses for a reason no bound can fix — it is unreachable —
 // the turn must still END. A cap exhaustion that returns without failing the turn
 // leaves it exactly where the cap was supposed to rescue it from, and a closed

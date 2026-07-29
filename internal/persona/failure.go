@@ -56,6 +56,10 @@ const (
 	MaxLoopIDBytes = 128
 	// MaxLastErrorBytes bounds the loop's own last words.
 	MaxLastErrorBytes = 3 * 1024
+	// MaxLoopReasonBytes bounds the loop's own reason code, which is UPSTREAM's
+	// vocabulary and therefore not a value this engine can size from its own
+	// closed set.
+	MaxLoopReasonBytes = 128
 )
 
 // elision marks a fragment the explanation had to cut.
@@ -107,30 +111,96 @@ func RecordCapExhausted(
 	identity Identity,
 	exhaustion CapExhaustion,
 ) (turn.Transition, error) {
-	if failer == nil {
-		return turn.Transition{}, errors.New("recording a cap exhaustion requires a turn recorder")
-	}
-	if details == nil {
-		return turn.Transition{}, errors.New("recording a cap exhaustion requires a detail store")
-	}
-	if err := identity.Validate(); err != nil {
-		return turn.Transition{}, err
-	}
 	spec, err := SpecFor(exhaustion.Role)
 	if err != nil {
 		return turn.Transition{}, err
 	}
+	return record(ctx, failer, details, identity,
+		vocabulary.FailurePersonaCapExhausted, exhaustion.describe(spec))
+}
 
-	detail := &content.FailureDetail{
-		TurnID:  identity.TurnID,
-		Reason:  vocabulary.FailurePersonaCapExhausted,
-		Message: exhaustion.describe(spec),
+// LoopFailure is what a watcher knows about a persona loop that ended without
+// exiting, for a reason that is NOT its iteration cap.
+//
+// It is the commoner half of the same event and it had no code until the
+// vocabulary grew one: a model error, a provider refusal, a handler fault inside
+// the loop. From the turn's point of view the two are indistinguishable —
+// nobody is going to produce the artifact this stage was spawned for — so the
+// disposition is the same and only the closed code differs.
+type LoopFailure struct {
+	// Role is the persona that did not exit.
+	Role Role
+	// LoopID is the loop that ended, so the trajectory can be found.
+	LoopID string
+	// Reason is the loop's OWN reason code. It is upstream's vocabulary, not
+	// this engine's, which is exactly why it stays behind the reference: an
+	// open set of producer-authored codes on rule-matching surface would be the
+	// closure hole the failure vocabulary exists to close.
+	Reason string
+	// Iterations is how many the loop used before it stopped.
+	Iterations int
+	// LastError is whatever the loop reported when it gave up.
+	LastError string
+}
+
+// RecordLoopFailed ends a turn whose persona loop failed for a reason other than
+// its cap.
+//
+// It exists because the alternative was a log line. That branch used to say the
+// turn was "left in its stage until the next boot's recovery replay" — and the
+// replay it named does not happen (a parked turn matches no rule and has not
+// been written since the rule last evaluated it), so the sentence described a
+// rescue nothing performed. The turn simply waited.
+//
+// Everything else is RecordCapExhausted's discipline, unchanged: the code on the
+// graph is closed vocabulary, the loop's own words ride behind a reference, and
+// the turn ends whether or not the explanation could be stored.
+func RecordLoopFailed(
+	ctx context.Context,
+	failer TurnFailer,
+	details DetailStore,
+	identity Identity,
+	failure LoopFailure,
+) (turn.Transition, error) {
+	spec, err := SpecFor(failure.Role)
+	if err != nil {
+		return turn.Transition{}, err
 	}
+	return record(ctx, failer, details, identity,
+		vocabulary.FailurePersonaLoopFailed, failure.describe(spec))
+}
+
+// record is the one detail-then-failure path both persona endings run through.
+//
+// Shared rather than re-derived per reason, because the ordering IS the
+// contract: store the explanation, then fail with a reference to it; and if the
+// store refuses, fail anyway. A second copy of that would be a second chance to
+// return early on a store fault and leave the turn exactly where the whole path
+// exists to rescue it from.
+func record(
+	ctx context.Context,
+	failer TurnFailer,
+	details DetailStore,
+	identity Identity,
+	reason vocabulary.FailureReason,
+	explanation string,
+) (turn.Transition, error) {
+	if failer == nil {
+		return turn.Transition{}, errors.New("recording a persona failure requires a turn recorder")
+	}
+	if details == nil {
+		return turn.Transition{}, errors.New("recording a persona failure requires a detail store")
+	}
+	if err := identity.Validate(); err != nil {
+		return turn.Transition{}, err
+	}
+
+	detail := &content.FailureDetail{TurnID: identity.TurnID, Reason: reason, Message: explanation}
 	ref, storeErr := details.PutFailureDetail(ctx, identity.TurnEntityID, detail)
 	if storeErr != nil {
-		return failWithoutDetail(ctx, failer, identity, storeErr)
+		return failWithoutDetail(ctx, failer, identity, reason, storeErr)
 	}
-	return failer.Fail(ctx, identity.TurnID, identity.TurnEntityID, vocabulary.FailurePersonaCapExhausted, ref)
+	return failer.Fail(ctx, identity.TurnID, identity.TurnEntityID, reason, ref)
 }
 
 // failWithoutDetail ends the turn when its explanation could not be stored.
@@ -154,11 +224,12 @@ func failWithoutDetail(
 	ctx context.Context,
 	failer TurnFailer,
 	identity Identity,
+	reason vocabulary.FailureReason,
 	storeErr error,
 ) (turn.Transition, error) {
-	stored := fmt.Errorf("store the cap-exhaustion detail for turn %s: %w", identity.TurnEntityID, storeErr)
+	stored := fmt.Errorf("store the %s detail for turn %s: %w", reason, identity.TurnEntityID, storeErr)
 	transition, failErr := failer.Fail(
-		ctx, identity.TurnID, identity.TurnEntityID, vocabulary.FailurePersonaCapExhausted, content.Ref{})
+		ctx, identity.TurnID, identity.TurnEntityID, reason, content.Ref{})
 	if failErr != nil {
 		// Both halves are reported: the turn is genuinely stalled now, and which
 		// of the two surfaces is down decides where an operator looks.
@@ -221,6 +292,35 @@ func (e CapExhaustion) describe(spec Spec) string {
 	}
 	return message + ". The iteration cap is what stops a persona costing a turn forever; a turn that " +
 		"reaches it ends explicitly rather than stalling."
+}
+
+// describe renders an ordinary loop failure's stored explanation.
+//
+// The loop's OWN reason code is quoted into the sentence rather than mapped onto
+// the closed vocabulary, and that is the whole reason this text exists. Upstream
+// grows its reason set on its own schedule, so a mapping here would be a table
+// that silently stops covering the case an operator is actually looking at; the
+// graph gets one closed code that says which ENDING happened, and the sentence
+// says what upstream called it.
+//
+// Every caller-supplied fragment is clipped on the way in, for the reason the
+// cap's is: the stored explanation has a hard budget the content store enforces
+// BEFORE it writes, so an unbounded fragment produces a refused write rather
+// than a long message — and a refused write is how this path stops ending the
+// turn it exists to end.
+func (f LoopFailure) describe(spec Spec) string {
+	message := fmt.Sprintf(
+		"the %s persona loop ended without exiting through %s, and not because it ran out of iterations: the "+
+			"loop reported %q after %d of its %d permitted iterations",
+		f.Role, spec.Tool.Name, clip(f.Reason, MaxLoopReasonBytes), f.Iterations, spec.MaxIterations)
+	if f.LoopID != "" {
+		message += fmt.Sprintf(" (loop %s)", clip(f.LoopID, MaxLoopIDBytes))
+	}
+	if f.LastError != "" {
+		message += fmt.Sprintf("; the last thing it was told was: %s", clip(f.LastError, MaxLastErrorBytes))
+	}
+	return message + ". A loop that stops trying and a loop that runs out of budget leave the turn in the same " +
+		"place, so both end it explicitly rather than leaving a player waiting on a stage nothing will run again."
 }
 
 // clip bounds one diagnostic fragment to limit bytes, keeping its front.

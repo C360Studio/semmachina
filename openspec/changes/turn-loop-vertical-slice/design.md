@@ -409,6 +409,73 @@ is non-terminal and whose stage is not running. Anything that "resumes on the ne
 should be assumed absent until a probe says otherwise — this is the second time a recovery
 story has been believed on the strength of a plausible mechanism name.
 
+**Amendment (task 8.1a): bootstrap replay rescues nothing at all, and the second condition
+is the stronger one.** Building the pass required probing the case F22 left implicit — a
+turn parked mid-stage whose artifact IS present, so the rule *does* currently match. It is
+not rescued either. Upstream's durable stale-replay guard skips any evaluation whose source
+revision it has already recorded (`prevState.SourceRevision >= ev.Revision`), and a parked
+turn is precisely a turn nobody has written to since the rule last saw it. Measured: three
+turns parked in the three shapes a real crash produces — `accepted` with its first hop
+already fired, `adjudicating` with no verdict, `adjudicating` *with* a verdict — a rule
+processor restarted against the same broker, twenty seconds, zero new triggers on any
+subject. `TestBootstrapReplay_RescuesNoParkedTurn` is that probe, kept.
+
+So "currently matching" was never the binding constraint; "written since the last
+evaluation" is, and it is false for every parked turn by construction.
+
+**What that does NOT license — twice.** The pass was first built inferring a MESSAGE from
+a RULE, and got it wrong in both directions before the inference itself was deleted. First:
+"the rule does not re-fire" was read as "the hop it published went missing", so the pass
+republished — which on the first hop is a second adjudication trigger for a turn with no
+verdict yet, two `Guard.Check` calls that both correctly answer run, and two billed spawns
+counted by neither the pass's budget nor the rule engine's `max_iterations`. Then the
+opposite: a matching rule was read as "the message is durably pending", so the pass left it
+— which strands every turn whose rule fired and whose publish did not.
+
+Neither reading is derivable, because a rule firing and a message existing are different
+events. `natsclient`'s publish path fails on an open circuit breaker, on a disconnected
+client, and on a refused PubAck; the breaker in particular opens after repeated failures and
+short-circuits every publish after that, so one broker wobble strands a batch. The rule
+engine persists match state whether or not its action succeeded, and a rule's own
+action-level `max_iterations` can exhaust. Every one of those leaves a matching rule and no
+message.
+
+So the pass MEASURES, and it measures **every durable queue that can deliver work for a
+turn** rather than one of them. Today that is two: `TURN_STAGES` for stage triggers, and
+`AGENT` for persona tasks — because `Spawner.Run` acknowledges the stage trigger when it
+*publishes* the task, so a turn mid-adjudication has nothing queued on the stage stream and
+an unacked task upstream will redeliver. Reading only the first would re-trigger it and buy
+two to three billed adjudications for one turn, two of them racing to write `turn.verdict.*`
+through a last-write-wins merge — and instance-per-world does not cover it, because the
+thing still working on that turn is a message arriving in *this* process. `AGENT_LOOPS`
+cannot answer it either: only a handler moves a loop out of `state=running`, so a crashed
+process leaves a stale `running` entry indistinguishable from a live one. The queued set is
+read per subject from each consumer's acknowledgement floor, and the pass disposes on that
+fact. A queued trigger means the substrate owns the delivery, counted and
+untouched. No queued trigger with the phase's artifact absent is the stranded case, and the
+only one that gets a message: the parked phase's own stage, bounded by `MaxAttempts` — or,
+for a turn still in `accepted`, the FIRST stage, which is the one derivation the pass makes
+and is a single unconditional fact (`StagePhases()` is documented as the triggered phases in
+turn order, with `accepted` excluded because nothing enters it; the pack's matching hop is
+one rule with one condition). Index 0 only: `StagePhases()[i+1]` to advance any other stuck
+phase would be a route table, which is the second FSM in a different hat. No
+queued trigger with the artifact PRESENT cannot be helped by re-running that stage — the
+recorder reads the re-entry as a resume and the persona guard skips on the artifact — so the
+turn is ended immediately rather than spending a budget proving it. Nothing derives a hop, a
+successor phase, or a route from the pack; `PhaseRank` and `PhasePredecessors` are
+deliberately unused, because reaching for them to publish the *next* phase's trigger rebuilds
+the second FSM one layer down.
+
+**Ordering, settled by probe rather than argument.** The measurement is only sound if
+nothing is publishing while it is taken, and the rule engine's bootstrap replay publishes
+into exactly that set. Its timing relative to the processor's `Start` returning is a RACE —
+measured landing 1.02 s after `Start` returned, and measured having already landed when
+`Start` returned. So composition must start the rule processor *before* the pass (an
+unstarted processor is indistinguishable from a quiet one, and cannot be checked from
+inside), and the pass itself waits for the stage stream to stop moving before reading —
+observation instead of a sleep. Upstream exposes no bootstrap-replay completion signal;
+that is an engine ask this works around rather than guesses at.
+
 ### F21 — A mid-chain rule gated on the phase alone races the stage it follows
 
 Every phase except `accepted` is written on stage **entry**, so a rule matching

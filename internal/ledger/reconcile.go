@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/c360studio/semstreams/graph"
-	"github.com/c360studio/semstreams/pkg/types"
 
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
@@ -33,19 +31,13 @@ const maxReconcilePages = 1000
 // it on every manifest; deriving the scan prefix from the same value makes it
 // impossible to reconcile one world's turns into another world's ledger, which
 // a second configuration field would make merely unlikely.
+//
+// The arithmetic itself is vocabulary's, because the stranded-turn pass
+// enumerates the same set for a different reason and two copies of "which
+// world's turns" is exactly the kind of duplication that ends up answering the
+// question differently on one of the two boot paths.
 func TurnPrefixForCampaign(campaignID string) (string, error) {
-	if err := types.ValidateEntityID(campaignID); err != nil {
-		return "", fmt.Errorf("cannot derive a turn prefix from %q: %w", campaignID, err)
-	}
-	parts := strings.Split(campaignID, ".")
-	// org.platform.domain.system + the turn type segment; the instance position
-	// is dropped, which is what makes this a prefix over every turn rather than
-	// an id.
-	prefix := strings.Join(append(parts[:len(parts)-2:len(parts)-2], TurnTypeSegment), ".")
-	if err := types.ValidateEntityIDPrefix(prefix); err != nil {
-		return "", fmt.Errorf("turn prefix %q derived from campaign %q is not valid: %w", prefix, campaignID, err)
-	}
-	return prefix, nil
+	return vocabulary.SiblingTypePrefix(campaignID, TurnTypeSegment)
 }
 
 // TurnFailure is one turn the reconciliation could not archive.
@@ -84,10 +76,12 @@ type Reconciliation struct {
 // transition condition with no recorded previous value returns false
 // unconditionally, so a turn that reaches `complete` while RULE_STATE holds
 // nothing for it never publishes the notification at all. A cleared or fresh
-// RULE_STATE is explicitly permitted pre-v1, and the durable stale-replay guard
-// skips evaluation entirely when nothing has been written since the last one, so
-// `on_recovery` does not rescue it either. Without this pass, those turns are
-// simply absent from the campaign's history and nothing anywhere reports it.
+// RULE_STATE is explicitly permitted pre-v1, and bootstrap replay does not
+// rescue it either: the durable stale-replay guard skips an evaluation whose
+// source revision it has already recorded, which is exactly a turn nobody has
+// written to since. (Measured, not inferred — see internal/resume.) Without this
+// pass, those turns are simply absent from the campaign's history and nothing
+// anywhere reports it.
 //
 // So the notification is the FAST PATH and ENTITY_STATES is the source of
 // truth — which is the right way round anyway: the graph is where a turn's

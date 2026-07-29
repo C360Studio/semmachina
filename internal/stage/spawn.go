@@ -14,24 +14,26 @@ import (
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
-// The agentic-loop's task intake.
-//
-// The subject is per ROLE rather than per turn: the loop's input port filters
-// `agent.task.*` (one token), and a per-turn subject would make the filter match
-// nothing. Per role also means an operator can see, from the stream alone,
-// which persona a deployment is spending on.
+// The agentic loop's wire coordinates are persona's, not this package's: three
+// components have to agree on them exactly and only one of them is a stage — the
+// spawner publishes a task, the loop-failure watcher binds the stream, and the
+// boot-time stranded-turn pass reads which tasks are still unacknowledged. See
+// internal/persona/transport.go.
 const (
-	// TaskStream is the agentic-loop's task stream.
-	TaskStream = "AGENT"
-	// TaskSubjectPrefix is the agentic-loop's task subject space.
-	TaskSubjectPrefix = "agent.task."
+	// TaskStream is the agentic loop's stream.
+	TaskStream = persona.TaskStream
+	// TaskSubjectPrefix is the agentic loop's task subject space.
+	TaskSubjectPrefix = persona.TaskSubjectPrefix
+	// AgentSubjectFilter is the whole agentic subject space the AGENT stream
+	// captures.
+	AgentSubjectFilter = persona.AgentSubjectFilter
 	// TaskSource is the producer stamped on every task envelope this package
 	// publishes.
 	TaskSource = "semmachina-stage"
 )
 
 // TaskSubjectFor returns the subject a role's tasks are published on.
-func TaskSubjectFor(role persona.Role) string { return TaskSubjectPrefix + string(role) }
+func TaskSubjectFor(role persona.Role) string { return persona.TaskSubjectFor(role) }
 
 // ResumeGuard answers whether a stage's artifact is already on the turn.
 type ResumeGuard interface {

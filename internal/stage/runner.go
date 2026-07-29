@@ -58,14 +58,25 @@ type Consumer interface {
 }
 
 // StreamEnsurer creates the stage-trigger stream if it does not exist.
+//
+// The stage stream is THIS engine's, which is why it is created here and why the
+// loop-failure watcher only READS the one it binds: that one is the agentic
+// loop's, and a component that creates a stream it does not own decides its
+// limits by winning a boot race.
 type StreamEnsurer interface {
 	EnsureStream(ctx context.Context, cfg jetstream.StreamConfig) (jetstream.Stream, error)
+}
+
+// StreamReader reads a stream this engine does not own.
+type StreamReader interface {
+	GetStream(ctx context.Context, name string) (jetstream.Stream, error)
 }
 
 // The claims above, enforced by the compiler rather than by doc comments.
 var (
 	_ Consumer      = (*natsclient.Client)(nil)
 	_ StreamEnsurer = (*natsclient.Client)(nil)
+	_ StreamReader  = (*natsclient.Client)(nil)
 )
 
 // Runner binds one durable consumer per stage to the stage-trigger stream.
@@ -178,7 +189,7 @@ func (r *Runner) ConsumerConfig(phase vocabulary.TurnPhase) (natsclient.StreamCo
 	}
 	return natsclient.StreamConsumerConfig{
 		StreamName:    rulepack.StageStream,
-		ConsumerName:  "semmachina-stage-" + string(phase),
+		ConsumerName:  rulepack.StageConsumerName(phase),
 		FilterSubject: subject,
 		DeliverPolicy: "all",
 		AckPolicy:     "explicit",

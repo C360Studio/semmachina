@@ -103,12 +103,70 @@ modifiers and can therefore shift the total and the band even on identical dice.
 - **THEN** the turn resumes at effect application using the recorded roll, no second roll
   occurs, and effects are applied exactly once
 
+#### Scenario: A turn parked mid-stage with no queued work
+- **WHEN** a turn sits in a non-terminal phase carrying none of that phase's artifacts, and
+  no message is queued for it on any durable queue that can deliver work for a turn —
+  neither an unacknowledged stage trigger nor an unacknowledged persona task — and the
+  process restarts
+- **THEN** a boot-time pass over every turn in the world finds it — by reading which turns
+  the stage stream still holds an unacknowledged trigger for, not by asking which rules
+  would match — re-triggers the stage its phase names, and the turn resolves
+
+#### Scenario: A turn whose first hop never arrived
+- **WHEN** a turn is created and the hop that would start it is lost or never published, so
+  the turn sits in `accepted` with no stage trigger queued for it
+- **THEN** the boot pass re-triggers the FIRST stage and the turn proceeds, spending one
+  bounded attempt — the turn is owed that stage's work either way, so starting it costs
+  nothing that was not already owed, and ending a player's action over one lost message
+  would be the worse trade
+
+#### Scenario: A turn already waiting on queued work
+- **WHEN** a message is queued and unacknowledged for a turn on any durable queue that can
+  deliver work for it — a stage trigger no stage has acknowledged, or a persona task the
+  agentic loop has not finished — and the process restarts
+- **THEN** the boot pass counts that turn and publishes nothing, because the substrate owns
+  that delivery — and a second trigger would re-enter the stage, which for a persona stage
+  with no artifact yet is a second billed call
+
+#### Scenario: A persona still running when the process restarts
+- **WHEN** a stage published a persona task and acknowledged its own trigger, and the task
+  is still unacknowledged on the agentic loop's stream when the process restarts
+- **THEN** the boot pass leaves the turn alone, because that task will be redelivered — the
+  work is in flight inside the restarting process rather than lost, and re-triggering the
+  stage would buy a second billed persona call racing the first to write the same artifact
+
+#### Scenario: A sequencing rule fired and its publish did not
+- **WHEN** a rule's publish action fails — an open circuit breaker, a disconnected client, a
+  refused acknowledgement — so the rule's own state records that it fired while no stage
+  trigger exists, and the turn is left in a non-terminal phase carrying its stage's artifact
+- **THEN** the boot pass counts the sighting without publishing anything, and ends the turn
+  explicitly with a stranded reason and a stored explanation once the sighting budget is
+  gone — re-running the stage it is parked in would re-enter a phase the turn is already in
+  and skip on the artifact already recorded, and ending on a single reading could fail a
+  turn whose work landed between the queue measurement and the turn read
+
 ### Requirement: Bounded execution
-Every LLM-triggering rule path in the turn chain SHALL carry an iteration cap, and cap
-exhaustion SHALL produce an explicit `failed` turn phase with a recorded reason — never a
-silent stall.
+Every LLM-triggering rule path in the turn chain SHALL carry an iteration cap, and a persona
+loop that ends without a terminal exit SHALL produce an explicit `failed` turn phase with a
+recorded closed reason — never a silent stall — whichever way it ended. Boot-time recovery
+of a stranded turn SHALL likewise be bounded: a turn re-triggered a capped number of times
+without producing its stage's artifact SHALL be failed explicitly rather than re-triggered
+forever.
 
 #### Scenario: Persona exceeds its iteration cap
 - **WHEN** a persona loop reaches its `MaxIterations` cap without a terminal exit
 - **THEN** the turn enters phase `failed` with a cap-exhaustion reason and the failure is
   visible on the turn entity
+
+#### Scenario: Persona loop fails for a reason other than its cap
+- **WHEN** a persona loop ends without a terminal exit because of a model error, a provider
+  refusal, or a handler fault
+- **THEN** the turn enters phase `failed` with its own closed reason, distinct from cap
+  exhaustion, and the loop's own reason code rides behind the failure-detail reference
+  rather than on the rule-matching surface
+
+#### Scenario: A stranded turn exhausts its re-trigger budget
+- **WHEN** the boot pass has re-triggered one turn's stage the permitted number of times and
+  the stage has still produced no artifact
+- **THEN** the turn enters phase `failed` with a stranded reason and a stored explanation,
+  rather than being re-triggered on every subsequent boot

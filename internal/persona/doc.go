@@ -52,7 +52,12 @@
 //
 // Every spawned loop carries an explicit per-task iteration budget and a
 // timeout. The loop's ENFORCEMENT of that budget is upstream's; what is ours is
-// the budget we hand it and the explicit failure we record when it runs out —
-// RecordCapExhausted, which ends the turn with a closed reason code rather than
-// leaving a player waiting on a persona that will never exit.
+// the budget we hand it and the explicit failure we record when the loop ends
+// without exiting — RecordCapExhausted for a spent budget, RecordLoopFailed for
+// every other cause, each ending the turn with its own closed reason code rather
+// than leaving a player waiting on a persona that will never exit.
+//
+// The second of those is the commoner case and it is the one that used to be
+// missing: a model error was logged while the turn waited for a boot-time
+// recovery replay that, measured, does not fire for a parked turn.
 package persona

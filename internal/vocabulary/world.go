@@ -344,3 +344,36 @@ func ComposeEntityID(org, worldNS, template, typeSegment, instance string) (stri
 	}
 	return id, nil
 }
+
+// SiblingTypePrefix returns the five-part entity-ID prefix shared by every
+// entity of typeSegment in the same world instance as entityID.
+//
+// It is the enumeration half of ComposeEntityID: composition fixes six
+// positions, and this drops the instance position to name the SET. Two boot
+// passes need it — the campaign ledger enumerating turns to archive, and the
+// stranded-turn reconciliation enumerating turns to rescue — and a second copy
+// of the arithmetic would be a second place for "which world's turns" to be
+// answered differently.
+//
+// Deriving it from a SIBLING entity's id rather than from configuration is the
+// point. Both callers already hold a validated campaign entity id and already
+// stamp it on what they write; deriving the scan prefix from the same value
+// makes it impossible to enumerate one world's turns on behalf of another,
+// which a second configuration field would make merely unlikely.
+func SiblingTypePrefix(entityID, typeSegment string) (string, error) {
+	if err := types.ValidateEntityID(entityID); err != nil {
+		return "", fmt.Errorf("cannot derive a %s prefix from %q: %w", typeSegment, entityID, err)
+	}
+	if err := ValidateIDSegment(typeSegment); err != nil {
+		return "", fmt.Errorf("cannot derive a sibling prefix for type %q: %w", typeSegment, err)
+	}
+	parts := strings.Split(entityID, ".")
+	// org.platform.domain.system + the requested type segment. The instance
+	// position is dropped, which is what makes this a prefix over every sibling
+	// rather than one id.
+	prefix := strings.Join(append(parts[:len(parts)-2:len(parts)-2], typeSegment), ".")
+	if err := types.ValidateEntityIDPrefix(prefix); err != nil {
+		return "", fmt.Errorf("%s prefix %q derived from %q is not valid: %w", typeSegment, prefix, entityID, err)
+	}
+	return prefix, nil
+}

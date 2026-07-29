@@ -25,12 +25,15 @@
 // means the guard is only ever asked about the stage it governs, and a skip
 // means "do not pay for this again", never "advance past it".
 //
-// # Known gap: a persona loop that fails for a reason other than its cap
+// # Both persona endings are recorded, and neither waits for a replay
 //
-// CapWatcher records cap exhaustion, which is the one persona failure the closed
-// vocabulary has a reason code for. A loop that fails for any other cause — a
-// model error, a handler fault — is logged loudly and leaves its turn in its
-// stage until the rule pack's recovery replay picks it up on the next boot.
-// Closing that properly needs a new vocabulary.FailureReason, which is a
-// vocabulary change rather than a wiring one.
+// LoopFailureWatcher ends the turn for a loop that exhausted its cap AND for one
+// that failed for any other cause, with a different closed reason code for each.
+// The second used to be logged and left, on the stated grounds that the rule
+// pack's recovery replay would pick the turn up on the next boot. That replay
+// does not happen: bootstrap replay re-fires a rule that is currently matching
+// AND whose entity has been written since the rule last evaluated it, and a turn
+// parked mid-stage satisfies neither. Measured against a live broker, not
+// inferred — see internal/resume, which is the boot pass that actually finds
+// those turns.
 package stage

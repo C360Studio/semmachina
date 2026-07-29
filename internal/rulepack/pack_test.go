@@ -207,7 +207,141 @@ func TestDefinitions_RefuseARuleWithNoRecoveryActions(t *testing.T) {
 	}
 	definitions[0].OnRecovery = nil
 	if err := rulepack.Check(definitions); err == nil {
-		t.Fatal("a rule with no on_recovery actions loaded; a restart would strand every turn in that phase")
+		t.Fatal("a rule with no on_recovery actions loaded; upstream re-fires a still-matching rule at boot ONLY " +
+			"for a rule that declares one, so dropping it gives up the narrow bootstrap case that does work. " +
+			"It is not the backstop for a turn parked mid-stage — nothing at boot rescues that (see " +
+			"internal/resume); it is the case where the entity changed between the rule firing and the crash")
+	}
+}
+
+// Two gates that exist for 8.1b(d) rather than for anything running today.
+//
+// The FSM-edge check reads an `eq` condition's value at load to decide which
+// phase a hop is gated on, so a value that only exists at runtime makes the edge
+// undeterminable — a load-time gate cannot verify an edge whose target is a
+// template. And a cooldown short-circuits evaluation before any condition is
+// read, so the hop fires on some turns and not others.
+//
+// The substitution case is checked on an ARTIFACT condition rather than a phase
+// one, deliberately: the phase value is already parsed against the closed phase
+// set, so a token there is refused for a reason that has nothing to do with
+// substitution and this test would pass with the gate removed.
+func TestDefinitions_RefuseAHopWhoseTargetOnlyExistsAtRuntime(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(definitions []rule.Definition)
+	}{
+		{
+			name: "a substitution token in an artifact condition's value",
+			mutate: func(definitions []rule.Definition) {
+				for idx := range definitions {
+					for cidx, condition := range definitions[idx].Conditions {
+						if condition.Field == vocabulary.TurnPhaseCurrent.String() {
+							continue
+						}
+						if condition.Operator != "eq" && condition.Operator != "ne" {
+							continue
+						}
+						definitions[idx].Conditions[cidx].Value = "$message.artifact"
+						return
+					}
+				}
+				panic("no artifact condition found to carry a substitution token")
+			},
+		},
+		{
+			name: "a substitution token in a phase condition's value",
+			mutate: func(definitions []rule.Definition) {
+				definitions[0].Conditions[0].Value = "$message.phase"
+			},
+		},
+		{
+			name: "a cooldown",
+			mutate: func(definitions []rule.Definition) {
+				definitions[0].Cooldown = "30s"
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			declare(t)
+
+			var definitions []rule.Definition
+			if err := json.Unmarshal(rulepack.JSON(), &definitions); err != nil {
+				t.Fatalf("decode pack: %v", err)
+			}
+			// Anti-vacuity: the untouched pack must load, or the refusal below
+			// would pass for any reason at all.
+			if err := rulepack.Check(definitions); err != nil {
+				t.Fatalf("the untouched pack does not load: %v", err)
+			}
+			tc.mutate(definitions)
+			if err := rulepack.Check(definitions); err == nil {
+				t.Fatal("the pack loaded carrying a hop whose legality nothing at load time can establish")
+			}
+		})
+	}
+}
+
+// The stranded-turn pass derives ONE thing from this package: the stage an
+// `accepted` turn is owed, as StagePhases()[0]. That derivation is only sound
+// while the pack's first hop agrees with it, and nothing else checks that the
+// ordered list and the JSON say the same thing.
+//
+// If they ever disagree, a turn whose first hop was lost is re-triggered into the
+// wrong stage — which the turn recorder refuses as an illegal transition, loudly,
+// on a turn that was merely waiting. Loud, but for the wrong reason and about the
+// wrong component.
+func TestPack_FirstHopIsTheFirstStagePhase(t *testing.T) {
+	declare(t)
+	definitions, err := rulepack.Definitions()
+	if err != nil {
+		t.Fatalf("Definitions: %v", err)
+	}
+
+	stages := rulepack.StagePhases()
+	if len(stages) == 0 {
+		t.Fatal("the engine declares no stage phases; the derivation would have nothing to agree with")
+	}
+	want, err := rulepack.SubjectForPhase(stages[0])
+	if err != nil {
+		t.Fatalf("SubjectForPhase(%s): %v", stages[0], err)
+	}
+
+	// Any rule CARRYING the accepted-phase condition, however many others it
+	// carries. Filtering on a single-condition rule would let a two-condition one
+	// escape both the subject check and the count — and the count is the half
+	// that says the first hop is unconditional.
+	found := 0
+	for _, definition := range definitions {
+		carries := false
+		for _, condition := range definition.Conditions {
+			if condition.Field != vocabulary.TurnPhaseCurrent.String() || condition.Operator != "eq" {
+				continue
+			}
+			if phase, ok := condition.Value.(string); ok && phase == string(vocabulary.PhaseAccepted) {
+				carries = true
+			}
+		}
+		if !carries {
+			continue
+		}
+		found++
+		if len(definition.Conditions) != 1 {
+			t.Errorf("rule %q gates on the accepted phase alongside %d other condition(s); the first hop is "+
+				"supposed to be unconditional, and the boot pass's derivation assumes a turn in `accepted` is "+
+				"owed that stage with nothing else to satisfy", definition.ID, len(definition.Conditions)-1)
+		}
+		for _, action := range definition.OnEnter {
+			if action.Subject != want {
+				t.Errorf("the pack starts an accepted turn on %q, but StagePhases()[0] is %q (%q); the boot "+
+					"pass derives the second and would re-trigger a lost first hop into the wrong stage",
+					action.Subject, stages[0], want)
+			}
+		}
+	}
+	if found != 1 {
+		t.Fatalf("%d rules are gated on the accepted phase alone, want exactly 1; the first hop is supposed to "+
+			"be unconditional, and the boot pass's derivation assumes there is one of it", found)
 	}
 }
 
