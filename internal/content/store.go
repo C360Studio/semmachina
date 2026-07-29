@@ -236,6 +236,69 @@ func (s *Store) GetVerdict(ctx context.Context, ref Ref) (*payload.Verdict, erro
 	return verdict, nil
 }
 
+// PutRoll stores the turn's resolution record and returns the reference the
+// turn entity will carry.
+//
+// The roll's rule-matched half is a band and a total; everything that makes it
+// REPLAYABLE — the mechanic version, the RNG version, the seed derivation
+// inputs, the raw dice, the modifier list — is bulky and is never rule-matched,
+// so it travels the same way the verdict's bands do. Replay honesty (8.3) reads
+// this object, not the triples.
+func (s *Store) PutRoll(
+	ctx context.Context,
+	turnEntityID string,
+	roll *payload.RollResult,
+) (Ref, error) {
+	if roll == nil {
+		return Ref{}, errors.New("storing a roll requires a roll result")
+	}
+	if err := payload.RequireTurnEntityID(roll.TurnID, turnEntityID); err != nil {
+		return Ref{}, err
+	}
+	return s.put(ctx, vocabulary.TurnRollRef, SubjectTurn, roll.TurnID, roll)
+}
+
+// GetRoll reads a stored roll result back.
+func (s *Store) GetRoll(ctx context.Context, ref Ref) (*payload.RollResult, error) {
+	roll := &payload.RollResult{}
+	if err := s.get(ctx, vocabulary.TurnRollRef, ref, roll); err != nil {
+		return nil, err
+	}
+	return roll, nil
+}
+
+// PutEffectBatch stores the batch the applier committed and returns the
+// reference the turn entity will carry.
+//
+// It is stored BEFORE the applier runs, because the applier is handed the
+// reference and lands it on the turn as the batch marker — the marker is its own
+// idempotency guard, so a marker pointing at nothing would be a turn that claims
+// effects nobody can inspect. The committed CHANGES are on the target entities;
+// this is the record of what was asked for, which is what a ledger replay and a
+// rejection diagnosis both need.
+func (s *Store) PutEffectBatch(
+	ctx context.Context,
+	turnEntityID string,
+	batch *payload.EffectBatch,
+) (Ref, error) {
+	if batch == nil {
+		return Ref{}, errors.New("storing an effect batch requires a batch")
+	}
+	if err := payload.RequireTurnEntityID(batch.TurnID, turnEntityID); err != nil {
+		return Ref{}, err
+	}
+	return s.put(ctx, vocabulary.TurnEffectsRef, SubjectTurn, batch.TurnID, batch)
+}
+
+// GetEffectBatch reads a stored effect batch back.
+func (s *Store) GetEffectBatch(ctx context.Context, ref Ref) (*payload.EffectBatch, error) {
+	batch := &payload.EffectBatch{}
+	if err := s.get(ctx, vocabulary.TurnEffectsRef, ref, batch); err != nil {
+		return nil, err
+	}
+	return batch, nil
+}
+
 // PutNarration stores one turn's narration prose and returns the reference the
 // turn entity will carry.
 //

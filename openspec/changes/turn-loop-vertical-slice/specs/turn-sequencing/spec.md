@@ -36,7 +36,13 @@ predicate the engine writes SHALL be a canonical three-segment lower-kebab ident
 Turn progression SHALL be driven by rules matching structured triples (never prose): an
 accepted action triggers adjudication; a verdict whose class requires a roll triggers the
 dice component; a roll result — or a no-roll verdict — triggers effect application;
-committed (or rejected) effects trigger narration; narration closes the turn. Rule
+committed effects trigger narration; narration closes the turn. A **rejected** batch does
+not narrate: it moves the turn to `failed`, which is terminal, and the player receives the
+resolution summary carrying the failure code rather than prose. Effect rejection means a
+persona proposed an intent the closed vocabulary refuses — an engine fault, not a fiction
+outcome — and narrating it would be fabricating story about a bug. An action the *fiction*
+denies is a different thing entirely: that is a normal verdict with failure-shaped intents
+in its `auto` band, and it narrates like any other turn. Rule
 payloads SHALL carry references only (entity IDs, `turn_id`, storage refs), never content.
 
 #### Scenario: Roll-requiring verdict routes through dice

@@ -1,0 +1,163 @@
+[
+  {
+    "id": "turn-accepted-enters-adjudication",
+    "type": "expression",
+    "name": "An accepted turn enters adjudication",
+    "description": "The turn's first hop. It matches with eq rather than the transition operator because a transition condition needs a recorded previous value and returns false on an entity's FIRST evaluation (design F3) — and a turn entity is CREATED directly in `accepted` by intake's atomic create, so a transition-guarded rule would never fire for it at all.",
+    "enabled": true,
+    "logic": "and",
+    "entity": { "pattern": "*.semmachina.*.*.turn.*" },
+    "conditions": [
+      { "field": "turn.phase.current", "operator": "eq", "value": "accepted", "required": false }
+    ],
+    "on_enter": [
+      { "type": "publish", "subject": "semmachina.turn.adjudicating", "max_iterations": 3 }
+    ],
+    "on_recovery": [
+      { "type": "publish", "subject": "semmachina.turn.adjudicating", "max_iterations": 3 }
+    ]
+  },
+  {
+    "id": "turn-verdict-requiring-a-roll-enters-resolution",
+    "type": "expression",
+    "name": "A verdict that calls for the dice enters resolution",
+    "description": "The adjudicator's REPORTED roll gate routes the turn, never the advisory (plausibility, risk) mapping: the persona that read the fiction holds that authority (design D12). The phase condition is eq and not transition because the phase moved to `adjudicating` when the stage was ENTERED — the verdict lands later, with the phase unchanged, so a transition condition would be false at exactly the moment this rule must fire.",
+    "enabled": true,
+    "logic": "and",
+    "entity": { "pattern": "*.semmachina.*.*.turn.*" },
+    "conditions": [
+      { "field": "turn.phase.current", "operator": "eq", "value": "adjudicating", "required": false },
+      { "field": "turn.verdict.requires-roll", "operator": "eq", "value": true, "required": false }
+    ],
+    "on_enter": [
+      { "type": "publish", "subject": "semmachina.turn.resolving", "max_iterations": 3 }
+    ],
+    "on_recovery": [
+      { "type": "publish", "subject": "semmachina.turn.resolving", "max_iterations": 3 }
+    ]
+  },
+  {
+    "id": "turn-verdict-declining-the-roll-enters-application",
+    "type": "expression",
+    "name": "A verdict that declines the dice goes straight to application",
+    "description": "The no-roll path (design D3): the verdict declared a single `auto` band and no roll-result triple is ever created for this turn. The applying phase admits `adjudicating` directly for exactly this reason.",
+    "enabled": true,
+    "logic": "and",
+    "entity": { "pattern": "*.semmachina.*.*.turn.*" },
+    "conditions": [
+      { "field": "turn.phase.current", "operator": "eq", "value": "adjudicating", "required": false },
+      { "field": "turn.verdict.requires-roll", "operator": "eq", "value": false, "required": false }
+    ],
+    "on_enter": [
+      { "type": "publish", "subject": "semmachina.turn.applying", "max_iterations": 3 }
+    ],
+    "on_recovery": [
+      { "type": "publish", "subject": "semmachina.turn.applying", "max_iterations": 3 }
+    ]
+  },
+  {
+    "id": "turn-roll-enters-application",
+    "type": "expression",
+    "name": "A resolved roll enters application",
+    "description": "The band the dice selected is matched against the closed roll-band set rather than tested for non-emptiness, so a turn carrying `auto` here — a band the dice cannot select — does not advance. The value set is verified against vocabulary.RollBands() when the pack loads.",
+    "enabled": true,
+    "logic": "and",
+    "entity": { "pattern": "*.semmachina.*.*.turn.*" },
+    "conditions": [
+      { "field": "turn.phase.current", "operator": "eq", "value": "resolving", "required": false },
+      { "field": "turn.roll.band", "operator": "in", "value": ["miss", "partial", "full"], "required": false }
+    ],
+    "on_enter": [
+      { "type": "publish", "subject": "semmachina.turn.applying", "max_iterations": 3 }
+    ],
+    "on_recovery": [
+      { "type": "publish", "subject": "semmachina.turn.applying", "max_iterations": 3 }
+    ]
+  },
+  {
+    "id": "turn-committed-effects-enter-narration",
+    "type": "expression",
+    "name": "Committed effects enter narration",
+    "description": "The applier lands the batch marker LAST, after every per-entity merge succeeded, so its presence is what says the world actually changed. A batch that was refused fails the turn instead, and a failed turn is terminal — it never reaches narration.",
+    "enabled": true,
+    "logic": "and",
+    "entity": { "pattern": "*.semmachina.*.*.turn.*" },
+    "conditions": [
+      { "field": "turn.phase.current", "operator": "eq", "value": "applying", "required": false },
+      { "field": "turn.effects.batch", "operator": "ne", "value": "", "required": false }
+    ],
+    "on_enter": [
+      { "type": "publish", "subject": "semmachina.turn.narrating", "max_iterations": 3 }
+    ],
+    "on_recovery": [
+      { "type": "publish", "subject": "semmachina.turn.narrating", "max_iterations": 3 }
+    ]
+  },
+  {
+    "id": "turn-narration-closes-the-turn",
+    "type": "expression",
+    "name": "Landed narration closes the turn",
+    "description": "This rule is why `*.ref` predicates stay rule-matchable. It branches on the ARRIVAL of a pointer at prose, never on the prose: a reference tells the pack that the narrator finished and tells it nothing about what was said. Flagging turn.narration.ref rule-opaque would fail this whole pack at load.",
+    "enabled": true,
+    "logic": "and",
+    "entity": { "pattern": "*.semmachina.*.*.turn.*" },
+    "conditions": [
+      { "field": "turn.phase.current", "operator": "eq", "value": "narrating", "required": false },
+      { "field": "turn.narration.ref", "operator": "ne", "value": "", "required": false }
+    ],
+    "on_enter": [
+      { "type": "publish", "subject": "semmachina.turn.complete", "max_iterations": 3 }
+    ],
+    "on_recovery": [
+      { "type": "publish", "subject": "semmachina.turn.complete", "max_iterations": 3 }
+    ]
+  },
+  {
+    "id": "turn-completed-is-resolved",
+    "type": "expression",
+    "name": "A completed turn is resolved",
+    "description": "Here the phase MOVE is the event, so this is the one hop where the transition operator is the right guard rather than the wrong one — and its `from` set is verified against vocabulary.PhasePredecessors(complete) when the pack loads, so the FSM is stated once and the pack is checked against it rather than restating it.",
+    "enabled": true,
+    "logic": "and",
+    "entity": { "pattern": "*.semmachina.*.*.turn.*" },
+    "conditions": [
+      {
+        "field": "turn.phase.current",
+        "operator": "transition",
+        "from": ["narrating"],
+        "value": "complete",
+        "required": false
+      }
+    ],
+    "on_enter": [
+      { "type": "publish", "subject": "semmachina.turn.resolved", "max_iterations": 3 }
+    ],
+    "on_recovery": [
+      { "type": "publish", "subject": "semmachina.turn.resolved", "max_iterations": 3 }
+    ]
+  },
+  {
+    "id": "turn-failed-is-resolved",
+    "type": "expression",
+    "name": "A failed turn is resolved",
+    "description": "The same notification for the other ending, because everything downstream of it owes the player an answer either way: the campaign ledger records failed turns alongside completed ones, and an egress adapter that only spoke about successes would leave a player waiting on a turn that already ended.",
+    "enabled": true,
+    "logic": "and",
+    "entity": { "pattern": "*.semmachina.*.*.turn.*" },
+    "conditions": [
+      {
+        "field": "turn.phase.current",
+        "operator": "transition",
+        "from": ["accepted", "adjudicating", "resolving", "applying", "narrating"],
+        "value": "failed",
+        "required": false
+      }
+    ],
+    "on_enter": [
+      { "type": "publish", "subject": "semmachina.turn.resolved", "max_iterations": 3 }
+    ],
+    "on_recovery": [
+      { "type": "publish", "subject": "semmachina.turn.resolved", "max_iterations": 3 }
+    ]
+  }
+]

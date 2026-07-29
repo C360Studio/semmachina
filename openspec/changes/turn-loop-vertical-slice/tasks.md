@@ -242,7 +242,7 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
 
 ## 8. Rule pack and ledger
 
-- [ ] 8.0 Register every SemMachina predicate upstream via `vocabulary.RegisterPredicate`
+- [x] 8.0 Register every SemMachina predicate upstream via `vocabulary.RegisterPredicate`
       at bootstrap — **rule conditions reject canonical-but-unregistered predicates
       (F10), so the rule pack cannot load without this**. In the same pass mark `RuleOpaque`
       exactly those predicates **whose object is fiction** — entity description, verdict
@@ -255,7 +255,7 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       loads in every binary and test, and registry-touching tests cannot be `t.Parallel()`.
       Test: a rule branching on a rule-opaque predicate fails validation, and one matching a
       `*.ref` predicate loads
-- [ ] 8.1 Author the turn-sequencing rule pack: accepted → adjudicator; roll-requiring
+- [x] 8.1 Author the turn-sequencing rule pack: accepted → adjudicator; roll-requiring
       verdict → dice; roll or no-roll verdict → applier; applied/rejected → narrator;
       narrated → complete + ledger. References only; caps on every LLM-triggering path.
       **Wire the two group-7 components that currently have no production caller** — if this
@@ -268,6 +268,14 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       the guard answers "did this stage finish", the recorder answers "is this transition
       legal", and a skip decision taken while the phase is still `accepted` would have the
       guard say advance while the recorder refuses it as an illegal stage skip
+- [ ] 8.1b Two cleanups 8.1 surfaced: (a) the starter world's `rules/00-turn-sequencing.json`
+      stub is now misleading — turn sequencing lives in `internal/rulepack` because it is the
+      *engine's* state machine and a downloaded world must not be able to author or break the
+      turn loop, so replace the stub with a genuinely world-scoped rule (a world reaction) or
+      relax the loader's "at least one rule file" requirement; (b) add the closed
+      `vocabulary.FailureReason` for a persona loop that fails for a reason **other** than
+      its cap — today that case is logged loudly and leaves the turn in its stage until the
+      next boot's recovery replay, because there is no code to record
 - [ ] 8.2 Record the roll-gate agreement on `TurnManifest` — reported gate, advised gate,
       and the **mapping version**, which does not exist yet: `RollGateExpectation` carries
       no version and `vocabulary.RequiresRoll` has no version constant, so add one here
@@ -321,6 +329,11 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       and every exit fails as an internal error. Governance is disabled by default and
       nothing enables it, so this is fail-closed rather than a present defect — but enabling
       it without this in mind makes the identity contract silently unwireable.
+      **Boot ordering**: the spawner publishes to a stream the agentic-loop component owns,
+      so the loop must be started (or the stream ensured) *before* ingress opens — otherwise
+      every persona stage nak-loops. Note a JetStream publish is a core publish underneath,
+      so a missing stream can look like it worked while leaving deliveries unacknowledged;
+      assert `NumAckPending == 0` on stage consumers rather than trusting the turn completed.
       **The claim alone is not enough**: it answers "was this campaign created", not "did
       the import that followed it finish", so a crash mid-import leaves a claimed campaign
       and a partial world that boot would then skip. Write an import-completion marker after

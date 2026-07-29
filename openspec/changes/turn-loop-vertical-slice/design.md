@@ -365,6 +365,25 @@ distinct rules — `types.ValidateEntityID` for mapped IDs, `vocabulary.ParsePre
 every predicate in `entities.jsonl` — and must reject bad predicates at import time with a
 reason naming the offending line, rather than letting them fail later at materialization.
 
+### F21 — A mid-chain rule gated on the phase alone races the stage it follows
+
+Every phase except `accepted` is written on stage **entry**, so a rule matching
+`phase == resolving` fires as the dice stage *starts*, not when it finishes. The next stage
+then races the previous one for the artifact it needs. The race is almost always won — the
+previous stage writes in microseconds while the trigger travels a KV watch, a rule
+evaluation, a publish and a consumer — so **the defect passes every test and appears under
+load**, which is the worst possible signature.
+
+The fix is a load-time gate: a mid-chain rule must match on the **artifact** the previous
+stage produces, not merely on the phase it entered. Two exemptions are principled rather
+than convenient — the first hop, because `accepted` is written by intake's atomic create and
+is therefore a finished fact rather than an entry marker; and `transition` conditions, which
+fire on the phase *move* rather than on its presence.
+
+This is the same shape as the resume guard (a phase cannot distinguish "entered" from
+"finished"; the artifact ref can), arriving at the rule layer instead of the persona layer.
+Worth stating as a general rule for any future pack: **phases sequence, artifacts gate.**
+
 ### F20 — An undeclared model capability silently resolves to the default model
 
 `model.Registry.Resolve` returns `Defaults.Model` for any capability absent from its map, so
