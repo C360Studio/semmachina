@@ -257,9 +257,22 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       `*.ref` predicate loads
 - [ ] 8.1 Author the turn-sequencing rule pack: accepted → adjudicator; roll-requiring
       verdict → dice; roll or no-roll verdict → applier; applied/rejected → narrator;
-      narrated → complete + ledger. References only; caps on every LLM-triggering path
+      narrated → complete + ledger. References only; caps on every LLM-triggering path.
+      **Wire the two group-7 components that currently have no production caller** — if this
+      lands without them, 7.2's cost saving silently evaporates and cap exhaustion silently
+      stalls, and no test notices, because there is nothing to regress:
+      (a) the spawner consults `persona.Guard.Check` **before** publishing the task, so a
+      stage whose artifact ref already exists advances instead of re-running a billed call;
+      (b) a cap-exhausted loop routes to `persona.RecordCapExhausted` rather than ending in
+      silence. **And reconcile the guard with the recorder deliberately, not by discovery**:
+      the guard answers "did this stage finish", the recorder answers "is this transition
+      legal", and a skip decision taken while the phase is still `accepted` would have the
+      guard say advance while the recorder refuses it as an illegal stage skip
 - [ ] 8.2 Record the roll-gate agreement on `TurnManifest` — reported gate, advised gate,
-      and the **mapping version** — resolving a question 7.2 raised rather than guessed.
+      and the **mapping version**, which does not exist yet: `RollGateExpectation` carries
+      no version and `vocabulary.RequiresRoll` has no version constant, so add one here
+      rather than discovering it mid-ledger. Resolves a question 7.2 raised rather than
+      guessed.
       It is derivable from the stored verdict today, so a field looks redundant; it is not,
       because the mapping is advisory and expected to be tuned with play, and a derived
       value would silently flip for every historical turn when it changes. Payloads are
@@ -302,6 +315,12 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       import. Do NOT apply create-not-put per template entity: referential stubs occupy
       keys, so a referenced entity's own create would return key-exists and it would stay a
       permanent stub (F11). Boot-readiness must also exclude stubs via `EntityState.IsStub()`.
+      **Keep the two persona terminal tools out of the approval/governance path**: upstream's
+      approval re-dispatch rebuilds a bare tool call and propagates only a closed framework
+      metadata list, so a persona tool routed through it loses the engine-injected identity
+      and every exit fails as an internal error. Governance is disabled by default and
+      nothing enables it, so this is fail-closed rather than a present defect — but enabling
+      it without this in mind makes the identity contract silently unwireable.
       **The claim alone is not enough**: it answers "was this campaign created", not "did
       the import that followed it finish", so a crash mid-import leaves a claimed campaign
       and a partial world that boot would then skip. Write an import-completion marker after
