@@ -81,10 +81,11 @@ func TestSessionsFor_ARecconnectMovesTheDeliveryTargetWithoutChangingIdentity(t 
 	}
 }
 
-// A second concurrent connection claiming one player is task 9.3's contract to
-// state. What 9.2 fixes is only that delivery follows the index rather than a
-// captured connection: whatever sessions exist for that player are the targets,
-// and none of anyone else's are.
+// A second concurrent connection claiming one player CONNECTS and RECEIVES:
+// multi-device is the posture, bounded by WithMaxConnectionsPerPlayer rather
+// than refused. What this test fixes is that delivery follows the index rather
+// than a captured connection: whatever sessions exist for that player are the
+// targets, and none of anyone else's are.
 func TestSessionsFor_TwoConnectionsForOnePlayerAreBothTargetsAndStillOnlyTheirs(t *testing.T) {
 	h := newHarness(t)
 	h.authenticate(t, testCredential, "conn-a")

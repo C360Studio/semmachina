@@ -232,6 +232,174 @@ appending lane degrades into a slightly stale answer rather than into a history 
 - **WHEN** a player's pointers hold more values than the two the engine writes
 - **THEN** retrieval reads at most a bounded number of turns and still answers
 
+### Requirement: A client SHALL be authenticated before it becomes a socket
+The player transport SHALL authenticate a client during the connection handshake, before the
+connection is upgraded. A client whose credential is missing, unknown, or names a player this
+world does not have SHALL be refused with a transport-level status and SHALL NOT be upgraded,
+SHALL NOT be bound to a session, and SHALL NOT become a delivery target.
+
+There is then no such thing as an unauthenticated socket, which is the strongest available
+answer to "what may one do, and for how long". It removes a pre-authentication connection
+state, a first-frame handshake to get wrong, and any need for a timeout bounding that window.
+
+The refusal SHALL NOT distinguish an unknown credential from one naming a player this world
+does not have: the two have the same remedy and telling them apart is a membership oracle. It
+SHALL NOT echo the credential, name a player, or carry an engine diagnosis.
+
+Verifying a credential and binding a connection happen at different moments — verification needs
+no socket and binding needs one — and where they are separate operations, the binding operation
+SHALL require PROOF of verification rather than a player identifier. A player identifier passed
+between the two connects nothing: binding an unverified player would compile, run, and produce a
+working session for a player nobody ever read out of the graph, which is the invariant
+"`player_id` is a graph entity" silently lost. The proof SHALL be unforgeable outside the
+verifying operation, so that skipping verification is not expressible rather than merely
+avoided.
+
+#### Scenario: A wrong credential produces no socket and no session
+- **WHEN** a client presents a missing, unknown, or wrong credential
+- **THEN** the handshake is refused with an unauthorized status, no session exists for any
+  player, and the client never receives a turn result
+
+#### Scenario: Two different authentication failures are indistinguishable
+- **WHEN** one client presents an unknown credential and another presents a credential naming
+  a player that is not an entity of this world
+- **THEN** both are answered identically, and neither answer names a player or echoes what was
+  sent
+
+#### Scenario: A session names a player the graph was read for
+- **WHEN** a connection is bound to a session
+- **THEN** its `player_id` is one a credential resolved to and a graph read proved real and
+  non-stub, and a player identifier that has not been through that read cannot be bound at all
+
+### Requirement: The local-only posture SHALL announce itself when it stops holding
+The player transport SHALL refuse to bind or serve an address that is not loopback, and SHALL
+refuse a request whose peer address is not loopback, unless the instance explicitly
+acknowledges that it is exposed. The acknowledgement SHALL log the enumerated controls this
+transport does not have, so that an operator exposing the port is told what they have taken
+responsibility for.
+
+Local-only is a SCOPE this code may assume, never a property it has: the hosted MVP is the same
+image on a rented box, so the assumption ends by configuration rather than by a rewrite. An
+assumption recorded only in a comment would be read by everybody except the person who changes
+the address.
+
+A peer arriving through a tunnel or proxy presents as loopback and cannot be distinguished from
+a local one inside the process; that limit SHALL be stated at the site rather than papered over
+with a client-settable forwarding header.
+
+#### Scenario: A wildcard bind is a boot failure
+- **WHEN** an instance is configured to listen on every interface without acknowledging it
+- **THEN** the transport refuses to start, naming the acknowledgement that would allow it
+
+#### Scenario: An acknowledged exposure enumerates what is missing
+- **WHEN** an instance acknowledges that it is exposed beyond loopback
+- **THEN** the operator log names each control that does not exist — rate limiting, transport
+  encryption, credential rotation and revocation, an origin allow-list, an audit trail
+
+#### Scenario: A non-loopback peer is refused before its credential is read
+- **WHEN** a request arrives from a non-loopback address carrying a VALID credential
+- **THEN** it is refused, no session is bound, and the refusal is recorded for the operator
+
+### Requirement: A connection identifier SHALL be minted by the transport and never reused
+The transport SHALL mint every connection identifier itself, SHALL NOT derive one from anything
+a client can influence, and SHALL NOT issue the same identifier twice within a process.
+
+A recycled identifier inherits the previous session: the session table is indexed by player as
+well as by connection, so a socket bound to a reused id can both submit actions as the previous
+player and receive that player's fiction, presenting as an ordinary session with nothing
+anywhere to report it. The gateway cannot defend itself against this — establishing a
+connection's identity is the only place it happens — so the transport SHALL make reuse
+unrepresentable rather than merely avoided.
+
+#### Scenario: Connections that come and go never repeat an identifier
+- **WHEN** a player connects and disconnects repeatedly
+- **THEN** no connection identifier is issued twice
+
+#### Scenario: A client cannot name its own connection
+- **WHEN** a client supplies a connection identifier in a header or query parameter
+- **THEN** the session is bound to a minted identifier and the client's value is not used
+
+### Requirement: A session SHALL end on every connection close path
+The transport SHALL release a connection's session on every way a connection can end —
+graceful close, abnormal close, a refused oversize frame, a failed write, and server shutdown.
+A connection that has ended SHALL NOT be a delivery target.
+
+A session outliving its socket is not a leak of memory alone: it is a live delivery target that
+can never receive, so every later result for that player is written into nothing.
+
+#### Scenario: A socket destroyed without a close handshake releases its session
+- **WHEN** a client's connection is destroyed with no close frame
+- **THEN** the player stops resolving to that connection, and a later result for that player is
+  delivered to no recipients
+
+#### Scenario: Shutdown ends every session
+- **WHEN** the transport's context is cancelled
+- **THEN** every live connection is closed with a shutdown reason and no session remains bound
+
+### Requirement: The request budget SHALL be enforced by the transport's own reader
+The transport SHALL apply the engine's maximum request size to the socket reader itself, so a
+frame past the budget is refused before its payload is read. An oversize frame SHALL end the
+connection, because a reader cannot resynchronise inside a frame it refused to read. A frame
+within the budget that is malformed SHALL be answered with a closed refusal code on a LIVE
+connection, so a client learns rather than reconnecting into the same mistake.
+
+The gateway's own size check runs after the bytes are already in memory; it is a second line of
+defence and never the bound.
+
+#### Scenario: An oversize frame is never read
+- **WHEN** a client sends a frame larger than the request budget
+- **THEN** the connection is closed with a too-large close code, no action is published, and the
+  session is released
+
+#### Scenario: A frame at exactly the budget is read
+- **WHEN** a client sends a frame of exactly the request budget
+- **THEN** it is parsed and answered rather than closing the connection
+
+#### Scenario: A malformed frame is answered and the connection survives
+- **WHEN** a client sends bytes that are not a valid submission
+- **THEN** it receives a refusal naming a closed code, and the same connection can still submit
+
+### Requirement: The session table SHALL be bounded without an idle timeout
+A player MAY hold several connections at once and every one of them SHALL be a delivery target.
+The number SHALL be capped per player, and reaching the cap SHALL refuse the NEWEST connection
+rather than evicting an existing one, so that the table is bounded by (roster size × cap).
+
+No session SHALL be expired because of elapsed silence from its player: email-cadence play is
+valid, and an idle-session timeout is exactly the interactive-pacing assumption this engine
+forbids. A connection whose PEER has stopped answering a transport liveness probe MAY be ended,
+which is a different fact — a running client answers without its player doing anything.
+
+Evicting the oldest would make a leaked credential into a way to take a player's campaign away
+from them; refusing the newest costs the newcomer a connection and costs the player nothing.
+
+#### Scenario: The cap refuses the newest and leaves the others deliverable
+- **WHEN** a player at their connection cap opens another connection
+- **THEN** the new connection is closed with a reason, and every connection they already held
+  still receives that player's results
+
+#### Scenario: A quiet player keeps their session
+- **WHEN** a connected player submits nothing for many multiples of the liveness probe interval
+- **THEN** their session survives and a result delivered afterwards reaches them
+
+#### Scenario: A peer that stops answering is reaped
+- **WHEN** a connected client stops answering the transport's liveness probe
+- **THEN** the connection is ended and its session released
+
+### Requirement: Every server-to-client message SHALL say which document it is
+Each server-to-client message SHALL carry an explicit type discriminator wherever one
+connection carries more than one kind of document, so a client SHALL NOT have to infer which
+document arrived from its shape. The documents inside SHALL be the canonical ones, unmodified.
+
+A client that guesses by shape guesses wrong first on the path it exercises least, which is the
+refusal path. The discriminator belongs to the ADAPTER rather than to the protocol: multiplexing
+is a property of a duplex connection, and an adapter that delivers one document per message
+needs none of it.
+
+#### Scenario: A submission answer and a turn result are distinguishable
+- **WHEN** a client receives a message on the player socket
+- **THEN** it can tell a submission answer from a turn delivery from the message's own type
+  field, and the canonical result inside encodes byte-identically to the published one
+
 ### Requirement: No interactive-pacing assumptions
 No turn-processing step SHALL fail, time out, or degrade a turn because of elapsed
 wall-clock time between a turn's completion and the player's next action.

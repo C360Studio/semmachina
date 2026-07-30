@@ -4,6 +4,7 @@ go 1.26.4
 
 require (
 	github.com/c360studio/semstreams v1.0.0-beta.158
+	github.com/gorilla/websocket v1.5.3
 	github.com/nats-io/nats.go v1.48.0
 	github.com/testcontainers/testcontainers-go v0.40.0
 	golang.org/x/mod v0.34.0
@@ -35,7 +36,6 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect

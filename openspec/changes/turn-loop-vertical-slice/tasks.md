@@ -484,7 +484,7 @@ speaks and it is expensive to retrofit.
       one; (b) `TurnResult.NarrationRef` is a storage reference and no client can resolve an
       `obj://`, so who dereferences it, and whether the delivered document differs from the
       published one, is undecided
-- [ ] 9.3 Local-only security posture, stated and tested rather than assumed: what
+- [x] 9.3 Local-only security posture, stated and tested rather than assumed: what
       authenticates a session on an instance-per-world box, what happens to an unauthenticated
       socket, and what a second connection claiming the same `player_id` does. MVP may answer
       these narrowly — it may NOT leave them undefined, because every one of them is a
@@ -517,7 +517,42 @@ speaks and it is expensive to retrofit.
       from its previous player before rebinding, and `unbind` deletes empty player entries, so
       the index adds no growth the connection index did not already have. The obligation is on
       the transport, and it is stated here because a comment in `session.go` is not where the
-      transport author will look
+      transport author will look.
+      **Delivered as `internal/playersocket`**, with the posture stated in its package doc and
+      each answer pinned by a test. Authentication is a bearer credential on the HANDSHAKE, so
+      there is no unauthenticated socket to bound — a wrong credential is a 401 and never an
+      upgrade (`Gateway.Authenticate` split into `Verify` + `Bind` for exactly this: verifying
+      needs no socket and binding needs one). **Review finding H1, fixed:** the split first
+      passed a plain `string` between the halves, which connects nothing — a reviewer probe got
+      a fully working session, submittable and a delivery target, for an unimported player with
+      no `Verify` and no graph read. `Bind` now takes an unexported-field `VerifiedPlayer` that
+      only `Verify` mints, so binding an unverified player is a COMPILE error; there is no test
+      for it and there must not be, because writing one means reintroducing the string path.
+      The zero value is the one input still constructible and `Bind` refuses it.
+      Obligation (a) is `SetReadLimit`, which gorilla
+      enforces against the frame HEADER, so an oversize frame's payload is never allocated and
+      the client sees a 1009 rather than a refusal — the close code is what distinguishes the
+      reader bound from the gateway's own check. (b) is one deferred `Disconnect` per connection
+      goroutine plus a shutdown watcher, because `http.Server.Shutdown` deliberately does not
+      touch hijacked connections. (c) is discharged by MINTING ids from a per-server random
+      nonce and a monotonic counter, with nothing on the wire able to name a connection: reuse
+      is unrepresentable rather than avoided. The session table's bound is now
+      (roster × `MaxConnectionsPerPlayer`, default 4) enforced inside `sessions.put` under its
+      own lock, refusing the NEWEST connection — eviction would make a leaked credential a way
+      to take a player's campaign away from them. NO idle timeout: reaping is on transport
+      liveness (ping/pong), which F24 shows is only a different thing from an idle timeout
+      BECAUSE the server pings. Local-only is enforced twice (configured address at
+      construction, bound address at `Serve`) plus a per-request peer check, and
+      `AllowNonLoopback` logs the enumerated missing controls rather than silently permitting;
+      F25 records the one assumption that could not be made self-announcing (a tunnelled peer
+      presents as loopback), and the exposure warning names the one resource with no ceiling
+      (concurrent handshakes, bounded only by the handshake timeout). Note the two address gates
+      are bypassed by construction when a composition mounts `ServeHTTP` on its own
+      `http.Server` — on that path the peer check is the whole posture, which is stated in the
+      package doc. 24 mutations, 2 survivors, both fixed: a refused REBIND left the connection
+      submittable as its former player (new test), and the peer-reaped test passes with the ping
+      probe deleted — its partner (a quiet player KEEPS their session) is what kills that one,
+      and F24 is why the pair is necessary rather than redundant
 
 ## 10. Composition, mock-LLM E2E, and gates
 

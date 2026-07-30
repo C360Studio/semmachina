@@ -35,6 +35,15 @@ var _ Directory = (*gateway.Gateway)(nil)
 // player the document belongs to. What this package guarantees is the pairing —
 // this document, that session — and what an adapter decides is what "sent" means
 // on its transport.
+//
+// A sink reaches its transport through the SESSION it is handed and never
+// through a table of its own: a live connection carries its writer
+// (gateway.Connection.Writer), and an adapter with a durable address instead uses
+// ChannelBinding.ReplyTo. A sink that kept its own map from connection id to
+// socket would be a second registry that can drift from the session table, and a
+// connection present in one and absent from the other is either a socket that
+// receives a player's fiction without being able to submit as them, or a
+// delivery reported as sent to nowhere.
 type Sink interface {
 	Deliver(ctx context.Context, session gateway.Session, delivery *payload.TurnDelivery) error
 }

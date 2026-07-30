@@ -79,4 +79,12 @@
 // Nothing here measures the gap between a player's turns, and nothing expires a
 // session for being quiet. The only clock is the arrival stamp, which is
 // recorded rather than compared. Play at email cadence is a supported pace.
+//
+// The session table is bounded anyway, and without a clock: a player may hold up
+// to DefaultMaxConnectionsPerPlayer connections at once — all of them delivery
+// targets, because multi-device is the posture — so the table holds at most
+// (roster size × that number). Reaching the cap refuses the NEWEST connection
+// rather than evicting an existing one. Noticing a socket whose PEER has gone
+// away is the transport's job and is a liveness question rather than an idleness
+// one; see internal/playersocket.
 package gateway

@@ -365,6 +365,49 @@ distinct rules — `types.ValidateEntityID` for mapped IDs, `vocabulary.ParsePre
 every predicate in `entities.jsonl` — and must reject bad predicates at import time with a
 reason naming the offending line, rather than letting them fail later at materialization.
 
+### F24 — A socket read deadline IS an idle timeout unless something answers it
+
+The player transport bounds reads at `pingInterval + pongTimeout` and calls that a liveness
+check. It is only a liveness check because the server PINGS: a conformant client pongs
+without its player doing anything, so the deadline is reset by the peer being alive rather
+than by the player being active. Delete the ping goroutine and the same deadline becomes
+exactly the idle-session timeout this project forbids — a player at email cadence is
+disconnected for saying nothing.
+
+Found by mutation, not by reasoning. The obvious test ("a peer that stops answering is
+reaped") passes with the probe deleted, because its client is silent in both senses at once:
+it sends nothing AND answers nothing, so the read deadline expires either way. The
+distinguishing test is its opposite — a client that reads (and therefore pongs) and submits
+nothing across many probe intervals must KEEP its session — and that one fails the moment
+the probe is gone.
+
+The general shape, and it applies to every deadline this engine puts on a socket: a timeout
+test needs a partner asserting what must NOT expire, and the two clients must differ in
+exactly one thing — whether the peer answers. A single timeout test proves the timeout
+fires, never that it fires for the right reason.
+
+### F25 — The runtime loopback gate cannot see through a tunnel; the bind gate is what covers it
+
+`internal/playersocket` enforces local-only twice: it refuses to bind or serve a non-loopback
+address, and it refuses a request whose peer address is not loopback. The second check has a
+blind spot that cannot be closed from inside the process — a client arriving through an SSH
+tunnel, a reverse proxy or a container port forward presents a loopback peer address, because
+by the time the bytes arrive that is what it is. No amount of care in the handler distinguishes
+it from a process on the same box.
+
+That is stated at the site rather than papered over, and the compensating control is the bind
+gate: a tunnel has to land on a port somewhere, and this server binds only where a tunnel would
+have to be built deliberately. `X-Forwarded-For` is deliberately NOT consulted — trusting a
+header a client can set would make the gate weaker than not having it, since a remote client
+could then assert its own locality.
+
+The wider point for anything that inherits this posture: "local-only" is a scope this code is
+allowed to assume today, not a property it has. `CLAUDE.md` says the hosted MVP is the same
+image on a rented box, so the assumption ends by configuration rather than by a rewrite —
+which is why `AllowNonLoopback` logs the enumerated list of controls that do not exist yet
+(no rate limit, no TLS, no credential rotation or revocation, no origin allow-list, no audit
+trail) instead of merely permitting the bind.
+
 ### F23 — A single-turn replay test cannot see call-order dependence
 
 The dice purity scan bans a **PCG-typed field** on the roller, not *state in general* — so a

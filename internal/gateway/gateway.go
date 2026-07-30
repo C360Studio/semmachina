@@ -38,6 +38,12 @@ const Source = "player-gateway"
 // the first, and an adapter author who reads "the gateway bounds the frame" and
 // skips their reader limit has moved the bound one allocation too late.
 //
+// internal/playersocket discharges it with SetReadLimit, which gorilla enforces
+// against the frame HEADER's declared length — the payload of an oversize frame
+// is never read at all — and the two answers are distinguishable from the
+// client's side: a refusal frame means this check caught it, a 1009 close means
+// the reader did.
+//
 // It is DERIVED from the two client-owned budgets rather than picked, so
 // widening the action-text budget cannot silently leave the frame bound behind.
 // The multiplier covers JSON's worst honest expansion: every byte of a UTF-8
@@ -95,20 +101,43 @@ func (c Config) Validate() error {
 	return nil
 }
 
+// DefaultMaxConnectionsPerPlayer is how many live connections one player may
+// hold at once unless an instance says otherwise.
+//
+// Four, because multi-device is the posture — a laptop, a phone, a tablet and
+// one spare — and because the number's job is to BOUND the session table rather
+// than to ration it. With it, the table can hold at most (roster size × this),
+// which is a hard number known at boot; without it, one credential can grow the
+// delivery index until the process dies, and every entry in that index is a
+// socket a player's fiction is written to.
+//
+// It is not a security control against a stolen credential, and reading it as
+// one would be the mistake: somebody holding a player's credential can already
+// submit as them and read their turns on the first connection. What it bounds is
+// resource growth and per-turn write amplification.
+const DefaultMaxConnectionsPerPlayer = 4
+
 // Gateway turns authenticated submissions into canonical player actions.
 type Gateway struct {
-	auth      Authenticator
-	store     Store
-	publisher Publisher
-	config    Config
-	subject   string
-	logger    *slog.Logger
-	now       func() time.Time
-	sessions  *sessions
+	auth         Authenticator
+	store        Store
+	publisher    Publisher
+	config       Config
+	subject      string
+	logger       *slog.Logger
+	now          func() time.Time
+	maxPerPlayer int
+	sessions     *sessions
 }
 
 // Option configures a Gateway.
 type Option func(*Gateway)
+
+// WithMaxConnectionsPerPlayer overrides how many live connections one player may
+// hold at once. See DefaultMaxConnectionsPerPlayer.
+func WithMaxConnectionsPerPlayer(limit int) Option {
+	return func(g *Gateway) { g.maxPerPlayer = limit }
+}
 
 // WithClock overrides the arrival clock. Tests use it so a stamped arrival time
 // is an assertable value, and so an arbitrarily long gap between a player's
@@ -150,14 +179,14 @@ func New(auth Authenticator, store Store, publisher Publisher, config Config, op
 		return nil, err
 	}
 	gateway := &Gateway{
-		auth:      auth,
-		store:     store,
-		publisher: publisher,
-		config:    config,
-		subject:   turn.ActionSubject,
-		logger:    slog.Default(),
-		now:       time.Now,
-		sessions:  newSessions(),
+		auth:         auth,
+		store:        store,
+		publisher:    publisher,
+		config:       config,
+		subject:      turn.ActionSubject,
+		logger:       slog.Default(),
+		now:          time.Now,
+		maxPerPlayer: DefaultMaxConnectionsPerPlayer,
 	}
 	for _, opt := range opts {
 		opt(gateway)
@@ -171,6 +200,14 @@ func New(auth Authenticator, store Store, publisher Publisher, config Config, op
 	if gateway.logger == nil {
 		return nil, errors.New("the player gateway requires a logger")
 	}
+	if gateway.maxPerPlayer < 1 {
+		return nil, fmt.Errorf(
+			"the player gateway allows %d connections per player; a cap below one is a gateway nobody can "+
+				"connect to, and the session table's whole bound is (roster size × this number)",
+			gateway.maxPerPlayer)
+	}
+	// After the options, because the table owns its own bound.
+	gateway.sessions = newSessions(gateway.maxPerPlayer)
 	return gateway, nil
 }
 
@@ -187,30 +224,92 @@ func (g *Gateway) Start(ctx context.Context, streams turn.StreamEnsurer) error {
 	return turn.EnsureActionStream(ctx, streams)
 }
 
+// VerifiedPlayer is PROOF that a credential was checked, and it is the only
+// thing Bind accepts.
+//
+// # Why a type and not a string
+//
+// Because Verify and Bind are both exported and both reachable by a transport,
+// and a plain string between them connects nothing: it makes "bind without
+// verifying" an ordinary call that compiles, runs, and produces a fully working
+// session — submittable and a live delivery target — for a player id nobody ever
+// read out of the graph. Before the two halves were split, Authenticate was the
+// single entry point and the graph read could not be skipped; this type is how
+// that coupling survives the split.
+//
+// The field is unexported and there is no constructor, which is the whole
+// mechanism: only Verify can mint one, so binding an unverified player is a
+// COMPILE ERROR rather than a rule somebody has to follow. It is the same
+// argument this package makes everywhere else — broadcast is unexpressible, a
+// connection id cannot be named from the wire, the cap is counted under the lock
+// that binds — applied to the one seam that had been left to call order.
+//
+// # There is no test for this, deliberately
+//
+// The compiler is the test. Nothing can construct a VerifiedPlayer naming an
+// unverified player, so there is no state a test could set up to assert against.
+// A future "let us add coverage for the string path" would have to REINTRODUCE
+// the string path, which is the defect. The one thing worth pinning is the zero
+// value, which names nobody and which Bind refuses — see Bind.
+type VerifiedPlayer struct {
+	// id is the six-part entity id Verify read out of the graph and proved real.
+	id string
+}
+
+// PlayerID returns the verified player's entity id.
+func (v VerifiedPlayer) PlayerID() string { return v.id }
+
 // Authenticate binds a connection to the player entity its credential names.
 //
-// The player entity is READ, and that read is what makes "player_id is a graph
-// entity" true rather than merely intended. A credential resolving to an id
-// nothing imported, or to a key holding only a referential stub, produces no
-// session at all — instead of a stream of actions attributed to a player who
-// does not exist and a turn whose context assembler finds nobody.
+// It is Verify followed by Bind, and it exists because most callers want both.
+// A transport that must answer a bad credential BEFORE it has a socket to bind
+// calls the two halves itself — see internal/playersocket, where the whole point
+// is that an unauthenticated client never reaches the upgrade.
 //
 // A RECONNECT is just this call again on a new connection. It returns a session
 // carrying the same player id, so nothing the engine records changes when a
-// socket drops. What a second CONCURRENT connection claiming one player should
-// do is the disclosure question task 9.3 states and tests; this task neither
-// refuses nor privileges one, because guessing that contract here is how it ends
-// up decided by accident.
+// socket drops. A player may hold several connections at once, up to
+// DefaultMaxConnectionsPerPlayer, and every one of them is a delivery target.
 func (g *Gateway) Authenticate(ctx context.Context, credential string, conn Connection) (*Session, error) {
 	if err := conn.Validate(); err != nil {
 		return nil, err
 	}
-	playerID, err := g.auth.Authenticate(ctx, credential)
+	player, err := g.Verify(ctx, credential)
 	if err != nil {
 		return nil, err
 	}
+	return g.Bind(player, conn)
+}
+
+// Verify answers which player a credential names, and binds NOTHING.
+//
+// The player entity is READ, and that read is what makes "player_id is a graph
+// entity" true rather than merely intended. A credential resolving to an id
+// nothing imported, or to a key holding only a referential stub, produces no
+// identity at all — instead of a stream of actions attributed to a player who
+// does not exist and a turn whose context assembler finds nobody.
+//
+// It is separate from Bind for the transport's sake, and the separation is a
+// posture decision rather than a convenience. A WebSocket handshake is an HTTP
+// request, so a transport that verifies here can refuse a bad credential with a
+// status code before any socket exists — which is what makes "an unauthenticated
+// socket may do nothing" true by construction rather than by a state machine.
+// Binding needs a live connection to write to, and there is none until after the
+// upgrade; splitting the two is what lets each happen at the only moment it can.
+//
+// Every failure it reports for a credential is the same sentinel. Distinguishing
+// "no such credential" from "that credential names a player this world does not
+// have" would be a membership oracle, and the two have the same remedy.
+//
+// It is the ONLY place a VerifiedPlayer is minted, which is what keeps the graph
+// read on the path to a session now that binding is a separate call.
+func (g *Gateway) Verify(ctx context.Context, credential string) (VerifiedPlayer, error) {
+	playerID, err := g.auth.Authenticate(ctx, credential)
+	if err != nil {
+		return VerifiedPlayer{}, err
+	}
 	if err := types.ValidateEntityID(playerID); err != nil {
-		return nil, fmt.Errorf(
+		return VerifiedPlayer{}, fmt.Errorf(
 			"%w: the credential names %q, which is not a canonical six-part entity id",
 			ErrUnauthenticated, playerID)
 	}
@@ -218,21 +317,56 @@ func (g *Gateway) Authenticate(ctx context.Context, credential string, conn Conn
 	state, err := g.store.GetEntity(ctx, playerID)
 	switch {
 	case errors.Is(err, graphio.ErrEntityNotFound):
-		return nil, fmt.Errorf("%w: player %s is not an entity of this world", ErrUnauthenticated, playerID)
+		return VerifiedPlayer{}, fmt.Errorf(
+			"%w: player %s is not an entity of this world", ErrUnauthenticated, playerID)
 	case err != nil:
-		return nil, fmt.Errorf("read player %s: %w", playerID, err)
+		return VerifiedPlayer{}, fmt.Errorf("read player %s: %w", playerID, err)
 	case state.IsStub():
 		// A referential stub is queryable and factless: something MENTIONED this
 		// player without ever importing them. An existence poll alone would take
 		// it for a real player, and every read the turn depends on would come
 		// back empty.
-		return nil, fmt.Errorf(
+		return VerifiedPlayer{}, fmt.Errorf(
 			"%w: player %s is a referential stub — something references them but nothing imported them",
 			ErrUnauthenticated, playerID)
 	}
+	return VerifiedPlayer{id: playerID}, nil
+}
 
-	session := &Session{PlayerID: playerID, Connection: conn}
-	g.sessions.put(session)
+// Bind makes a VERIFIED player and a live connection into a session.
+//
+// It is the ONLY way a connection becomes a delivery target, and that is the
+// property the whole targeted-egress path rests on: a transport that recycled a
+// connection id onto a fresh socket without coming back through here would leave
+// the previous session bound, and that socket could both submit actions as the
+// old player and receive that player's fiction. Nothing in this package can
+// detect it — this is where a connection's identity is established, so a
+// transport that skips it presents an impersonation as an ordinary session.
+// internal/playersocket discharges that obligation by minting connection ids it
+// never reuses; see its package doc.
+//
+// It takes a VerifiedPlayer rather than an id, which is what keeps "player_id is
+// a graph entity" true across the Verify/Bind split: the only way to hold one is
+// to have been through the graph read, so a caller cannot bind a player nothing
+// imported. The one input it still has to judge is the ZERO value, which names
+// nobody and which every entity-id check below refuses — a session bound to it
+// would be an anonymous delivery target with a working socket.
+//
+// It refuses a player who already holds the maximum number of connections,
+// refusing the NEWEST rather than evicting an existing one — see sessions.put.
+func (g *Gateway) Bind(player VerifiedPlayer, conn Connection) (*Session, error) {
+	if err := conn.Validate(); err != nil {
+		return nil, err
+	}
+	if err := types.ValidateEntityID(player.id); err != nil {
+		return nil, fmt.Errorf(
+			"refusing to bind a session to %q, which is not a canonical six-part entity id: %w; the zero "+
+				"VerifiedPlayer names nobody, and only Gateway.Verify mints one that does", player.id, err)
+	}
+	session := &Session{PlayerID: player.id, Connection: conn}
+	if err := g.sessions.put(session); err != nil {
+		return nil, err
+	}
 	return session, nil
 }
 

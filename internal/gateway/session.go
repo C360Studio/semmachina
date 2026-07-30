@@ -23,6 +23,41 @@ import (
 // have the same remedy anyway.
 var ErrUnauthenticated = errors.New("unauthenticated")
 
+// ErrTooManyConnections reports a player who already holds as many live
+// connections as this instance allows.
+//
+// It is NOT an authentication failure and is deliberately its own sentinel: the
+// credential was good, the player is real, and what ran out is a seat. A
+// transport that reported it as ErrUnauthenticated would send a player who
+// simply left a tab open somewhere off to check their credential.
+var ErrTooManyConnections = errors.New("too many connections for this player")
+
+// Writer is the live half of a connection: the thing a delivery is actually
+// written to.
+//
+// It exists so that resolving a player's delivery targets and reaching them are
+// ONE lookup rather than two. The alternative is a transport-side map from
+// connection id to socket, and that map is a second registry with the failure
+// mode this package's session table exists to avoid: it can hold a socket the
+// session table has dropped, or drop one the session table still lists, and
+// neither shows up as an error. Hanging the writer on the connection makes the
+// session table the only thing that has to be right — a socket is reachable
+// exactly while a session names it, and Disconnect ends both in one call.
+//
+// It is nil for an adapter that has no live socket. An email or SMS session is
+// delivered to ChannelBinding.ReplyTo by that adapter's own sink, and there is
+// nothing here to write to; a sink handed a session with no writer refuses
+// rather than reporting a delivery it did not make.
+type Writer interface {
+	// Write sends one document to the client, or reports why it could not.
+	//
+	// The context is the delivery's, and an implementation is expected to bound
+	// the write on its own terms as well: the caller is a durable consumer with
+	// an ack deadline, and a socket that never drains would otherwise hold that
+	// deadline open for every player queued behind it.
+	Write(ctx context.Context, document []byte) error
+}
+
 // Connection is the transport's handle on one client, and everything in it is
 // EPHEMERAL.
 //
@@ -52,6 +87,14 @@ type Connection struct {
 	// adapter's own contract to state, and this comment is the fixed point both
 	// halves are stated against.
 	ReplyTo string
+
+	// Writer is the live socket this connection delivers over, or nil for an
+	// adapter that has none. See Writer.
+	//
+	// It is deliberately NOT checked by Validate. A transport that has a socket
+	// supplies one and its sink refuses a session without one; an adapter with a
+	// durable address has nothing to put here and must still be bindable.
+	Writer Writer
 }
 
 // Validate checks a connection carries the three things an action's channel
@@ -88,10 +131,11 @@ type Session struct {
 //
 // It is a seam rather than a fixed rule because the credential POLICY on an
 // instance-per-world box — what a credential is made of, how it is provisioned,
-// what an unauthenticated socket is told — is the local-only security posture
-// task 9.3 owns and states. What this task fixes is the MECHANISM either way:
-// a credential resolves to a player entity id or to nothing, and an id that is
-// not a real graph entity produces no session (see Gateway.Authenticate).
+// what an unauthenticated client is told — belongs to the TRANSPORT that carries
+// it, and is stated in internal/playersocket's package doc for the WebSocket
+// one. What this package fixes is the MECHANISM either way: a credential
+// resolves to a player entity id or to nothing, and an id that is not a real
+// graph entity produces no session (see Gateway.Verify).
 type Authenticator interface {
 	// Authenticate returns the player entity id a credential names, or an error
 	// wrapping ErrUnauthenticated.
@@ -152,9 +196,16 @@ func NewRoster(entries map[string]string) (*Roster, error) {
 // Across CONTENT, not across LENGTH: subtle.ConstantTimeCompare returns 0
 // immediately when the two lengths differ, so a wrong-length guess is
 // distinguishable in principle from a right-length one. That is the standard
-// behaviour of the standard primitive and it is left as it is — hiding it would
-// mean hashing the credential to a fixed width, which is a credential-format
-// decision, and credential format is task 9.3's to state.
+// behaviour of the standard primitive and it is left as it is.
+//
+// The credential FORMAT is deliberately unconstrained — an opaque operator-chosen
+// string, provisioned in instance configuration, with no expiry, rotation or
+// revocation short of a restart. Every one of those absences is a consequence of
+// the local-only scope, and they are enumerated where an operator will meet them:
+// internal/playersocket logs the list by name the moment an instance is bound
+// beyond loopback. Hiding the length would mean hashing to a fixed width, which
+// only becomes worth its complexity in the same breath as rate limiting — that
+// is, the day this port is exposed.
 func (r *Roster) Authenticate(_ context.Context, credential string) (string, error) {
 	playerID := ""
 	for _, entry := range r.entries {
@@ -187,25 +238,31 @@ func (r *Roster) Authenticate(_ context.Context, credential string) (string, err
 // it is a thing it cannot express. Upstream's output/websocket iterates its whole
 // client map, which is exactly the shape this omission forecloses.
 //
-// What a SECOND concurrent connection claiming one player means is still task
-// 9.3's contract to state; this holds both and delivers to both, which is the
-// answer that decides nothing.
+// A player MAY hold several connections at once and every one of them is a
+// delivery target: multi-device is the posture, not an accident of the index.
+// What bounds it is maxPerPlayer.
 //
-// # It has no bound, no expiry, and no way to notice a connection that left
+// # What bounds this table, and what deliberately does not
 //
-// An entry is created by Gateway.Authenticate and removed only by
-// Gateway.Disconnect, so a TRANSPORT THAT DROPS A SOCKET WITHOUT CALLING
-// Disconnect LEAKS THE ENTRY PERMANENTLY. That is an obligation on the adapter,
-// stated here because the adapter does not exist yet and would otherwise inherit
-// it by inference.
+// An entry is created by Gateway.Bind and removed only by Gateway.Disconnect, so
+// a TRANSPORT THAT DROPS A SOCKET WITHOUT CALLING Disconnect LEAKS THE ENTRY
+// PERMANENTLY. That is an obligation on the adapter and it is discharged in
+// internal/playersocket by a defer on the connection goroutine, which every
+// close path — graceful, abnormal, panicking, shutting down — unwinds through.
 //
-// It is not solved here on purpose. The three ways to solve it are a session
-// TTL, a cap, and an eviction policy, and every one of them is a decision about
-// what happens to a player who goes quiet — which this project's pacing rule
-// makes a game decision, not a hygiene one: no turn-processing step may degrade
-// because of elapsed wall-clock time, so an idle-timeout on a session is exactly
-// the interactive-pacing assumption email-cadence play forbids. Connection
-// lifecycle belongs with the rest of the local-only posture in task 9.3.
+// The bound itself is maxPerPlayer, and the whole table is therefore bounded by
+// (roster size × maxPerPlayer). That is a hard number known at boot, because
+// only a player named in the roster can be bound at all — which is what lets
+// this table have a bound WITHOUT a session TTL.
+//
+// There is no idle expiry and there will not be one. An idle timeout is a
+// decision about a player who goes quiet, and this project's pacing rule makes
+// that a game decision rather than a hygiene one: no turn-processing step may
+// degrade because of elapsed wall-clock time, so expiring a session for silence
+// is exactly the interactive-pacing assumption email-cadence play forbids. A
+// socket whose PEER has gone away is a different fact entirely and is reaped on
+// transport liveness (ping/pong) rather than on player silence — see
+// internal/playersocket.
 type sessions struct {
 	mu       sync.RWMutex
 	byConnID map[string]*Session
@@ -214,23 +271,58 @@ type sessions struct {
 	// delivery targets — every result to that player would then be written down
 	// one wire twice — and because removal is by connection id.
 	byPlayerID map[string]map[string]bool
+	// maxPerPlayer is how many live connections one player may hold.
+	maxPerPlayer int
 }
 
-func newSessions() *sessions {
-	return &sessions{byConnID: map[string]*Session{}, byPlayerID: map[string]map[string]bool{}}
+func newSessions(maxPerPlayer int) *sessions {
+	return &sessions{
+		byConnID:     map[string]*Session{},
+		byPlayerID:   map[string]map[string]bool{},
+		maxPerPlayer: maxPerPlayer,
+	}
 }
 
 // put binds a connection to a player, replacing whatever that connection was
-// bound to before.
+// bound to before, and refuses once that player is at their cap.
+//
+// The count and the bind happen under ONE lock, which is the only reason the cap
+// is a bound rather than a suggestion: a transport that asked "how many does
+// this player have" and then bound would leave a gap two of its own goroutines
+// can drive through, and every connection admitted through that gap is a
+// delivery target.
+//
+// The NEWEST connection is refused rather than the oldest evicted, and that
+// direction is the decision. Eviction would turn a leaked credential into a way
+// to take a player's campaign away from them — connect until the cap and every
+// socket they hold drops — while refusal costs the newcomer a connection and
+// costs the player nothing.
 //
 // The unbind-first step is not bookkeeping. A connection that re-authenticates
 // as a DIFFERENT player would otherwise stay in the first player's index, which
 // makes that player's next result deliverable to a socket that is now somebody
-// else's — a disclosure defect with no visible cause and no error anywhere.
-func (s *sessions) put(session *Session) {
+// else's — a disclosure defect with no visible cause and no error anywhere. It
+// also releases that player's seat, so a rebound socket does not hold a slot on
+// a player it no longer belongs to.
+func (s *sessions) put(session *Session) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.unbind(session.Connection.ID)
+	if len(s.byPlayerID[session.PlayerID]) >= s.maxPerPlayer {
+		// Counted deliberately AFTER the unbind: a connection that was already
+		// this player's released its seat above and reclaims it here, so
+		// re-authenticating an existing socket is never a new slot.
+		//
+		// The delete is what keeps the two indexes from drifting on the refusal
+		// path. The unbind above already took this connection out of whatever
+		// player it belonged to, so leaving it in the connection index would be
+		// precisely the shape this table exists to make impossible: a session
+		// present as an identity and absent as a delivery target.
+		delete(s.byConnID, session.Connection.ID)
+		return fmt.Errorf(
+			"%w: player %s already holds %d connections",
+			ErrTooManyConnections, session.PlayerID, s.maxPerPlayer)
+	}
 	s.byConnID[session.Connection.ID] = session
 	connections, ok := s.byPlayerID[session.PlayerID]
 	if !ok {
@@ -238,6 +330,7 @@ func (s *sessions) put(session *Session) {
 		s.byPlayerID[session.PlayerID] = connections
 	}
 	connections[session.Connection.ID] = true
+	return nil
 }
 
 func (s *sessions) get(connID string) (*Session, bool) {
@@ -257,10 +350,10 @@ func (s *sessions) remove(connID string) {
 // unbind drops a connection from its player's index. The caller holds the lock.
 //
 // The empty player entry is deleted rather than left behind, so the index does
-// not accumulate one map per player who has ever connected. That is the only
-// unbounded growth this table could have that the connection index does not
-// already have — and the connection index's own lack of a bound is stated above
-// and owned by task 9.3.
+// not accumulate one map per player who has ever connected. The per-player cap
+// bounds how many connections a player may hold AT ONCE and says nothing about
+// how many the table remembers after they leave, so this is the hygiene that
+// keeps the table's bound the one stated above.
 func (s *sessions) unbind(connID string) {
 	previous, ok := s.byConnID[connID]
 	if !ok {
