@@ -164,6 +164,14 @@ func enginePredicateNamespaces() ([]reservedDomain, error) {
 				"campaign domain, the world clock included, is world content and stays authorable)",
 		},
 		{
+			predicate: vocabulary.CampaignImportCompleted,
+			width:     domainAndCategory,
+			why: "this is the marker that says the world import FINISHED, and boot gates ingress on it, so a " +
+				"world rule that could write it could declare a half-imported world ready to play, and one " +
+				"that could clear it would make the next boot re-import a template over a living campaign — " +
+				"resetting every fact the template declares and dropping the relationships play created",
+		},
+		{
 			predicate: vocabulary.PlayerTurnCurrent,
 			width:     domainAndCategory,
 			why: "this is the ingress admission gate's pointer at the turn a player currently holds, so a " +

@@ -100,13 +100,19 @@ const (
 // would boot cleanly on a machine that has never run an agentic loop and refuse
 // to boot on every machine that has.
 //
-// The name and subjects are upstream's shape, not ours: the agentic-loop
-// component declares every output port with `stream_name: AGENT`, and semstreams'
-// stream provisioning derives that stream's subjects as `agent.>` from the name.
+// The name is upstream's shape, not ours: the agentic-loop and agentic-tools
+// components declare every port with `stream_name: AGENT`. The subjects are
+// upstream's derivation (`agent.>`, from the lower-cased stream name) PLUS the
+// tool-dispatch lane (`tool.execute.>` and `tool.result.>`), which that
+// derivation does not produce and which both components nevertheless declare on
+// this stream. Composing without them is a deployment that starts cleanly and
+// cannot run a tool: the loop publishes every tool call onto `tool.execute.*`
+// rather than executing it in process, and a subject the stream does not capture
+// reaches no consumer. See persona.AgentStreamSubjects for the measurement.
 func AgentStreamConfig() jetstream.StreamConfig {
 	return jetstream.StreamConfig{
 		Name:      TaskStream,
-		Subjects:  []string{AgentSubjectFilter},
+		Subjects:  persona.AgentStreamSubjects(),
 		Storage:   jetstream.FileStorage,
 		Retention: jetstream.LimitsPolicy,
 		MaxAge:    AgentStreamMaxAge,

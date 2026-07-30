@@ -556,7 +556,7 @@ speaks and it is expensive to retrofit.
 
 ## 10. Composition, mock-LLM E2E, and gates
 
-- [ ] 10.1 Compose `cmd/semmachina`. **BOOT ORDER IS PART OF THE TASK, and violating it is
+- [x] 10.1 Compose `cmd/semmachina`. **BOOT ORDER IS PART OF THE TASK, and violating it is
       silent and destructive**: ensure the stage-trigger stream → start the rule
       processor → run `resume.Reconcile` → bind the stage runners → bind intake. The
       stranded-turn pass reads which turns the substrate still holds work for and acts on

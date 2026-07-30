@@ -4,15 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/payloadregistry"
+	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
+	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semmachina/internal/content"
@@ -377,8 +381,9 @@ func TestAgentStreamConfig_StatesEveryEvictionLimit(t *testing.T) {
 	if cfg.Name != stage.TaskStream {
 		t.Errorf("stream name %q, want %q", cfg.Name, stage.TaskStream)
 	}
-	if len(cfg.Subjects) != 1 || cfg.Subjects[0] != stage.AgentSubjectFilter {
-		t.Errorf("stream subjects %v, want the whole agentic space %q", cfg.Subjects, stage.AgentSubjectFilter)
+	if !slices.Equal(cfg.Subjects, persona.AgentStreamSubjects()) {
+		t.Errorf("stream subjects %v, want every subject the loop binds %v",
+			cfg.Subjects, persona.AgentStreamSubjects())
 	}
 	if cfg.MaxAge <= 0 {
 		t.Errorf("MaxAge is %v; an unbounded age on a work stream is a disk that fills instead of a horizon",
@@ -391,4 +396,86 @@ func TestAgentStreamConfig_StatesEveryEvictionLimit(t *testing.T) {
 		t.Errorf("discard policy %v; refusing NEW publishes would stop the engine spawning personas at all",
 			cfg.Discard)
 	}
+}
+
+// The AGENT stream this engine creates must capture every subject the agentic
+// components declare on it, and that is a wider set than upstream's own stream
+// derivation produces.
+//
+// The failure it guards is SILENT rather than loud, which is what makes the
+// check worth having. The NATS server ACCEPTS a consumer whose filter subject
+// lies outside its stream's subjects (measured), so a narrow AGENT stream boots
+// cleanly and binds everything — and then the agentic loop publishes a tool call
+// onto `tool.execute.*`, which the stream does not capture, agentic-tools never
+// receives it, and the persona burns its whole iteration budget waiting for a
+// result that cannot arrive.
+//
+// It reads BOTH components' own port declarations, in BOTH directions, so
+// upstream adding a lane on this stream fails here rather than at somebody's
+// first live turn.
+func TestAgentStreamConfig_CapturesEveryPortTheAgenticComponentsDeclare(t *testing.T) {
+	declarations := map[string]*component.PortConfig{
+		"agentic-loop":  agenticloop.DefaultConfig().Ports,
+		"agentic-tools": agentictools.DefaultConfig().Ports,
+	}
+	subjects := stage.AgentStreamConfig().Subjects
+	checked := 0
+
+	for name, ports := range declarations {
+		if ports == nil {
+			t.Fatalf("%s declares no ports; this test can no longer see what it checks", name)
+		}
+		for _, group := range []struct {
+			direction string
+			ports     []component.PortDefinition
+		}{
+			{"input", ports.Inputs},
+			{"output", ports.Outputs},
+		} {
+			for _, port := range group.ports {
+				if port.StreamName != stage.TaskStream {
+					continue
+				}
+				checked++
+				if !streamCaptures(port.Subject, subjects) {
+					t.Errorf("the %s stream's subjects %v do not capture %s's %s port %q (%s); a publish onto an "+
+						"uncaptured subject reaches no consumer and a consumer filtered on one is accepted by the "+
+						"server and never delivered anything — both silent",
+						stage.TaskStream, subjects, name, group.direction, port.Name, port.Subject)
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatalf("no agentic port declares stream %q; this test checked nothing", stage.TaskStream)
+	}
+}
+
+// streamCaptures reports whether a stream's subject patterns capture everything
+// a consumer filter can match. It is the same wildcard rule the watcher's own
+// capture check uses, restated in the test binary because that one is unexported.
+func streamCaptures(filter string, subjects []string) bool {
+	want := strings.Split(filter, ".")
+	for _, subject := range subjects {
+		pattern := strings.Split(subject, ".")
+		if patternCovers(pattern, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func patternCovers(pattern, want []string) bool {
+	for idx, token := range pattern {
+		if token == ">" {
+			return true
+		}
+		if idx >= len(want) {
+			return false
+		}
+		if token != "*" && token != want[idx] {
+			return false
+		}
+	}
+	return len(pattern) == len(want)
 }

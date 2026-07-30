@@ -35,7 +35,53 @@ const (
 	// engine creates and one semstreams creates capture the same subjects rather
 	// than nearly the same ones.
 	AgentSubjectFilter = "agent.>"
+
+	// ToolExecuteSubjectFilter and ToolResultSubjectFilter are the tool-dispatch
+	// lane, and they are the pair a composition is most likely to leave out.
+	//
+	// The agentic loop does NOT execute a tool in process. deps.ToolRegistry is
+	// how it ADVERTISES tools to the model (ListAvailableTools → ListTools); when
+	// the model calls one, the loop PUBLISHES the call onto `tool.execute.<name>`
+	// and waits for the answer on `tool.result.>`. The component in between is
+	// agentic-tools, which consumes `tool.execute.>` and publishes
+	// `tool.result.*`. Both components declare both lanes with `stream_name:
+	// AGENT`, so both ride this stream — and upstream's own subject derivation
+	// (lower-case the stream name, append `.>`) produces neither.
+	//
+	// # Why this is a SILENT failure rather than a startup error
+	//
+	// Measured, not assumed: the NATS server ACCEPTS a consumer whose filter
+	// subject lies outside its stream's subjects. So a deployment whose AGENT
+	// stream carries only `agent.>` starts cleanly, binds every consumer, and
+	// looks healthy — and then the first tool call is published into a subject
+	// the stream does not capture, agentic-tools is never delivered it, and the
+	// persona burns its whole iteration budget waiting for a result that cannot
+	// arrive. The turn ends as a cap exhaustion, which describes the symptom and
+	// hides the cause.
+	//
+	// Restated as literals for the reason internal/world restates the tool-result
+	// root: nothing upstream exports them.
+	// TestAgentStreamConfig_CapturesEveryPortTheAgenticComponentsDeclare reads
+	// both components' own port declarations and fails when this set stops
+	// covering them.
+	ToolExecuteSubjectFilter = "tool.execute.>"
+	// ToolResultSubjectFilter is the answering half of the lane above.
+	ToolResultSubjectFilter = "tool.result.>"
 )
+
+// AgentStreamSubjects returns every subject the AGENT stream must capture for
+// this engine's personas to run.
+//
+// Stated once, here, because four things depend on the same answer and only one
+// of them is obvious: the spawner publishes tasks onto it, the loop-failure
+// watcher refuses to boot unless its own subject is captured, the agentic loop
+// publishes every tool call onto it, and agentic-tools answers on it. A subject
+// missing from this set is not a component that fails to start — the server
+// accepts a consumer filtered outside its stream — it is a persona whose tool
+// call is delivered to nobody and which then burns its whole budget waiting.
+func AgentStreamSubjects() []string {
+	return []string{AgentSubjectFilter, ToolExecuteSubjectFilter, ToolResultSubjectFilter}
+}
 
 // TaskSubjectFor returns the subject a role's tasks are published on.
 func TaskSubjectFor(role Role) string { return TaskSubjectPrefix + string(role) }

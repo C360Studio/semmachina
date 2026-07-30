@@ -1,0 +1,968 @@
+package boot_test
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"slices"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"testing/fstest"
+	"time"
+
+	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/natsclient"
+	sspersona "github.com/c360studio/semstreams/persona"
+	"github.com/gorilla/websocket"
+	"github.com/nats-io/nats.go/jetstream"
+	"github.com/testcontainers/testcontainers-go"
+
+	"github.com/c360studio/semmachina/fixtures"
+	"github.com/c360studio/semmachina/internal/boot"
+	"github.com/c360studio/semmachina/internal/campaign"
+	"github.com/c360studio/semmachina/internal/graphio"
+	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/persona"
+	"github.com/c360studio/semmachina/internal/playersocket"
+	"github.com/c360studio/semmachina/internal/rulepack"
+	"github.com/c360studio/semmachina/internal/stage"
+	"github.com/c360studio/semmachina/internal/testinfra"
+	"github.com/c360studio/semmachina/internal/turn"
+	"github.com/c360studio/semmachina/internal/vocabulary"
+	"github.com/c360studio/semmachina/internal/world"
+)
+
+// These tests boot the REAL engine — graph-ingest, graph-index, the rule
+// processor and the agentic loop, all of it — against a real broker, because a
+// composition is the one thing a unit test cannot be wrong about usefully. Every
+// substitute here would hide the failure it was meant to catch: a fake broker
+// cannot refuse a consumer whose filter its stream does not capture, a stub
+// graph-ingest mints no referential stubs, and a hand-called step proves the step
+// and nothing about the order.
+//
+// Nothing in this file uses internal/testinfra's harness, and that is not an
+// oversight: that harness starts graph-ingest and graph-index ITSELF, and a
+// second pair against the same broker would bind the same durable consumers. What
+// is shared with it is the opt-out policy, so a run without Docker is loud here
+// too.
+
+var broker struct {
+	client *natsclient.TestClient
+	err    error
+}
+
+func TestMain(m *testing.M) {
+	// Registration precedes any rule config load, in every binary and every test:
+	// the rule processor rejects a canonical-but-undeclared predicate, so without
+	// this the turn-sequencing pack simply does not start.
+	if err := vocabulary.RegisterPredicates(); err != nil {
+		fmt.Fprintf(os.Stderr, "register semmachina predicates: %v\n", err)
+		os.Exit(1)
+	}
+	broker.client, broker.err = startBroker()
+	if broker.err == nil {
+		broker.err = keepComponentStatusHistory(broker.client)
+	}
+	if broker.err != nil && testinfra.Skipped() {
+		fmt.Fprintf(os.Stderr,
+			"\n================================================================\n"+
+				" REAL-INFRASTRUCTURE BOOT TESTS SKIPPED BY %s\n reason: %v\n"+
+				" The boot ORDER is not exercised by this run.\n"+
+				"================================================================\n\n",
+			testinfra.SkipEnv, broker.err)
+	}
+	code := m.Run()
+	if broker.client != nil {
+		_ = broker.client.Terminate()
+	}
+	os.Exit(code)
+}
+
+func startBroker() (*natsclient.TestClient, error) {
+	if testinfra.Skipped() {
+		return nil, fmt.Errorf("%s is set", testinfra.SkipEnv)
+	}
+	ctx := context.Background()
+	provider, err := testcontainers.NewDockerProvider()
+	if err != nil {
+		return nil, fmt.Errorf("docker provider unavailable: %w", err)
+	}
+	if err := provider.Health(ctx); err != nil {
+		return nil, fmt.Errorf("docker daemon is not reachable: %w", err)
+	}
+	// A bare broker: no streams, no components. Everything the engine needs, the
+	// engine creates — which is the claim these tests are checking.
+	return natsclient.NewSharedTestClient(natsclient.WithJetStream())
+}
+
+// keepComponentStatusHistory pre-creates COMPONENT_STATUS with room for history.
+//
+// The rule processor creates this bucket itself, with the default history of one
+// — which keeps the latest value per key and nothing else, so a DELETE marker is
+// overwritten by the write that follows it and becomes unobservable. Upstream's
+// CreateKeyValueBucket is get-or-create, so a bucket that already exists is used
+// as it is: making it first, before any processor runs, is what lets a test see
+// that the boot deleted the key rather than merely that somebody wrote one.
+//
+// It changes nothing about the engine's behaviour. History is a retention
+// setting; every read either side of it returns the same latest value.
+func keepComponentStatusHistory(client *natsclient.TestClient) error {
+	_, err := client.Client.CreateKeyValueBucket(context.Background(), jetstream.KeyValueConfig{
+		Bucket:      "COMPONENT_STATUS",
+		Description: "Component lifecycle status tracking",
+		History:     10,
+	})
+	return err
+}
+
+func requireBroker(t *testing.T) *natsclient.TestClient {
+	t.Helper()
+	if broker.client != nil {
+		return broker.client
+	}
+	if testinfra.Skipped() {
+		t.Skipf("SKIPPED by %s — this test proved nothing in this run", testinfra.SkipEnv)
+		return nil
+	}
+	t.Fatalf("a real NATS broker is required and unavailable: %v\n"+
+		"This test boots the production composition; there is no substitute for it.\n"+
+		"Start Docker, or set %s=1 to run the rest of the suite without this proof.",
+		broker.err, testinfra.SkipEnv)
+	return nil
+}
+
+var worldCounter atomic.Int64
+
+// bootConfig gives each test its own world namespace, so two boots against the
+// shared broker are disjoint campaigns rather than a race for one.
+func bootConfig(t *testing.T) boot.Config {
+	t.Helper()
+	client := requireBroker(t)
+	cfg := testConfig(t)
+	cfg.NATSURL = client.URL
+	cfg.WorldNS = fmt.Sprintf("w%d", worldCounter.Add(1))
+	cfg.ContentBucket = "BOOT_" + strings.ToUpper(cfg.WorldNS)
+	// Short enough that a genuine failure is a test failure rather than a
+	// timeout, long enough for a real import to land on a container.
+	cfg.ReadyTimeout = 45 * time.Second
+	cfg.ReadyPoll = 100 * time.Millisecond
+	return cfg
+}
+
+func startEngine(t *testing.T, cfg boot.Config) *boot.Engine {
+	t.Helper()
+	engine := newTestEngine(t, cfg)
+	t.Cleanup(engine.Stop)
+	if err := engine.Start(t.Context()); err != nil {
+		t.Fatalf("boot: %v", err)
+	}
+	return engine
+}
+
+// The whole composition starts, in order, against real infrastructure — and
+// every stream, bucket and consumer it needs is one it created itself.
+func TestBoot_StartsTheWholeEngineOnABareBroker(t *testing.T) {
+	cfg := bootConfig(t)
+	engine := startEngine(t, cfg)
+
+	if engine.Addr() == "" {
+		t.Fatal("the player socket is not listening; ingress is the last step and it did not run")
+	}
+
+	js := jetStream(t)
+	for _, name := range []string{
+		world.EntityStream, rulepack.StageStream, persona.TaskStream, turn.ActionStream,
+	} {
+		if _, err := js.Stream(t.Context(), name); err != nil {
+			t.Errorf("the %s stream does not exist after boot: %v", name, err)
+		}
+	}
+
+	// Every stage bound a durable consumer, and none of them is holding an
+	// unacknowledged delivery. A JetStream publish is a core publish underneath,
+	// so a missing stream can look like it worked while leaving deliveries
+	// unacked — the ack floor is where that shows.
+	requireStagesIdle(t, js)
+
+	// The agentic loop bound its task consumer. Without one, the stranded-turn
+	// pass cannot tell an in-flight persona from an idle one — and it refuses
+	// rather than guessing, which means this is also why the boot got this far.
+	if !consumerExistsOn(t, js, persona.TaskStream, persona.TaskSubjectFilter) {
+		t.Error("no consumer filters " + persona.TaskSubjectFilter + "; no persona could ever run")
+	}
+}
+
+// The world lands whole: every planned entity queryable and NON-STUB, the
+// membership edges readable from the reverse-edge index, and the campaign
+// carrying both the seed and the completion marker.
+func TestBoot_ImportsTheWorldAndMarksItComplete(t *testing.T) {
+	cfg := bootConfig(t)
+	engine := startEngine(t, cfg)
+	store := graphStore(t)
+
+	for target, sources := range engine.MembershipEdges() {
+		entries, err := store.IncomingRelationships(t.Context(), target)
+		if err != nil {
+			t.Fatalf("read the incoming edges of %s: %v", target, err)
+		}
+		present := map[string]bool{}
+		for _, entry := range entries {
+			if entry.Predicate == vocabulary.WorldLocationCurrent.String() {
+				present[entry.FromEntityID] = true
+			}
+		}
+		for _, source := range sources {
+			if !present[source] {
+				t.Errorf("the reverse-edge index does not carry %s -> %s after boot; \"who is here\" would "+
+					"answer with a shorter list rather than an error", source, target)
+			}
+		}
+	}
+
+	state, err := store.GetEntity(t.Context(), engine.CampaignID())
+	if err != nil {
+		t.Fatalf("read the campaign entity: %v", err)
+	}
+	if seed := testinfra.FirstObject(state, vocabulary.CampaignSeedValue.String()); seed == nil {
+		t.Error("the campaign carries no seed after boot")
+	}
+	markers := testinfra.ObjectsFor(state, vocabulary.CampaignImportCompleted.String())
+	if len(markers) != 1 {
+		t.Fatalf("the campaign carries %d import markers, want exactly one", len(markers))
+	}
+}
+
+// A SECOND boot of the same world must not re-import. Re-import into a living
+// campaign resets every predicate the template declares, dropping the
+// relationships play has since changed — the exact inverse of "a restart must not
+// replay the dragon eating you".
+//
+// The proof is a play-created fact that survives the second boot. Asserting only
+// that the marker is unchanged would pass against an engine that re-imported and
+// re-marked.
+func TestBoot_ASecondBootDoesNotImportOverALivingCampaign(t *testing.T) {
+	cfg := bootConfig(t)
+	first := startEngine(t, cfg)
+	store := graphStore(t)
+
+	character := "c360.semmachina." + cfg.WorldNS + ".starter.character." + starterCharacter
+	before, err := store.GetEntity(t.Context(), character)
+	if err != nil {
+		t.Fatalf("read the character: %v", err)
+	}
+	if got := fmt.Sprint(testinfra.FirstObject(before, vocabulary.CharacterStatusCurrent.String())); got !=
+		string(vocabulary.StatusHealthy) {
+		t.Fatalf("the imported character's status is %q, want the template's %q", got, vocabulary.StatusHealthy)
+	}
+
+	// Play happens: the character is wounded. A re-import would put them back.
+	at := time.Now().UTC()
+	if _, err := store.MergeTriples(t.Context(), character, []message.Triple{{
+		Subject:    character,
+		Predicate:  vocabulary.CharacterStatusCurrent.String(),
+		Object:     string(vocabulary.StatusWounded),
+		Source:     "boot-test-play",
+		Timestamp:  at,
+		Confidence: 1.0,
+	}}); err != nil {
+		t.Fatalf("record a play-created fact: %v", err)
+	}
+	first.Stop()
+
+	second := startEngine(t, cfg)
+	if second.CampaignID() != first.CampaignID() {
+		t.Fatalf("the second boot claimed campaign %s, want %s", second.CampaignID(), first.CampaignID())
+	}
+	after, err := store.GetEntity(t.Context(), character)
+	if err != nil {
+		t.Fatalf("read the character after the second boot: %v", err)
+	}
+	if got := fmt.Sprint(testinfra.FirstObject(after, vocabulary.CharacterStatusCurrent.String())); got !=
+		string(vocabulary.StatusWounded) {
+		t.Errorf("after a second boot the character's status is %q, want the play-created %q; the second boot "+
+			"re-imported the template over a living campaign", got, vocabulary.StatusWounded)
+	}
+}
+
+// A campaign that was CLAIMED and never marked is a crashed import, and this boot
+// refuses to serve it rather than choosing between the two wrong answers:
+// importing would run a template over a world another process may be writing, and
+// marking would certify a world this boot never read.
+func TestBoot_RefusesToServeAnInterruptedImport(t *testing.T) {
+	cfg := bootConfig(t)
+	cfg.MarkerWait = 2 * time.Second
+	client := requireBroker(t)
+
+	// Stand in for the claimant that died between the create and the import:
+	// claim the campaign through the production gate and stop.
+	store := graphStore(t)
+	gate, err := campaign.NewGate(store, campaign.Identity{
+		Org: cfg.Org, WorldNS: cfg.WorldNS, Template: "starter",
+	})
+	if err != nil {
+		t.Fatalf("NewGate: %v", err)
+	}
+	// The graph must be running for the claim to land, and on this path the
+	// engine is not yet started — so the claim goes through a boot of its own
+	// whose only job is graph-ingest.
+	helper := startEngine(t, interruptedHelperConfig(cfg))
+	_ = client
+	claim, err := gate.Claim(t.Context())
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if !claim.Fresh {
+		t.Fatal("the stand-in claim was not fresh; this test needs to be the claimant")
+	}
+	helper.Stop()
+
+	engine := newTestEngine(t, cfg)
+	t.Cleanup(engine.Stop)
+	err = engine.Start(t.Context())
+	if err == nil {
+		t.Fatal("a boot served a campaign whose import never completed")
+	}
+	if !strings.Contains(err.Error(), "import") {
+		t.Errorf("the refusal does not name the interrupted import: %v", err)
+	}
+	if engine.Addr() != "" {
+		t.Error("the player socket opened on a boot that refused the world")
+	}
+}
+
+// interruptedHelperConfig is the same instance with a DIFFERENT campaign, used
+// only to have graph-ingest running while the stand-in claim is made.
+func interruptedHelperConfig(cfg boot.Config) boot.Config {
+	helper := cfg
+	helper.WorldNS = cfg.WorldNS + "h"
+	helper.ContentBucket = cfg.ContentBucket + "H"
+	// The helper's only job is to run graph-ingest and graph-index, so it boots
+	// the ordinary starter world rather than whatever the test under way is
+	// refusing.
+	world, err := fixtures.StarterWorld()
+	if err == nil {
+		helper.World = world
+		helper.SceneLocalID = ""
+	}
+	return helper
+}
+
+// The stranded-turn pass must not run against a rule processor this boot cannot
+// confirm started — an unstarted processor is indistinguishable from a quiet one,
+// and the pass would read an empty work set for turns about to receive a trigger
+// and END them.
+//
+// # The stale key is the point, and it is planted rather than hoped for
+//
+// A previous boot leaves a lifecycle status behind, and the earlier version of
+// this check compared its timestamp. This one deletes the key before starting the
+// processor and waits for it to reappear, so the property under test is that a
+// LEFTOVER key — from a processor this boot never started — is not an answer. The
+// leftover is planted by a real processor in another namespace rather than
+// depending on which tests ran first on the shared broker, because a test whose
+// premise is supplied by its neighbours is a test that stops proving anything
+// when somebody reorders the file.
+func TestBoot_TheResumePreconditionRefusesAnUnstartedRuleProcessor(t *testing.T) {
+	cfg := bootConfig(t)
+
+	// Plant the leftover: a real rule processor, in its own namespace, started
+	// and stopped. Its lifecycle status is now in COMPONENT_STATUS under the same
+	// key the check below reads.
+	planter := newTestEngine(t, interruptedHelperConfig(cfg))
+	if err := planter.StartThrough(t.Context(), boot.StepRules); err != nil {
+		t.Fatalf("plant a previous boot's lifecycle status: %v", err)
+	}
+	requireRuleStatusPresent(t)
+	planter.Stop()
+
+	engine := newTestEngine(t, cfg)
+	t.Cleanup(engine.Stop)
+
+	var check func(context.Context) error
+	for _, step := range engine.Steps() {
+		if step.ID == boot.StepResume {
+			check = step.Check
+		}
+	}
+	if check == nil {
+		t.Fatal("the resume step declares no precondition; the one ordering constraint that ends live turns " +
+			"would be a comment")
+	}
+
+	// Everything the pass needs EXCEPT the rule processor: connect, the streams,
+	// the graph, the loop. Running the sequence up to but not including the rule
+	// processor is what makes this the real state rather than a mocked one — and
+	// the planted status is sitting in the bucket the whole time.
+	if err := engine.StartThrough(t.Context(), boot.StepStageStream); err != nil {
+		t.Fatalf("start through %s: %v", boot.StepStageStream, err)
+	}
+	requireRuleStatusPresent(t)
+
+	err := check(t.Context())
+	if err == nil {
+		t.Fatal("the resume precondition passed with no rule processor started by this boot, against a status " +
+			"an earlier one left behind; the pass would read an empty work set for turns about to receive a " +
+			"trigger and fail them terminally")
+	}
+	if !strings.Contains(err.Error(), "rule processor") {
+		t.Errorf("the refusal does not name the unstarted processor: %v", err)
+	}
+
+	// And the same check passes once the processor HAS started, which is what
+	// keeps the refusal above from being a check that always fails.
+	if err := engine.StartThrough(t.Context(), boot.StepRules); err != nil {
+		t.Fatalf("start through %s: %v", boot.StepRules, err)
+	}
+	if err := check(t.Context()); err != nil {
+		t.Fatalf("the resume precondition refused a rule processor this boot DID start: %v", err)
+	}
+}
+
+// requireRuleStatusPresent asserts the leftover status is actually in the bucket.
+//
+// Without it the test above could pass because nothing was ever planted, which is
+// the vacuous version of the same assertion: "a check refuses when there is no
+// status" is a far weaker claim than "a check refuses when there IS one and this
+// boot did not write it".
+func requireRuleStatusPresent(t *testing.T) {
+	t.Helper()
+	bucket, err := requireBroker(t).Client.GetKeyValueBucket(t.Context(), "COMPONENT_STATUS")
+	if err != nil {
+		t.Fatalf("the COMPONENT_STATUS bucket does not exist, so no leftover status was planted: %v", err)
+	}
+	if _, err := bucket.Get(t.Context(), "rule-processor"); err != nil {
+		t.Fatalf("no rule-processor status is in the bucket, so this test's premise is missing: %v", err)
+	}
+}
+
+// The rule processor's lifecycle status is what the precondition reads, and this
+// pins the two coordinates upstream does not export — the bucket and the key —
+// plus the mechanism built on them.
+//
+// Without it, a rename upstream would turn the precondition into a check that
+// always fails — a boot that refuses every deployment — and nothing would say
+// which of the two strings had moved.
+//
+// The REVISION is what proves the mechanism rather than merely the coordinates. A
+// key is planted by a real processor in another namespace; the boot under test
+// then deletes it and its own processor writes a fresh one, so the revision
+// strictly increases. A boot that skipped the delete would leave the planted
+// revision untouched, and the check above would then be reading somebody else's
+// status.
+func TestRuleProcessorStatus_IsDeletedAndRewrittenByEachBoot(t *testing.T) {
+	cfg := bootConfig(t)
+
+	planter := newTestEngine(t, interruptedHelperConfig(cfg))
+	if err := planter.StartThrough(t.Context(), boot.StepRules); err != nil {
+		t.Fatalf("plant a previous boot's lifecycle status: %v", err)
+	}
+	planted := ruleStatusRevision(t)
+	planter.Stop()
+
+	engine := newTestEngine(t, cfg)
+	t.Cleanup(engine.Stop)
+	if err := engine.StartThrough(t.Context(), boot.StepRules); err != nil {
+		t.Fatalf("start through %s: %v", boot.StepRules, err)
+	}
+
+	bucket, err := requireBroker(t).Client.GetKeyValueBucket(t.Context(), "COMPONENT_STATUS")
+	if err != nil {
+		t.Fatalf("the COMPONENT_STATUS bucket does not exist after the rule processor started: %v", err)
+	}
+	entry, err := bucket.Get(t.Context(), "rule-processor")
+	if err != nil {
+		t.Fatalf("the rule processor reported no lifecycle status under the key %q: %v", "rule-processor", err)
+	}
+	if entry.Revision() <= planted {
+		t.Errorf("the status is still at revision %d, the one an earlier boot left; this boot neither deleted "+
+			"nor rewrote it, so its precondition is reading somebody else's report", entry.Revision())
+	}
+
+	// The revision alone proves a WRITE, and the processor's own report would
+	// supply that whether or not the boot cleared anything first. What makes the
+	// check existential rather than hopeful is the DELETE, so the delete is what
+	// this asserts: a tombstone above the planted revision, which only this boot
+	// could have put there.
+	if !deletedAbove(t, bucket, planted) {
+		t.Errorf("no delete marker sits above revision %d. The boot rewrote the status without first clearing "+
+			"it, so a deployment whose lifecycle reporting is broken would pass this precondition on an earlier "+
+			"boot's leftover key — which is the one ordering constraint that ends live turns", planted)
+	}
+
+	var status struct {
+		Component string `json:"component"`
+		Stage     string `json:"stage"`
+	}
+	if err := json.Unmarshal(entry.Value(), &status); err != nil {
+		t.Fatalf("decode the reported status: %v", err)
+	}
+	if status.Component != "rule-processor" {
+		t.Errorf("the status names component %q", status.Component)
+	}
+	if status.Stage == "" {
+		t.Error("the status carries no stage; the check requires one, so an upstream that stopped writing it " +
+			"would refuse every boot")
+	}
+}
+
+// deletedAbove reports whether the key was DELETED at some revision above the
+// given one.
+func deletedAbove(t *testing.T, bucket jetstream.KeyValue, above uint64) bool {
+	t.Helper()
+	history, err := bucket.History(t.Context(), "rule-processor")
+	if err != nil {
+		t.Fatalf("read the rule-processor status history: %v", err)
+	}
+	for _, entry := range history {
+		if entry.Revision() > above && entry.Operation() == jetstream.KeyValueDelete {
+			return true
+		}
+	}
+	return false
+}
+
+// ruleStatusRevision reads the current revision of the rule processor's status.
+func ruleStatusRevision(t *testing.T) uint64 {
+	t.Helper()
+	bucket, err := requireBroker(t).Client.GetKeyValueBucket(t.Context(), "COMPONENT_STATUS")
+	if err != nil {
+		t.Fatalf("the COMPONENT_STATUS bucket does not exist, so no status was planted: %v", err)
+	}
+	entry, err := bucket.Get(t.Context(), "rule-processor")
+	if err != nil {
+		t.Fatalf("no rule-processor status is in the bucket, so this test's premise is missing: %v", err)
+	}
+	return entry.Revision()
+}
+
+// A player action submitted through the real socket becomes a turn.
+//
+// It is deliberately the SHALLOWEST end-to-end assertion — the turn exists in
+// `accepted` — because everything past that point is the E2E task's, which owns
+// the mock model. What this proves is the composition: the socket authenticated,
+// the gateway derived an action id and published, the action stream existed,
+// intake consumed, and the recorder created the turn. Any one of those unwired
+// and there is no turn.
+func TestBoot_AnActionThroughTheSocketBecomesATurn(t *testing.T) {
+	cfg := bootConfig(t)
+	engine := startEngine(t, cfg)
+
+	response := submit(t, engine, cfg, "boot-e2e-1", "I put my shoulder to the gate.")
+	if response.Status != payload.StatusAccepted {
+		t.Fatalf("the engine refused the submission: %+v", response.Refusal)
+	}
+
+	store := graphStore(t)
+	identity := turn.Identity{Org: cfg.Org, WorldNS: cfg.WorldNS, Template: "starter"}
+	turnEntityID, err := identity.EntityID(response.TurnID)
+	if err != nil {
+		t.Fatalf("compose the turn entity id: %v", err)
+	}
+
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		state, readErr := store.GetEntity(t.Context(), turnEntityID)
+		if readErr == nil && !state.IsStub() {
+			if phase := testinfra.FirstObject(state, vocabulary.TurnPhaseCurrent.String()); phase != nil {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the submitted action never became a turn (%s): %v", turnEntityID, readErr)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+// helpers -------------------------------------------------------------------
+
+func jetStream(t *testing.T) jetstream.JetStream {
+	t.Helper()
+	js, err := requireBroker(t).Client.JetStream()
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	return js
+}
+
+func graphStore(t *testing.T) *graphio.Store {
+	t.Helper()
+	store, err := graphio.NewStore(requireBroker(t).Client)
+	if err != nil {
+		t.Fatalf("graphio.NewStore: %v", err)
+	}
+	return store
+}
+
+// requireStagesIdle proves every stage consumer bound AND finished whatever it
+// was given.
+//
+// "The engine started" is a weaker claim than it looks: a stage whose handler
+// failed after doing the work leaves an unacknowledged delivery JetStream hands
+// back forever, and nothing else in a boot test would notice.
+func requireStagesIdle(t *testing.T, js jetstream.JetStream) {
+	t.Helper()
+	for _, phase := range rulepack.StagePhases() {
+		consumer, err := js.Consumer(t.Context(), rulepack.StageStream, rulepack.StageConsumerName(phase))
+		if err != nil {
+			t.Errorf("the %s stage bound no consumer: %v", phase, err)
+			continue
+		}
+		info, err := consumer.Info(t.Context())
+		if err != nil {
+			t.Errorf("read the %s consumer: %v", phase, err)
+			continue
+		}
+		if info.NumAckPending != 0 {
+			t.Errorf("the %s stage holds %d unacknowledged trigger(s) on a boot that ran no turn",
+				phase, info.NumAckPending)
+		}
+	}
+}
+
+func consumerExistsOn(t *testing.T, js jetstream.JetStream, stream, filter string) bool {
+	t.Helper()
+	s, err := js.Stream(t.Context(), stream)
+	if err != nil {
+		t.Fatalf("read stream %s: %v", stream, err)
+	}
+	lister := s.ListConsumers(t.Context())
+	for info := range lister.Info() {
+		if info == nil {
+			continue
+		}
+		if info.Config.FilterSubject == filter {
+			return true
+		}
+		for _, subject := range info.Config.FilterSubjects {
+			if subject == filter {
+				return true
+			}
+		}
+	}
+	if err := lister.Err(); err != nil {
+		t.Fatalf("list consumers on %s: %v", stream, err)
+	}
+	return false
+}
+
+// submit sends one action through the REAL socket: an authenticated handshake
+// and a JSON text frame, exactly as a client would.
+func submit(t *testing.T, engine *boot.Engine, cfg boot.Config, key, text string) *payload.SubmitResponse {
+	t.Helper()
+	conn := dialSocket(t, engine, cfg)
+	defer conn.Close() //nolint:errcheck // test teardown
+
+	body, err := json.Marshal(map[string]any{
+		"protocol":        payload.PlayerProtocolV1,
+		"idempotency_key": key,
+		"text":            text,
+	})
+	if err != nil {
+		t.Fatalf("encode submission: %v", err)
+	}
+	if err := conn.WriteMessage(websocket.TextMessage, body); err != nil {
+		t.Fatalf("write submission: %v", err)
+	}
+	if err := conn.SetReadDeadline(time.Now().Add(20 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	_, frame, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read the engine's answer: %v", err)
+	}
+	var envelope playersocket.Frame
+	if err := json.Unmarshal(frame, &envelope); err != nil {
+		t.Fatalf("decode the engine's answer (%s): %v", frame, err)
+	}
+	if envelope.Type != playersocket.FrameSubmitResponse || envelope.Response == nil {
+		t.Fatalf("the engine answered with a %q frame carrying no response: %s", envelope.Type, frame)
+	}
+	return envelope.Response
+}
+
+// dialSocket opens an authenticated connection to the engine's own listener.
+//
+// The credential rides on the HANDSHAKE, which is what makes "there is no
+// unauthenticated socket" true: a wrong credential is a 401 and never an upgrade.
+func dialSocket(t *testing.T, engine *boot.Engine, cfg boot.Config) *websocket.Conn {
+	t.Helper()
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+cfg.Player.Credential)
+	dialer := &websocket.Dialer{HandshakeTimeout: 10 * time.Second}
+	url := "ws://" + engine.Addr() + playersocket.DefaultPath
+	conn, response, err := dialer.DialContext(t.Context(), url, header)
+	if err != nil {
+		t.Fatalf("dial %s: %v (response %v)", url, err, response)
+	}
+	return conn
+}
+
+// The completion marker is written LAST, after both readbacks — so a boot whose
+// readback refuses leaves the campaign claimed and UNMARKED, which is exactly the
+// state the next boot is supposed to refuse.
+//
+// The refusal is produced structurally rather than by a short timeout: a world
+// where nobody is anywhere declares no membership edge, so the reverse-edge gate
+// refuses immediately and deterministically. A timeout-based version of this test
+// would fail whenever the import happened to land quickly, which is the wrong
+// direction for a flake.
+func TestBoot_DoesNotMarkAnImportWhoseReadbackRefused(t *testing.T) {
+	cfg := bootConfig(t)
+	cfg.World = noMembershipPackage(t)
+	cfg.SceneLocalID = "cellar"
+
+	engine := newTestEngine(t, cfg)
+	t.Cleanup(engine.Stop)
+	err := engine.Start(t.Context())
+	if err == nil {
+		t.Fatal("a boot marked an import whose readiness gate had nothing to read")
+	}
+	if !strings.Contains(err.Error(), "membership") {
+		t.Errorf("the refusal does not name the gate that refused: %v", err)
+	}
+
+	// A failed boot stops its own components, so the graph query surface goes with
+	// it. A second instance in its own namespace brings graph-ingest back up to
+	// answer the one question this test is about.
+	engine.Stop()
+	reader := startEngine(t, interruptedHelperConfig(cfg))
+	_ = reader
+
+	// The campaign WAS claimed — this boot got that far — and carries no marker.
+	store := graphStore(t)
+	state, readErr := store.GetEntity(t.Context(), engine.CampaignID())
+	if readErr != nil {
+		t.Fatalf("read the campaign entity: %v", readErr)
+	}
+	if markers := testinfra.ObjectsFor(state, vocabulary.CampaignImportCompleted.String()); len(markers) != 0 {
+		t.Fatalf("the campaign carries %v after a refused readback; the marker is written LAST for exactly this "+
+			"reason, and one written before the readback would certify a world nobody checked", markers)
+	}
+}
+
+// The AGENT stream belongs to whoever runs the agentic loop, and EnsureStream is
+// get-or-create with NO reconcile — so a stream somebody else created with
+// narrower subjects is returned exactly as it is.
+//
+// Nothing else would notice. The server ACCEPTS a consumer whose filter lies
+// outside its stream's subjects (measured), so the loop and agentic-tools both
+// start, bind everything, and look healthy — until the first tool call is
+// published onto `tool.execute.*`, is captured by nothing, and the persona burns
+// its whole budget waiting for a result that cannot arrive. This boot refuses
+// instead.
+func TestBoot_RefusesAnAgentStreamThatDoesNotCaptureTheToolLane(t *testing.T) {
+	client := requireBroker(t)
+	js := jetStream(t)
+
+	// Replace the correct stream with a narrow one, and restore it afterwards so
+	// the next boot in this package creates it properly.
+	_ = js.DeleteStream(t.Context(), persona.TaskStream)
+	t.Cleanup(func() {
+		_ = js.DeleteStream(context.Background(), persona.TaskStream)
+	})
+	narrow := stage.AgentStreamConfig()
+	narrow.Subjects = []string{persona.AgentSubjectFilter}
+	if _, err := client.Client.EnsureStream(t.Context(), narrow); err != nil {
+		t.Fatalf("create the narrow %s stream: %v", persona.TaskStream, err)
+	}
+
+	engine := newTestEngine(t, bootConfig(t))
+	t.Cleanup(engine.Stop)
+	err := engine.Start(t.Context())
+	if err == nil {
+		t.Fatal("a boot accepted an AGENT stream that does not capture the tool-dispatch lane; every persona's " +
+			"terminal exit would be published to nobody and every turn would end as a cap exhaustion")
+	}
+	if !strings.Contains(err.Error(), persona.ToolExecuteSubjectFilter) {
+		t.Errorf("the refusal does not name the uncaptured subject: %v", err)
+	}
+}
+
+// The marker gates INGRESS, not just the importer, and it does so by READING the
+// graph rather than remembering what an earlier step decided.
+func TestBoot_TheIngressGateReadsTheMarkerRatherThanRememberingIt(t *testing.T) {
+	cfg := bootConfig(t)
+	engine := startEngine(t, cfg)
+
+	var check func(context.Context) error
+	for _, step := range engine.Steps() {
+		if step.ID == boot.StepIntake {
+			check = step.Check
+		}
+	}
+	if check == nil {
+		t.Fatal("the intake step declares no precondition; the marker would gate the importer and nothing else")
+	}
+	if err := check(t.Context()); err != nil {
+		t.Fatalf("the ingress gate refused a marked world: %v", err)
+	}
+
+	// Clear the marker on the graph. Nothing in production does this; what it
+	// stands in for is a boot that reached this step against a campaign whose
+	// import never completed.
+	store := graphStore(t)
+	if _, err := store.MergeTriples(t.Context(), engine.CampaignID(), nil,
+		graphio.WithClearedPredicates(vocabulary.CampaignImportCompleted.String())); err != nil {
+		t.Fatalf("clear the marker: %v", err)
+	}
+
+	err := check(t.Context())
+	if err == nil {
+		t.Fatal("the ingress gate passed with no marker on the campaign; it is remembering an earlier step's " +
+			"answer rather than reading the fact")
+	}
+	if !strings.Contains(err.Error(), vocabulary.CampaignImportCompleted.String()) {
+		t.Errorf("the refusal does not name the missing marker: %v", err)
+	}
+}
+
+// noMembershipPackage is a world where nobody is anywhere: a scene, a character,
+// and no world.location.current between them.
+func noMembershipPackage(t *testing.T) fstest.MapFS {
+	t.Helper()
+	manifest := "id: nowhere\nname: Nowhere\nversion: 0.1.0\n" +
+		"engine_compat: \">=v1.0.0-beta.150 <v2.0.0\"\ndescription: nobody is anywhere\n"
+	entities := strings.Join([]string{
+		`{"local_id":"cellar","type":"scene","triples":[{"predicate":"world.entity.name","object":"The Cellar"}]}`,
+		`{"local_id":"` + starterCharacter + `","type":"character","triples":[` +
+			`{"predicate":"world.entity.name","object":"Rook"}]}`,
+	}, "\n") + "\n"
+
+	return fstest.MapFS{
+		"manifest.yaml":             {Data: []byte(manifest)},
+		"entities.jsonl":            {Data: []byte(entities)},
+		"personas/adjudicator.json": {Data: personaRecord("nowhere/adjudicator", "adjudicator")},
+		"personas/narrator.json":    {Data: personaRecord("nowhere/narrator", "narrator")},
+	}
+}
+
+// The tool-dispatch lane is WIRED, end to end, on the real broker.
+//
+// This is the composition's least visible dependency and the one that had no
+// caller until it was looked for. The agentic loop does not execute a tool: it
+// publishes the call onto `tool.execute.<name>` and waits for `tool.result.*`,
+// and the component in between is agentic-tools. A composition that starts the
+// loop and not the executor boots cleanly, advertises both terminal tools to the
+// model, and then swallows every exit — the persona burns its whole iteration
+// budget and the turn ends as a cap exhaustion, which describes the symptom and
+// hides the cause.
+//
+// So the assertion is a ROUND TRIP rather than a consumer count: a call goes out
+// on the lane the loop uses, and an answer comes back on the lane the loop reads.
+// The call is deliberately malformed — this test is about the WIRE, and the
+// terminal tool's own refusal is as good a proof that something executed it as a
+// success would be, without needing a turn or a model.
+func TestBoot_TheToolDispatchLaneAnswers(t *testing.T) {
+	cfg := bootConfig(t)
+	startEngine(t, cfg)
+	client := requireBroker(t)
+	js := jetStream(t)
+
+	stream, err := js.Stream(t.Context(), persona.TaskStream)
+	if err != nil {
+		t.Fatalf("read the %s stream: %v", persona.TaskStream, err)
+	}
+	// Bound BEFORE the publish, and ephemeral so it consumes nothing anybody else
+	// is owed.
+	results, err := stream.CreateConsumer(t.Context(), jetstream.ConsumerConfig{
+		FilterSubject:     "tool.result.*",
+		DeliverPolicy:     jetstream.DeliverNewPolicy,
+		AckPolicy:         jetstream.AckNonePolicy,
+		InactiveThreshold: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("bind a reader on the tool-result lane: %v", err)
+	}
+
+	call := agentic.ToolCall{
+		ID:        "boot-lane-probe",
+		Name:      persona.VerdictToolName,
+		Arguments: map[string]any{},
+	}
+	body, err := json.Marshal(message.NewBaseMessage(call.Schema(), &call, "boot-test"))
+	if err != nil {
+		t.Fatalf("encode the tool call: %v", err)
+	}
+	if err := client.Client.PublishToStream(t.Context(), "tool.execute."+persona.VerdictToolName, body); err != nil {
+		t.Fatalf("publish onto the tool-execute lane: %v; the AGENT stream does not capture it", err)
+	}
+
+	batch, err := results.Fetch(1, jetstream.FetchMaxWait(30*time.Second))
+	if err != nil {
+		t.Fatalf("read the tool-result lane: %v", err)
+	}
+	var answer struct {
+		Payload agentic.ToolResult `json:"payload"`
+	}
+	answered := false
+	for msg := range batch.Messages() {
+		answered = true
+		if err := json.Unmarshal(msg.Data(), &answer); err != nil {
+			t.Fatalf("decode the tool result (%s): %v", msg.Data(), err)
+		}
+	}
+	if err := batch.Error(); err != nil {
+		t.Fatalf("read the tool-result lane: %v", err)
+	}
+	if !answered {
+		t.Fatal("nothing answered on tool.result.* within 30s. The agentic loop publishes every tool call onto " +
+			"tool.execute.* rather than executing it, so an unanswered lane means no tool executor is running — " +
+			"and every persona's terminal exit would be published into silence while the loop burned its budget")
+	}
+
+	// An answer alone is not the claim. A tool executor with no shared registry
+	// answers too — with tool-not-found — so the assertion is that THIS engine's
+	// verdict executor is what ran: the error is its own refusal, naming the
+	// identity metadata the engine injects and never asks the model for.
+	if answer.Payload.Name != persona.VerdictToolName {
+		t.Errorf("the lane answered about tool %q, want %q", answer.Payload.Name, persona.VerdictToolName)
+	}
+	if !strings.Contains(answer.Payload.Error, persona.MetadataKeyTurnID) {
+		t.Errorf("the tool result is %q, which is not this engine's verdict executor refusing a call with no "+
+			"injected identity; a registry the components were never handed answers with tool-not-found, and "+
+			"an engine wired that way advertises both terminal tools and can execute neither",
+			answer.Payload.Error)
+	}
+}
+
+// The world's VOICE reaches the model, which is a seam with no other caller.
+//
+// Persona fragments are what make tone and judging stance world DATA rather than
+// engine code. The agentic loop reads them from the PERSONAS bucket and falls
+// back to the framework's own defaults when the bucket is empty — silently, and
+// with a perfectly working turn loop that narrates in nobody's voice. Nothing
+// else in this composition would notice.
+func TestBoot_SeedsTheWorldsPersonaFragments(t *testing.T) {
+	cfg := bootConfig(t)
+	startEngine(t, cfg)
+
+	manager, err := sspersona.NewManager(requireBroker(t).Client)
+	if err != nil {
+		t.Fatalf("open the persona bucket: %v", err)
+	}
+	stored, err := manager.List(t.Context())
+	if err != nil {
+		t.Fatalf("list personas: %v", err)
+	}
+
+	// The starter world ships one fragment per role, and the ROLE is what the
+	// loop filters by: a fragment whose role does not match the spawned persona's
+	// is text the model never sees.
+	for _, role := range []persona.Role{persona.RoleAdjudicator, persona.RoleNarrator} {
+		found := false
+		for _, record := range stored {
+			if slices.Contains(record.Roles, string(role)) && record.Content != "" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("the PERSONAS bucket holds no fragment for role %q after boot; the loop would assemble its "+
+				"system prompt from the framework's defaults and this world would have no voice", role)
+		}
+	}
+}

@@ -117,6 +117,24 @@ const (
 	// Every per-roll seed derives from it and the turn_id; it is stored
 	// exactly once, here.
 	CampaignSeedValue Predicate = "campaign.seed.value"
+
+	// CampaignImportCompleted records that the world import which followed the
+	// instantiation claim actually FINISHED. Its object is an RFC3339 instant.
+	//
+	// It exists because the claim alone answers the wrong question. Creating the
+	// campaign entity is atomic and says "this campaign was created"; it says
+	// nothing about the N entity publications that follow it, so a process that
+	// crashes mid-import leaves a claimed campaign and a partial world — and the
+	// next boot, told the campaign exists, skips the import and serves play from
+	// half a world. The context assembler is the silent reader: stub-filtering
+	// catches a referenced-but-unborn entity, while an entity nobody ever
+	// published just makes a scene quietly smaller.
+	//
+	// Written on the MERGE lane so it replaces its own predicate and leaves
+	// CampaignSeedValue — on the same entity — untouched. Through the appending
+	// lane a second boot would leave the campaign holding two completion
+	// instants, both true, with no error anywhere.
+	CampaignImportCompleted Predicate = "campaign.import.completed"
 )
 
 // Descriptive world predicates. These are what a WORLD PACKAGE authors: they
@@ -300,6 +318,7 @@ var allPredicates = []Predicate{
 	TurnFailureReason,
 	TurnFailureRef,
 	CampaignSeedValue,
+	CampaignImportCompleted,
 	WorldEntityName,
 	WorldEntityKind,
 	WorldEntityDescription,

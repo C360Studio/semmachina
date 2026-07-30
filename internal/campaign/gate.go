@@ -37,10 +37,27 @@ var EntityMessageType = message.Type{
 }
 
 // EntityStore is the graph surface the gate needs. Satisfied by *graphio.Store.
+//
+// Three methods, and the third carries a lane decision rather than a
+// convenience. The campaign entity holds the seed AND the import-completion
+// marker, so writing the marker is a write onto an entity whose other fact must
+// survive it — which is the merge lane, by (subject, predicate), and never the
+// appending one. A triple-add here would leave a re-marked campaign holding two
+// completion instants and, on the day somebody re-used this surface for the
+// seed, two seeds.
 type EntityStore interface {
 	CreateEntity(ctx context.Context, entity *graph.EntityState) (graphio.CreateResult, error)
 	GetEntity(ctx context.Context, id string) (*graph.EntityState, error)
+	MergeTriples(
+		ctx context.Context,
+		entityID string,
+		triples []message.Triple,
+		opts ...graphio.MergeOption,
+	) (*graph.EntityState, error)
 }
+
+// The claim above, enforced by the compiler rather than by a doc comment.
+var _ EntityStore = (*graphio.Store)(nil)
 
 // Gate is the world-instantiation sentinel and the campaign seed's home.
 //
@@ -119,6 +136,21 @@ type Instantiation struct {
 	// importer's gate: true means an empty world instance, false means a
 	// campaign that has already been played and must not be re-imported over.
 	Fresh bool
+
+	// claimed records that this value came out of Claim.
+	//
+	// Unexported, with no setter, because Instantiation is an exported struct
+	// with exported fields and MarkImported takes one as PROOF that the caller
+	// won the create. Without this, `campaign.Instantiation{CampaignID: x,
+	// Fresh: true}` is an ordinary composite literal that compiles, and the guard
+	// it is handed to becomes a rule somebody has to follow rather than a fact
+	// about where the value came from — which is the shape this codebase already
+	// closed for verified players and for connection ids.
+	//
+	// Weaker than either of those on its own terms: one caller, same module, and
+	// the value naturally comes from Claim anyway. It costs two lines, and the
+	// alternative is a comment asking the next caller not to hand-build one.
+	claimed bool
 }
 
 // Claim performs the instantiation decision as one atomic create.
@@ -160,12 +192,12 @@ func (g *Gate) Claim(ctx context.Context) (Instantiation, error) {
 		// as "someone else instantiated it" would draw the opposite of the
 		// truth. The minted seed is authoritative — this call wrote it.
 		if result.Degraded {
-			return Instantiation{CampaignID: g.campaignID, Seed: seed, Fresh: true}, nil
+			return Instantiation{CampaignID: g.campaignID, Seed: seed, Fresh: true, claimed: true}, nil
 		}
 		if err := g.confirmStoredSeed(result.Entity, seed); err != nil {
 			return Instantiation{}, err
 		}
-		return Instantiation{CampaignID: g.campaignID, Seed: seed, Fresh: true}, nil
+		return Instantiation{CampaignID: g.campaignID, Seed: seed, Fresh: true, claimed: true}, nil
 
 	case errors.Is(err, graphio.ErrEntityExists):
 		stored, loadErr := g.LoadSeed(ctx)
@@ -174,7 +206,7 @@ func (g *Gate) Claim(ctx context.Context) (Instantiation, error) {
 				"campaign %s already exists but its seed is unreadable, and a campaign's seed is never regenerated: %w",
 				g.campaignID, loadErr)
 		}
-		return Instantiation{CampaignID: g.campaignID, Seed: stored, Fresh: false}, nil
+		return Instantiation{CampaignID: g.campaignID, Seed: stored, Fresh: false, claimed: true}, nil
 
 	default:
 		return Instantiation{}, err

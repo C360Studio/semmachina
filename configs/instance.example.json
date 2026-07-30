@@ -1,0 +1,54 @@
+{
+  "nats_url": "nats://127.0.0.1:4222",
+
+  "org": "c360",
+  "world_ns": "gatehouse",
+
+  "player": {
+    "local_id": "one",
+    "name": "The Player",
+    "character": "local:rook",
+    "credential": "CHANGE-ME-local-only-bearer-credential"
+  },
+
+  "socket": {
+    "addr": "127.0.0.1:8422",
+    "path": "/play"
+  },
+
+  "model_registry": {
+    "endpoints": {
+      "mid": {
+        "provider": "openai",
+        "url": "http://127.0.0.1:11434/v1",
+        "model": "qwen2.5:14b-instruct",
+        "max_tokens": 32768,
+        "supports_tools": true,
+        "tool_format": "openai"
+      },
+      "large": {
+        "provider": "openai",
+        "url": "http://127.0.0.1:11434/v1",
+        "model": "qwen2.5:32b-instruct",
+        "max_tokens": 32768,
+        "supports_tools": true,
+        "tool_format": "openai"
+      }
+    },
+    "capabilities": {
+      "fiction_adjudication": {
+        "description": "The engine's only schema-bearing exit. ADR-026 records upstream living the alternative, so this is the MID slot and demoting it is an experiment, never the starting configuration.",
+        "preferred": ["mid"],
+        "requires_tools": true
+      },
+      "narration": {
+        "description": "Prose only, no schema burden. The larger slot buys writing quality and nothing else.",
+        "preferred": ["large"],
+        "requires_tools": true
+      }
+    },
+    "defaults": {
+      "model": "mid"
+    }
+  }
+}

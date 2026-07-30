@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -36,6 +37,7 @@ type fakeStore struct {
 	degrade    bool
 	createErr  error
 	getErr     error
+	mergeErr   error
 	createCall int
 }
 
@@ -71,6 +73,70 @@ func (s *fakeStore) GetEntity(_ context.Context, id string) (*graph.EntityState,
 		return nil, fmt.Errorf("get entity %s: %w", id, graphio.ErrEntityNotFound)
 	}
 	return entity, nil
+}
+
+// MergeTriples replaces by (subject, predicate), which is the property every
+// caller of the real merge lane depends on. A fake that appended would agree
+// with the WRONG lane and would make the marker tests pass while the production
+// write left two completion instants on one campaign.
+func (s *fakeStore) MergeTriples(
+	_ context.Context,
+	entityID string,
+	triples []message.Triple,
+	_ ...graphio.MergeOption,
+) (*graph.EntityState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mergeErr != nil {
+		return nil, s.mergeErr
+	}
+	entity, ok := s.entities[entityID]
+	if !ok {
+		return nil, fmt.Errorf("merge into %s: %w", entityID, graphio.ErrEntityNotFound)
+	}
+	for _, triple := range triples {
+		if triple.Subject != entityID {
+			return nil, fmt.Errorf("triple targets %q, not %q", triple.Subject, entityID)
+		}
+	}
+	merged := *entity
+	merged.Triples = slices.Clone(entity.Triples)
+	for _, triple := range triples {
+		merged.Triples = slices.DeleteFunc(merged.Triples, func(existing message.Triple) bool {
+			return existing.Predicate == triple.Predicate
+		})
+		merged.Triples = append(merged.Triples, triple)
+	}
+	s.entities[entityID] = &merged
+	return &merged, nil
+}
+
+// appendingStore is the negative control for the lane choice: it APPENDS where
+// the merge lane replaces, exactly as graph.mutation.triple.add_batch does.
+//
+// It exists because "the marker replaces" is otherwise a claim about a fake
+// nobody perturbed. A test asserting one marker after two writes passes against
+// a replacing fake whether the production code chose a lane deliberately or by
+// accident; the same assertion against this one fails, which is what makes the
+// first assertion mean something.
+type appendingStore struct{ *fakeStore }
+
+func (s *appendingStore) MergeTriples(
+	_ context.Context,
+	entityID string,
+	triples []message.Triple,
+	_ ...graphio.MergeOption,
+) (*graph.EntityState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entity, ok := s.entities[entityID]
+	if !ok {
+		return nil, fmt.Errorf("merge into %s: %w", entityID, graphio.ErrEntityNotFound)
+	}
+	merged := *entity
+	merged.Triples = append(slices.Clone(entity.Triples), triples...)
+	s.entities[entityID] = &merged
+	return &merged, nil
 }
 
 func (s *fakeStore) put(entity *graph.EntityState) {

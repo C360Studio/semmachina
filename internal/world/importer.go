@@ -26,7 +26,38 @@ const (
 	// ImportSource identifies the importer as the producer of a published
 	// message.
 	ImportSource = "world-importer"
+
+	// EntityStream is the JetStream stream graph-ingest's default input port
+	// consumes, and the one the importer publishes onto.
+	//
+	// Neither the name nor the subjects are ours to choose: graph-ingest derives
+	// the name from the `entity.` subject prefix (deriveStreamName) and binds a
+	// consumer with AutoCreate FALSE, and semstreams' own stream provisioning
+	// derives the subjects by lower-casing the stream name and appending `.>`.
+	// They are declared here because a composition that runs graph-ingest has to
+	// create it: without the stream, graph-ingest's consumer cannot bind and the
+	// importer's own publish is refused — which is the loud half. The quiet half
+	// is what a plain core publish onto that subject would do, which is nothing,
+	// successfully.
+	EntityStream = "ENTITY"
+	// EntitySubjectFilter is the subject space that stream captures.
+	EntitySubjectFilter = "entity.>"
 )
+
+// EntityStreamConfig is the fact lane every world entity travels.
+//
+// Limits-based with no age or size eviction, matching ENTITY_STATES' own
+// ADR-068 guardrail: this stream carries the writes that BECOME authoritative
+// state, and a message that expired before graph-ingest applied it is an entity
+// that never existed, with no error anywhere.
+func EntityStreamConfig() jetstream.StreamConfig {
+	return jetstream.StreamConfig{
+		Name:      EntityStream,
+		Subjects:  []string{EntitySubjectFilter},
+		Storage:   jetstream.FileStorage,
+		Retention: jetstream.LimitsPolicy,
+	}
+}
 
 // Publisher is the narrow JetStream publish surface the importer needs.
 //
