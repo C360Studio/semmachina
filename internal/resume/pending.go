@@ -327,6 +327,29 @@ func (q *WorkQueues) stageAckFloor(ctx context.Context, phase vocabulary.TurnPha
 // The refusal is GLOBAL rather than per-turn on purpose: the condition is a
 // property of the deployment, not of any turn, so reporting it once and declining
 // to act beats repeating it per turn while still acting on the rest.
+//
+// # Only DURABLE consumers count, and leaving that out disarmed the pass on the
+// one occasion it exists for
+//
+// readQueue reads a subject through an EPHEMERAL, AckNone consumer carrying THIS
+// EXACT FILTER, with a thirty-second inactive threshold. Such a reader is left on
+// the stream at the floor it started from, and this minimum was taken over every
+// consumer on the filter — so a SECOND reading inside that window is taken against
+// the FIRST reading's stale cursor. Work the loop finished in between is then
+// reported as still queued, for the turns that own it.
+//
+// The direction of the error is the conservative one — a turn reads as queued
+// rather than as stranded — which is why nothing ever failed. What it costs is the
+// pass itself: a turn whose work really is gone reads as owed to somebody, is
+// counted and left alone, and stays stranded with a player waiting. And the window
+// is precisely a crash-restart: a process that dies and comes back inside half a
+// minute runs its pass against the floor its own previous pass left behind.
+//
+// Restricting to durables is not a workaround but the definition made explicit:
+// "work above ANY consumer's floor is still owed to somebody" is a statement about
+// consumers that OWE something. An ephemeral, AckNone cursor owes nothing, cannot
+// acknowledge, and disappears on its own.
+// TestWorkQueues_AreNotDisarmedByTheirOwnPreviousReading is the measurement.
 func (q *WorkQueues) taskAckFloor(ctx context.Context) (uint64, error) {
 	lister := q.agent.ListConsumers(ctx)
 	var (
@@ -334,7 +357,7 @@ func (q *WorkQueues) taskAckFloor(ctx context.Context) (uint64, error) {
 		found bool
 	)
 	for info := range lister.Info() {
-		if info == nil || !consumerCarries(info.Config, persona.TaskSubjectFilter) {
+		if info == nil || info.Config.Durable == "" || !consumerCarries(info.Config, persona.TaskSubjectFilter) {
 			continue
 		}
 		// The MINIMUM across every consumer on the filter. More than one means
@@ -350,10 +373,10 @@ func (q *WorkQueues) taskAckFloor(ctx context.Context) (uint64, error) {
 	}
 	if !found {
 		return 0, fmt.Errorf(
-			"no consumer on the %s stream filters %q, so this pass cannot tell whether a persona task is still "+
-				"in flight. Upstream's task consumers deliver only NEW messages, so nothing bound to that "+
-				"subject means no persona can ever run — and answering 'nothing queued' would re-trigger every "+
-				"turn whose persona is mid-flight into a second billed spawn",
+			"no DURABLE consumer on the %s stream filters %q, so this pass cannot tell whether a persona task "+
+				"is still in flight. Upstream's task consumers deliver only NEW messages, so nothing bound to "+
+				"that subject means no persona can ever run — and answering 'nothing queued' would re-trigger "+
+				"every turn whose persona is mid-flight into a second billed spawn",
 			persona.TaskStream, persona.TaskSubjectFilter)
 	}
 	return floor, nil

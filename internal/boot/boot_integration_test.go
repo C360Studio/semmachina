@@ -930,6 +930,100 @@ func TestBoot_TheToolDispatchLaneAnswers(t *testing.T) {
 	}
 }
 
+// The lane that reaches the MODEL is wired, and a boot without it refuses rather
+// than parking every turn.
+//
+// # The failure this closes, found end to end
+//
+// The agentic loop does not call an endpoint any more than it executes a tool.
+// deps.ModelRegistry is how it RESOLVES which endpoint a capability means; when it
+// needs a completion it publishes an AgentRequest onto `agent.request.>` and waits
+// on `agent.response.>`. The component in between is agentic-model, and this
+// composition did not run it.
+//
+// Nothing said so. The AGENT stream captures `agent.request.>` under `agent.>`
+// whether or not anything consumes it, so every stream-level check this engine
+// makes passed; both personas resolved their endpoints; the boot looked healthy.
+// What happened was that every turn reached `adjudicating`, published a request
+// nobody answered, and sat there until the loop's own timeout ended it — reported
+// as a cap exhaustion, a code that describes the symptom and hides the cause. It
+// was found by the first test that ran a whole turn.
+//
+// So the check is about CONSUMERS rather than subjects, and this test is in two
+// halves for the reason every gate here is: that it passes on a correct boot
+// proves nothing about whether it can refuse.
+func TestBoot_RefusesAModelRequestLaneNobodyConsumes(t *testing.T) {
+	cfg := bootConfig(t)
+	engine := startEngine(t, cfg)
+	js := jetStream(t)
+
+	if !consumerExistsOn(t, js, persona.TaskStream, persona.ModelRequestSubjectFilter) {
+		t.Fatalf("no consumer filters %s after boot; the agentic loop would publish every model request into "+
+			"silence and every turn would end as a cap exhaustion", persona.ModelRequestSubjectFilter)
+	}
+
+	var check func(context.Context) error
+	for _, step := range engine.Steps() {
+		if step.ID == boot.StepStages {
+			check = step.Check
+		}
+	}
+	if check == nil {
+		t.Fatal("the stages step declares no precondition, so nothing stands between a boot and a composition " +
+			"whose personas can never receive an answer")
+	}
+	if err := check(t.Context()); err != nil {
+		t.Fatalf("the stages precondition refused a correctly composed engine: %v", err)
+	}
+
+	// Take the bridge away. Deleting the consumer is what a composition that never
+	// started agentic-model looks like from the stream, which is the only place
+	// this check can look.
+	consumer := consumerNameOn(t, js, persona.TaskStream, persona.ModelRequestSubjectFilter)
+	stream, err := js.Stream(t.Context(), persona.TaskStream)
+	if err != nil {
+		t.Fatalf("read the %s stream: %v", persona.TaskStream, err)
+	}
+	if err := stream.DeleteConsumer(t.Context(), consumer); err != nil {
+		t.Fatalf("delete the model-request consumer: %v", err)
+	}
+
+	err = check(t.Context())
+	if err == nil {
+		t.Fatal("the stages precondition passed with nothing consuming the model-request lane; every persona " +
+			"would publish a request nobody answers, and the turn would end on the loop's timeout as a cap " +
+			"exhaustion rather than as the composition error it is")
+	}
+	if !strings.Contains(err.Error(), persona.ModelRequestSubjectFilter) {
+		t.Errorf("the refusal does not name the unconsumed lane: %v", err)
+	}
+}
+
+// consumerNameOn returns the name of a consumer filtering one subject.
+func consumerNameOn(t *testing.T, js jetstream.JetStream, stream, filter string) string {
+	t.Helper()
+	s, err := js.Stream(t.Context(), stream)
+	if err != nil {
+		t.Fatalf("read stream %s: %v", stream, err)
+	}
+	lister := s.ListConsumers(t.Context())
+	for info := range lister.Info() {
+		if info == nil {
+			continue
+		}
+		for _, subject := range append([]string{info.Config.FilterSubject}, info.Config.FilterSubjects...) {
+			if subject == filter {
+				return info.Name
+			}
+		}
+	}
+	if err := lister.Err(); err != nil {
+		t.Fatalf("list consumers on %s: %v", stream, err)
+	}
+	t.Fatalf("no consumer on %s filters %q", stream, filter)
+	return ""
+}
+
 // The world's VOICE reaches the model, which is a seam with no other caller.
 //
 // Persona fragments are what make tone and judging stance world DATA rather than

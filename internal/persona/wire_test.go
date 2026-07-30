@@ -226,13 +226,19 @@ func TestWire_AMalformedExitIsRefusedWithACorrectionTheModelThenSatisfies(t *tes
 	}
 }
 
-// The shipped pack's invalid-effect scenario proposes an effect type nobody
-// registered. It is refused HERE, at the tool boundary, and never reaches the
-// applier — the content store will not store a verdict that cannot pass its own
-// contract, so the choice is between refusing at the exit and storing an invalid
-// artifact.
+// The shipped pack's out-of-vocabulary-effect scenario proposes an effect TYPE
+// nobody registered. It is refused HERE, at the tool boundary, and never reaches
+// the applier — the content store will not store a verdict that cannot pass its
+// own contract, so the choice is between refusing at the exit and storing an
+// invalid artifact.
+//
+// Its twin is `invalid-effect`, which is deliberately NOT this: every value there
+// is in vocabulary and only the graph can say the target is the wrong KIND, so
+// that one passes this boundary and is refused by the applier. The two scenarios
+// exist as a pair because a suite carrying only one would prove one boundary and
+// call it validation.
 func TestWire_AnOutOfVocabularyEffectIsRefusedAtTheExit(t *testing.T) {
-	stub := serveScenario(t, "invalid-effect")
+	stub := serveScenario(t, "out-of-vocabulary-effect")
 	spec := persona.Adjudicator()
 	h := newVerdictHarness(t)
 

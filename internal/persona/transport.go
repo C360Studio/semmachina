@@ -67,6 +67,27 @@ const (
 	ToolExecuteSubjectFilter = "tool.execute.>"
 	// ToolResultSubjectFilter is the answering half of the lane above.
 	ToolResultSubjectFilter = "tool.result.>"
+
+	// ModelRequestSubjectFilter and ModelResponseSubjectFilter are the lane that
+	// reaches the model, and it is the SECOND lane a composition is likely to
+	// leave out for exactly the reason the first one is.
+	//
+	// The agentic loop does not call an endpoint any more than it executes a tool.
+	// deps.ModelRegistry is how it RESOLVES which endpoint a capability means; when
+	// it needs a completion it publishes an AgentRequest onto `agent.request.*` and
+	// waits on `agent.response.>`. The component in between is agentic-model, which
+	// owns the HTTP client, the retry curve and the token accounting.
+	//
+	// Both subjects sit under AgentSubjectFilter, so the stream captures them
+	// whether or not anybody names them — which is precisely why the omission is
+	// invisible at the stream. It shows only as a persona that publishes a request,
+	// receives no response, and ends its turn on the loop's timeout: a stall
+	// reported as a cap exhaustion, which names the symptom and hides the cause.
+	// Found end to end, not by reading: a composition running the loop and the tool
+	// executor and NOT the model bridge parked every turn in `adjudicating`.
+	ModelRequestSubjectFilter = "agent.request.>"
+	// ModelResponseSubjectFilter is the answering half of the lane above.
+	ModelResponseSubjectFilter = "agent.response.>"
 )
 
 // AgentStreamSubjects returns every subject the AGENT stream must capture for

@@ -15,6 +15,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	sspersona "github.com/c360studio/semstreams/persona"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
+	agenticmodel "github.com/c360studio/semstreams/processor/agentic-model"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	graphindex "github.com/c360studio/semstreams/processor/graph-index"
 	graphingest "github.com/c360studio/semstreams/processor/graph-ingest"
@@ -352,10 +353,12 @@ func (e *Engine) steps() []Step {
 		{
 			ID: StepStages,
 			// After the pass, so no stage consumer drains a trigger the pass is
-			// still measuring. The marker gate is re-read here because this is the
-			// step after which a persona can run.
+			// still measuring. This is the step after which a persona can run, so
+			// it is where both gates that protect a persona live: the marker is
+			// re-read, and the two lanes the agentic loop waits on are proven to
+			// have somebody consuming them.
 			Needs: []StepID{StepResume, StepAgentic, StepWorld},
-			Check: e.checkImportMarked,
+			Check: e.checkStagePreconditions,
 			Run:   e.startStages,
 		},
 		{
@@ -392,6 +395,21 @@ func (e *Engine) sleep(ctx context.Context, d time.Duration) error {
 	case <-time.After(d):
 		return nil
 	}
+}
+
+// seedSource is the campaign gate's seed generator: the configured one when this
+// deployment pinned a seed, and crypto/rand otherwise.
+//
+// A pinned seed is honoured only where the gate honours ANY minted seed — on the
+// create that wins. The gate discards a minted seed the moment it learns the
+// campaign already exists, so a boot that pins a seed into a living campaign
+// changes nothing, which is the behaviour a replay guarantee requires.
+func (e *Engine) seedSource() []campaign.GateOption {
+	if e.cfg.CampaignSeed.IsZero() {
+		return nil
+	}
+	pinned := e.cfg.CampaignSeed
+	return []campaign.GateOption{campaign.WithSeedSource(func() (campaign.Seed, error) { return pinned, nil })}
 }
 
 func (e *Engine) campaignIdentity() campaign.Identity {
@@ -437,7 +455,7 @@ func (e *Engine) connect(ctx context.Context) error {
 	}
 	e.recorder = recorder
 
-	gate, err := campaign.NewGate(store, e.campaignIdentity())
+	gate, err := campaign.NewGate(store, e.campaignIdentity(), e.seedSource()...)
 	if err != nil {
 		return err
 	}
@@ -542,22 +560,33 @@ func (e *Engine) ensureActionStream(ctx context.Context) error {
 	return turn.EnsureActionStream(ctx, e.client)
 }
 
-// startAgenticLoop registers both terminal tools and starts the two components
-// that make a persona's exit reachable.
+// startAgenticLoop registers both terminal tools and starts the three components
+// that make a persona run at all.
 //
-// # There are TWO components here, and the second one is easy to miss
+// # There are THREE components here, and two of them are easy to miss
 //
-// The agentic loop does not execute a tool. deps.ToolRegistry is how it
-// ADVERTISES tools to the model; when the model calls one, the loop PUBLISHES
-// the call onto `tool.execute.<name>` and waits for `tool.result.*`. The
-// component that consumes the first and produces the second is agentic-tools,
-// and it is handed the same registry. Without it, every persona's terminal exit
-// is published into a subject nobody reads and the loop burns its whole
-// iteration budget waiting — a turn that fails as a cap exhaustion, which
-// describes the symptom and hides the cause.
+// The agentic loop neither calls a model nor executes a tool. It is an
+// orchestrator that publishes and waits, and each of the two things it waits for
+// has its own component on the other end of a subject:
 //
-// agentic-tools starts FIRST, so its consumer is bound before anything can
-// publish a call for it.
+//   - deps.ModelRegistry is how the loop RESOLVES which endpoint a capability
+//     means; when it needs a completion it publishes an AgentRequest onto
+//     `agent.request.*` and waits on `agent.response.>`. The component in between
+//     is agentic-model, which owns the HTTP client and the retry curve.
+//   - deps.ToolRegistry is how the loop ADVERTISES tools to the model; when the
+//     model calls one, the loop publishes the call onto `tool.execute.<name>` and
+//     waits for `tool.result.*`. The component in between is agentic-tools, handed
+//     the same registry.
+//
+// Leave out either one and the deployment boots clean, resolves its endpoints,
+// advertises its tools, and then parks every turn: the persona waits for an answer
+// that cannot arrive and the loop ends on its own timeout. The turn fails as a cap
+// exhaustion — a code that describes the symptom and hides the cause — and the
+// AGENT stream looks perfectly healthy, because both subjects are captured by
+// `agent.>` whether or not anything is consuming them.
+//
+// Both bridges start BEFORE the loop, so their consumers are bound before
+// anything can publish for them.
 //
 // # The tools are registered before either, and both or neither
 //
@@ -599,6 +628,24 @@ func (e *Engine) startAgenticLoop(ctx context.Context) error {
 		return fmt.Errorf("encode the agentic-tools configuration: %w", err)
 	}
 	if err := e.startComponent(ctx, "agentic-tools", agentictools.NewComponent, toolsCfg); err != nil {
+		return err
+	}
+
+	// The model bridge, bound before anything can publish a request for it.
+	//
+	// Its defaults are upstream's, with only the stream named: the retry curve, the
+	// per-request timeout and the rate-limit backoff are provider-facing policy this
+	// engine has no better opinion about than the component that owns the client.
+	// The endpoint itself is never named here — it is resolved per request from the
+	// model registry by the capability the persona spec declares, which is what
+	// makes "a live model is a config retarget, never a code change" true.
+	models := agenticmodel.DefaultConfig()
+	models.StreamName = stage.TaskStream
+	modelsCfg, err := json.Marshal(models)
+	if err != nil {
+		return fmt.Errorf("encode the agentic-model configuration: %w", err)
+	}
+	if err := e.startComponent(ctx, "agentic-model", agenticmodel.NewComponent, modelsCfg); err != nil {
 		return err
 	}
 
@@ -736,6 +783,16 @@ func (e *Engine) reconcileStrandedTurns(ctx context.Context) error {
 		e.log().Error("the stranded-turn pass could not resolve every turn it found", "error", err)
 	}
 	return nil
+}
+
+// checkStagePreconditions is everything that must hold before a stage can spawn a
+// persona: the world is whole, and the two lanes the agentic loop waits on have
+// somebody on the other end.
+func (e *Engine) checkStagePreconditions(ctx context.Context) error {
+	if err := e.checkImportMarked(ctx); err != nil {
+		return err
+	}
+	return e.checkAgenticBridges(ctx)
 }
 
 // startStages binds every stage of the turn loop and the watcher that ends a

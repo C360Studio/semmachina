@@ -3,6 +3,7 @@ package mockmodel_test
 import (
 	"bufio"
 	"encoding/json"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -21,6 +22,7 @@ var requiredScenarios = []string{
 	"partial",
 	"full",
 	"invalid-effect",
+	"out-of-vocabulary-effect",
 	"malformed-exit",
 	"duplicate-delivery",
 	"crash-resume",
@@ -75,9 +77,16 @@ func TestTurnLoopScenarios_ScriptVerdictsProductionCodeAccepts(t *testing.T) {
 	// that scripts a rejection and then its correction contains both, so
 	// marking the whole scenario invalid would stop checking the correction —
 	// which is the half that has to be right.
+	//
+	// `invalid-effect` is deliberately NOT here any more, and its absence is now
+	// the assertion. That scenario's whole job is to reach the APPLIER, so its
+	// verdict has to pass every gate this walk applies: the payload validator is
+	// world-blind, and "a character moved into an item" is a fact about the graph.
+	// A verdict this walk could refuse would be refused at the tool boundary too,
+	// and would never produce an applier rejection at all.
 	rejected := map[string]map[int]bool{
-		"invalid-effect": {0: true},
-		"malformed-exit": {0: true},
+		"out-of-vocabulary-effect": {0: true},
+		"malformed-exit":           {0: true},
 	}
 	checked, refusals := 0, 0
 
@@ -161,7 +170,103 @@ func TestTurnLoopScenarios_TargetEntitiesTheStarterWorldActuallyContains(t *test
 	}
 }
 
+// The rebinding an isolated end-to-end run depends on: every effect target moves
+// to the caller's world namespace, and NOTHING else about the pack changes.
+//
+// The second half is the one worth testing. A substitution wide enough to catch
+// the targets is wide enough to catch prose, and a pack whose narration silently
+// mentioned the test's namespace would still pass every assertion about effects.
+func TestTurnLoopScenariosIn_RebindsTargetsAndOnlyTargets(t *testing.T) {
+	rebound, err := mockmodel.TurnLoopScenariosIn("e2eprobe")
+	if err != nil {
+		t.Fatalf("rebind the pack: %v", err)
+	}
+	shipped, err := mockmodel.TurnLoopScenarios()
+	if err != nil {
+		t.Fatalf("load the shipped pack: %v", err)
+	}
+
+	targets := 0
+	for _, name := range rebound.ScenarioNames() {
+		scenario, _ := rebound.Scenario(name)
+		for _, script := range scenario.Scripts {
+			for _, step := range script.Steps {
+				for _, call := range step.ToolCalls {
+					for _, id := range entityIDsIn(t, call.Arguments) {
+						targets++
+						if want := "c360.semmachina.e2eprobe.starter."; !strings.HasPrefix(id, want) {
+							t.Errorf("scenario %q still targets %q, which is not under %q", name, id, want)
+						}
+					}
+				}
+			}
+		}
+	}
+	if targets == 0 {
+		t.Fatal("the rebound pack declares no effect targets; the walk is looking at the wrong fields")
+	}
+
+	// Prose is untouched, checked against the shipped pack rather than against a
+	// literal, so this stays true when somebody rewrites the fiction.
+	if got, want := prose(t, rebound), prose(t, shipped); !slices.Equal(got, want) {
+		t.Errorf("rebinding changed the narrator's prose:\n got %q\nwant %q", got, want)
+	}
+	if len(prose(t, shipped)) == 0 {
+		t.Fatal("the shipped pack scripts no prose, so the comparison above compares two empty lists")
+	}
+}
+
+// A namespace that would corrupt an entity id, and a pack the substitution could
+// not find, are both refusals rather than a quiet pass-through: either one leaves
+// every effect naming an entity the caller's world does not contain.
+func TestTurnLoopScenariosIn_RefusesWhatWouldSilentlyDoNothing(t *testing.T) {
+	for _, ns := range []string{"", "two.parts"} {
+		if _, err := mockmodel.TurnLoopScenariosIn(ns); err == nil {
+			t.Errorf("the pack rebound to %q; every effect would name an unreachable entity", ns)
+		}
+	}
+	if !strings.Contains(string(mustReadPack(t)), mockmodel.TurnLoopInstancePrefix) {
+		t.Fatalf("the shipped pack no longer contains %q, so TurnLoopScenariosIn is a no-op and its refusal "+
+			"is the only thing standing between an e2e run and a world full of missing targets",
+			mockmodel.TurnLoopInstancePrefix)
+	}
+}
+
 // helpers ------------------------------------------------------------------
+
+// prose returns every scripted narration string in declaration order.
+func prose(t *testing.T, fixture *mockmodel.Fixture) []string {
+	t.Helper()
+	var out []string
+	for _, name := range fixture.ScenarioNames() {
+		scenario, _ := fixture.Scenario(name)
+		for _, script := range scenario.Scripts {
+			for _, step := range script.Steps {
+				for _, call := range step.ToolCalls {
+					var args struct {
+						Prose string `json:"prose"`
+					}
+					if err := json.Unmarshal(call.Arguments, &args); err == nil && args.Prose != "" {
+						out = append(out, args.Prose)
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// mustReadPack reads the pack's bytes the way the loader does, through the
+// repository rather than through the embed, so the anti-vacuity check above is
+// about the file somebody edits.
+func mustReadPack(t *testing.T) []byte {
+	t.Helper()
+	data, err := os.ReadFile("scenarios/turnloop.json")
+	if err != nil {
+		t.Fatalf("read the scenario pack: %v", err)
+	}
+	return data
+}
 
 // entityIDsIn pulls every value the effect vocabulary treats as an entity
 // reference out of a scripted argument set.

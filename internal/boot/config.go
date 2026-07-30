@@ -111,6 +111,32 @@ type Config struct {
 
 	// World is the world package to instantiate from.
 	World fs.FS `json:"-"`
+	// CampaignSeed is the seed a FRESH campaign is created with. The zero value
+	// means mint one from crypto/rand, which is what production does.
+	//
+	// # Why this is not operator configuration
+	//
+	// It carries no JSON tag on purpose. A campaign seed is not a secret — an
+	// operator holding ENTITY_STATES can predict the dice, and instance-per-world
+	// makes the operator and the player the same person — but it IS the root of
+	// every roll the campaign will ever make, and a config file is where one seed
+	// gets copied into a second deployment by accident. A process that wants a
+	// reproducible campaign says so in code, where the reason can sit next to it.
+	//
+	// # Why it exists at all
+	//
+	// The token-free end-to-end suite has to play a turn that lands in a NAMED
+	// outcome band, and a band is not scriptable at the model boundary: a verdict
+	// declares intents for all three and the seeded dice select one (design F19).
+	// The only way to choose is to supply the (campaign_seed, turn_id) pair whose
+	// derived roll lands there — which makes the pair a pinned fixture constant and
+	// the assertion a small proof of seeded replay in its own right.
+	//
+	// It is honoured only on the boot that CREATES the campaign. A campaign that
+	// already exists keeps the seed it was created with, because that is the whole
+	// contract of campaign.Gate: a seed is generated at most once in a campaign's
+	// life no matter how many times it is claimed.
+	CampaignSeed campaign.Seed `json:"-"`
 	// Registry is the payload registry, populated by the BINARY's bootstrap.
 	//
 	// Passed in rather than built here so there is exactly one place per binary

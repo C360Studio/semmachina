@@ -381,5 +381,82 @@ var (
 	// stream's own declared subjects, so this gate asserts what the engine has to
 	// be able to reach rather than restating AgentStreamConfig back to itself. If
 	// AgentStreamSubjects ever narrows, these two still have to hold.
-	agentStreamSubjects = append(persona.AgentStreamSubjects(), stage.LoopFailedSubject, persona.TaskSubjectFilter)
+	agentStreamSubjects = append(persona.AgentStreamSubjects(),
+		stage.LoopFailedSubject, persona.TaskSubjectFilter,
+		// The two lanes the loop WAITS on. Both are inside `agent.>` and
+		// `tool.execute.>`, so naming them here changes nothing about the stream —
+		// it states what the engine has to be able to reach, so a narrowing
+		// upstream is a refusal rather than a turn that parks.
+		persona.ModelRequestSubjectFilter, persona.ModelResponseSubjectFilter)
+
+	// The bridges the agentic loop cannot run without, named by the subject each
+	// one consumes.
+	//
+	// The loop publishes and waits; these are the two components on the other end.
+	// A composition missing either boots clean, resolves its endpoints, advertises
+	// its tools, and parks every turn in the phase where the persona ran — because
+	// a subject nobody consumes and a subject nobody publishes on look identical
+	// from the stream, and the loop's own timeout reports the stall as a cap
+	// exhaustion.
+	agenticBridges = []struct {
+		filter string
+		what   string
+	}{
+		{
+			filter: persona.ModelRequestSubjectFilter,
+			what: "agentic-model, which owns the HTTP client: without it every persona publishes a model " +
+				"request nobody answers and the turn parks in the phase that spawned it",
+		},
+		{
+			filter: persona.ToolExecuteSubjectFilter,
+			what: "agentic-tools, which executes the terminal tools: without it every persona's exit is " +
+				"published into silence and the loop burns its whole iteration budget",
+		},
+	}
 )
+
+// checkAgenticBridges proves something is actually consuming the two lanes the
+// agentic loop waits on.
+//
+// It is a CONSUMER check rather than a stream check, and that distinction is the
+// whole value of it. `agent.request.*` and `tool.execute.>` are captured by the
+// AGENT stream whether or not anything reads them, so every stream-level assertion
+// this engine makes passes on a composition that starts the loop alone. The lanes
+// are only reachable if somebody bound a consumer on them, and that is what this
+// asks.
+//
+// Found end to end rather than by reading: a composition running the loop and the
+// tool executor but NOT the model bridge parked every turn in `adjudicating` with
+// no error anywhere, until the loop's timeout ended it as a cap exhaustion.
+func (e *Engine) checkAgenticBridges(ctx context.Context) error {
+	stream, err := e.client.GetStream(ctx, persona.TaskStream)
+	if err != nil {
+		return fmt.Errorf("read the %s stream: %w", persona.TaskStream, err)
+	}
+	bound := map[string]bool{}
+	lister := stream.ListConsumers(ctx)
+	for info := range lister.Info() {
+		if info == nil {
+			continue
+		}
+		for _, subject := range append([]string{info.Config.FilterSubject}, info.Config.FilterSubjects...) {
+			if subject != "" {
+				bound[subject] = true
+			}
+		}
+	}
+	if err := lister.Err(); err != nil {
+		return fmt.Errorf("list the consumers on %s: %w", persona.TaskStream, err)
+	}
+
+	for _, bridge := range agenticBridges {
+		if !bound[bridge.filter] {
+			return fmt.Errorf(
+				"nothing consumes %q on the %s stream. That lane is %s. The subject IS captured by the stream, "+
+					"so no stream-level check can see this: a persona would publish onto it, wait, and end the "+
+					"turn on the loop's timeout as a cap exhaustion",
+				bridge.filter, persona.TaskStream, bridge.what)
+		}
+	}
+	return nil
+}

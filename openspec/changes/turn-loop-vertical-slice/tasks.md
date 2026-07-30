@@ -635,7 +635,7 @@ speaks and it is expensive to retrofit.
       something real to stop). Determinism proven behaviourally *and* by an AST scan banning
       clocks and randomness. Re-derived from the semstreams contract; semdragon not read
       (M6). 31 mutations, 4 survivors fixed — see F18
-- [ ] 10.3 E2E scenarios (token-free, full production wire). **Band scenarios are selected
+- [x] 10.3 E2E scenarios (token-free, full production wire). **Band scenarios are selected
       by seed, not by script** (F19): a verdict declares all three bands and the seeded dice
       choose, so supply the (campaign_seed, turn_id) pair whose derived roll lands in each
       band and pin them as fixture constants — if they stop producing their bands, seeded

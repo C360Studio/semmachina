@@ -1,5 +1,5 @@
 {
-  "description": "Turn-loop scenarios for the token-free end-to-end suite. THREE THINGS TO KNOW BEFORE EDITING. (1) Tool names and argument shapes are DATA, not contract: the adjudicator's and narrator's terminal tools are defined where those loops are configured, and this file follows them. Nothing in the stub reads these names. (2) Effect targets are six-part entity IDs, so they are bound to one world instance — org 'c360', namespace 'world1', template 'starter'. An end-to-end run under different instance config edits them here. (3) A verdict CANNOT choose the outcome band: it declares intents for all three and the seeded dice pick one. The miss/partial/full scenarios differ only in the narrator's voice, so the run that plays one must supply the campaign seed and turn id whose roll lands in that band.",
+  "description": "Turn-loop scenarios for the token-free end-to-end suite. THREE THINGS TO KNOW BEFORE EDITING. (1) Tool names and argument shapes are DATA, not contract: the adjudicator's and narrator's terminal tools are defined where those loops are configured, and this file follows them. Nothing in the stub reads these names. (2) Effect targets are six-part entity IDs, so they are bound to one world instance — org 'c360', namespace 'world1', template 'starter'. An end-to-end run under different instance config edits them here. (3) A verdict CANNOT choose the outcome band: it declares intents for all three and the seeded dice pick one. The miss/partial/full scenarios differ only in the narrator's voice, so the run that plays one must supply the campaign seed and turn id whose roll lands in that band. (4) Following from (3): the three bands touch THREE DIFFERENT PREDICATES on purpose (status, stamina, a relation), and none of them is a no-op against the starter world. That is what lets an end-to-end run assert WHICH band was committed rather than merely that something was — a band whose effect the world already satisfied would be indistinguishable from a batch that never ran.",
   "roles": [
     {
       "name": "adjudicator",
@@ -113,9 +113,10 @@
                       ],
                       "full": [
                         {
-                          "type": "move_entity",
+                          "type": "remove_relationship",
                           "target": "c360.semmachina.world1.starter.character.rook",
-                          "location": "c360.semmachina.world1.starter.scene.gatehouse"
+                          "relation": "hostile-to",
+                          "object": "c360.semmachina.world1.starter.character.hollis"
                         }
                       ]
                     },
@@ -187,9 +188,10 @@
                       ],
                       "full": [
                         {
-                          "type": "move_entity",
+                          "type": "remove_relationship",
                           "target": "c360.semmachina.world1.starter.character.rook",
-                          "location": "c360.semmachina.world1.starter.scene.gatehouse"
+                          "relation": "hostile-to",
+                          "object": "c360.semmachina.world1.starter.character.hollis"
                         }
                       ]
                     },
@@ -261,9 +263,10 @@
                       ],
                       "full": [
                         {
-                          "type": "move_entity",
+                          "type": "remove_relationship",
                           "target": "c360.semmachina.world1.starter.character.rook",
-                          "location": "c360.semmachina.world1.starter.scene.gatehouse"
+                          "relation": "hostile-to",
+                          "object": "c360.semmachina.world1.starter.character.hollis"
                         }
                       ]
                     },
@@ -295,7 +298,7 @@
     },
     {
       "name": "invalid-effect",
-      "description": "The verdict is well-formed prose-side and proposes an effect type outside the closed vocabulary. The applier must reject the whole batch and fail the turn; this is the case F4 says provider strict-mode will not catch for us.",
+      "description": "The rejection that actually reaches the APPLIER. Every value here is in the closed vocabulary and every field is the right shape, so the tool boundary accepts the exit — what it proposes is a character moved INTO AN ITEM, and a wrong-KIND target can only be refused by something that reads the graph. That is F16's own example. An out-of-vocabulary effect TYPE would be a shorter story: the terminal tool refuses it, the model gets a correction, and the applier never sees it — which is why this scenario is a kind violation and not a type one.",
       "scripts": [
         {
           "role": "adjudicator",
@@ -317,13 +320,13 @@
                     "bands": {
                       "auto": [
                         {
-                          "type": "teleport_entity",
+                          "type": "move_entity",
                           "target": "c360.semmachina.world1.starter.character.rook",
-                          "location": "c360.semmachina.world1.starter.scene.gatehouse"
+                          "location": "c360.semmachina.world1.starter.item.crowbar"
                         }
                       ]
                     },
-                    "rationale": "An effect type nobody registered, proposed with total confidence — which is exactly how a model proposes one."
+                    "rationale": "A character moved into a crowbar, proposed with total confidence — which is exactly how a model proposes one. Nothing in `world.location.current` says a location is a place."
                   }
                 }
               ]
@@ -335,13 +338,52 @@
           "steps": [
             {
               "kind": "tool_call",
-              "description": "The narrator still runs on a rejected turn: it voices what actually happened, which is nothing.",
+              "description": "SCRIPTED AND NEVER CONSUMED — it is a trap, not a step. A refused batch fails the turn, `failed` is terminal, and the narration hop is gated on the effect-batch marker the applier never wrote. A call arriving here is the engine narrating a turn that did not happen, so the end-to-end suite asserts this script is untouched. Removing it would make that assertion unwritable: an engine that DID narrate would run off the end of an empty script and get a refusal, which is a different failure with a different message.",
               "usage": {"prompt_tokens": 880, "completion_tokens": 60},
               "tool_calls": [
                 {
                   "name": "submit_narration",
                   "arguments": {
                     "prose": "Rook hesitates at the winch, and the moment passes. Nothing in the yard has changed."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "out-of-vocabulary-effect",
+      "description": "The OTHER rejection, and the pair matters: this verdict proposes an effect TYPE nobody registered, which the terminal tool refuses at the boundary — the model gets a correction it can act on and the applier never sees it. `invalid-effect` is its twin one layer down, where every value is in vocabulary and only the graph can say the target is the wrong KIND. A suite carrying only one of the two would prove one boundary and call it validation.",
+      "scripts": [
+        {
+          "role": "adjudicator",
+          "steps": [
+            {
+              "kind": "tool_call",
+              "usage": {"prompt_tokens": 1240, "completion_tokens": 120},
+              "tool_calls": [
+                {
+                  "name": "submit_verdict",
+                  "arguments": {
+                    "scalars": {
+                      "plausibility": "plausible",
+                      "risk": "low",
+                      "consequence": "complication",
+                      "requires_roll": false
+                    },
+                    "modifiers": [],
+                    "bands": {
+                      "auto": [
+                        {
+                          "type": "teleport_entity",
+                          "target": "c360.semmachina.world1.starter.character.rook",
+                          "location": "c360.semmachina.world1.starter.scene.gatehouse"
+                        }
+                      ]
+                    },
+                    "rationale": "An effect type nobody registered, proposed with total confidence — which is exactly how a model proposes one."
                   }
                 }
               ]

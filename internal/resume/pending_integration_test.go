@@ -690,3 +690,59 @@ func TestWorkQueues_FindTheLoopConsumerDeclaredWithPluralFilters(t *testing.T) {
 		t.Fatalf("turn %s is reported %d times, want 1", entityID, pending[entityID])
 	}
 }
+
+// The measurement must survive being taken TWICE, and the reason is that a
+// crash-restart is exactly two passes in quick succession.
+//
+// Pending reads each subject through an EPHEMERAL, AckNone consumer carrying the
+// task filter, with a thirty-second inactive threshold. Those readers acknowledge
+// nothing, so their acknowledgement floor is zero — and a minimum taken over
+// EVERY consumer on the filter is therefore zero for half a minute after any
+// previous call. Every persona task ever published then reads as still queued, for
+// every turn, and the pass leaves every stranded turn exactly where it found it.
+//
+// The failing window is the one the pass exists for: a process that dies and comes
+// back inside thirty seconds runs against the floor its own previous run left
+// behind. So the second reading below must equal the first, and the assertion is
+// the finished task staying finished rather than merely the call succeeding.
+func TestWorkQueues_AreNotDisarmedByTheirOwnPreviousReading(t *testing.T) {
+	world := startPendingWorld(t)
+	world.loopConsumer(t)
+
+	// Pass one, over a queue where the loop has finished everything. It leaves an
+	// ephemeral reader behind whose cursor sits at the floor it read.
+	settled := world.publishTask(t, "turn-finished-before-the-first-pass")
+	world.consumeTasks(t, 1)
+
+	view := world.view(t)
+	if err := view.Settle(t.Context()); err != nil {
+		t.Fatalf("Settle: %v", err)
+	}
+	first, err := view.Pending(t.Context())
+	if err != nil {
+		t.Fatalf("first Pending: %v", err)
+	}
+	if first[settled] != 0 {
+		t.Fatalf("the first reading already reports a finished task as queued (%s=%d); this test's premise "+
+			"is that it does not", settled, first[settled])
+	}
+
+	// Work happens and finishes: the loop's own floor MOVES PAST the stale reader.
+	done := world.publishTask(t, "turn-finished-between-the-two-passes")
+	world.consumeTasks(t, 1)
+
+	// Pass two, inside the ephemeral readers' thirty-second inactive threshold —
+	// which is exactly what a process that died and came back does.
+	second, err := view.Pending(t.Context())
+	if err != nil {
+		t.Fatalf("second Pending: %v", err)
+	}
+	if second[done] != 0 {
+		t.Errorf("a task the loop FINISHED is reported %d times for %s on the second reading. The first "+
+			"reading's own ephemeral, AckNone cursor is still on the stream at the older floor, and the "+
+			"minimum is taken over every consumer on the filter — so a pass that runs within thirty seconds "+
+			"of another reads finished work as in flight, calls every such turn 'queued', and rescues none of "+
+			"the stranded ones. A crash-restart is precisely two passes in quick succession",
+			second[done], done)
+	}
+}
