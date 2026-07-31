@@ -85,7 +85,7 @@ SemStreams repo review; read it before scoping anything).
   runs out long before the budget does, and that, not map size, is what forces a
   cluster. Note the retrieval-bounded-context pin bounds **context depth per
   call**, which is why a big map is cheap; bounding **calls per turn** is a
-  different mechanism (capped cascades + LOD tiers, stage 9). A 1,000-NPC
+  different mechanism (capped cascades + LOD tiers, stage 10). A 1,000-NPC
   cognitive world is a different beast from a 10-NPC one even under identical
   pacing and an identical map. Distinguish cheap dials from baked ones —
   index precision is re-derivable from `ENTITY_STATES` at any time, whereas a
@@ -130,7 +130,18 @@ vision but are NOT on the active MVP path.
    `2026-07-31-turn-loop-vertical-slice`) — durable turn state, idempotent effects,
    validated closed-vocabulary mutations, crash tests; loads the starter world
    from a package-shaped fixture via an importer.
-2. **Template proof + place ontology** — instantiate the same starter world twice;
+2. **Minimum epistemic + companion safety proof** (active:
+   `mystery-companion-acceptance`) — use the original *Death in the Bellweather
+   Maze* case to prove secret-safe mystery play and first-class companion support.
+   Pull forward only the epistemic primitives required to keep canonical truth,
+   character belief, actor knowledge, and narration revelation separate, with a
+   centralized audience selector on every persona request. Kit Finch is a
+   character-backed reusable companion with scoped knowledge, rule-capped initiative,
+   deterministic hint progression, and narrator-owned voice; a second non-mystery binding
+   proves the capability is not case-specific. The case lifecycle and exact-ID accusation
+   verifier complete one mock-model E2E; Gemini is an opt-in smoke, never a CI dependency.
+   This stage does not complete the full epistemic or NPC-cognition roadmap stages.
+3. **Template proof + place ontology** — instantiate the same starter world twice;
    swap the narrator/tone pack; swap fiction-heavy vs mechanics-heavy rule packs;
    two materially different experiences on identical engine code. The first
    falsifiable test of the tunability claim ("the dial is rule-pack selection,
@@ -140,7 +151,7 @@ vision but are NOT on the active MVP path.
    ontology can say "Rook is in the gatehouse" but cannot say "the gatehouse
    connects to the courtyard" — there is no edge between places, so no map is
    expressible. Vocabulary is cheapest to change before more templates bind to it.
-3. **Creator surface + sense of place** — minimal Svelte client: action in,
+4. **Creator surface + sense of place** — minimal Svelte client: action in,
    narration out, and a **resolution card** (plausibility, risk, modifiers, roll,
    consequence) so outcomes are legible, never arbitrary; typed
    progress/error/reconnect. Plus the two orientation widgets a player needs to
@@ -155,7 +166,7 @@ vision but are NOT on the active MVP path.
    - Templates may carry authored **geometry**, not just topology — an authored
      world deserves author-controlled arrangement. Auto-layout from the connection
      graph is the fallback when a package supplies no coordinates, not the target.
-     Drawn regional art is a later media pack (see stage 10's typed packs).
+     Drawn regional art is a later media pack (see stage 11's typed packs).
    - The clock readout renders the campaign clock entity as a **fact, not an
      animation**: under reactive pacing time advances only on player action, so a
      visibly ticking clock would be a lie. Policy-aware from the first version.
@@ -164,7 +175,7 @@ vision but are NOT on the active MVP path.
      `.longitude` with radius, bounding-box, and GeoJSON polygon queries;
      `graph-index-temporal` buckets by minute/hour/day off a canonical event-time
      predicate. Both are projections over `ENTITY_STATES`, so they reward the
-     stage-2 ontology rather than substituting for it — with no coordinates and no
+     stage-3 ontology rather than substituting for it — with no coordinates and no
      connective edge, neither index has anything to index. Match the mechanism to
      the question: **adjacency is a graph edge** ("the gatehouse connects to the
      courtyard" — geohash cannot express connectivity, and two rooms a metre apart
@@ -176,26 +187,28 @@ vision but are NOT on the active MVP path.
      keep a large map in a modest band), and there is a **single** canonical
      event-time predicate, so indexing world time means real time falls back to
      ingestion time. Needing both indexed is an upstream ask, not a local index.
-4. **Scene completion + chronicler** — salience marking, vignette emission,
+5. **Scene completion + chronicler** — salience marking, vignette emission,
    Markdown preview/export (play-to-draft becomes demonstrable).
-5. **Continuity checking + retrieval evaluation** — the ops-role diff persona and
+6. **Continuity checking + retrieval evaluation** — the ops-role diff persona and
    an RPG-shaped retrieval-eval corpus (theme-spanning ground-truth queries).
-6. **Campaign/scene lifecycle** — `Participant` workflows, resume, curated
+7. **Campaign/scene lifecycle** — `Participant` workflows, resume, curated
    tone/crunch rule-pack presets.
-7. **Epistemic model** — canonical truth vs character belief vs player knowledge
-   vs narration-revealed; required BEFORE NPC cognition, else retrieval produces
-   spoilers and omniscient NPCs. It governs the **delta** on top of stage 3's
+8. **Full epistemic model** — extend the minimum stage-2 safety proof with belief
+   revision, contradiction reconciliation, stale beliefs, progressive discovery, and
+   multiplayer knowledge sharing. Canonical truth vs character belief vs player knowledge
+   vs narration-revealed remain required BEFORE NPC cognition, else retrieval produces
+   spoilers and omniscient NPCs. It governs the **delta** on top of stage 4's
    authored baseline — what a character has since discovered, been told, or been
    told wrongly. The base map does not wait on this; progressive discovery,
    rumored-but-unverified places, and stale player beliefs do.
-8. **World clock + pacing policies** — campaign clock entity, clock-policy modes
+9. **World clock + pacing policies** — campaign clock entity, clock-policy modes
    (reactive / scheduled / fiction-driven), deadline entities + threshold rules
    ("the caravan leaves at dawn"), deadline-warning notification egress over
    channel bindings, world-time stamps in the ledger. Prerequisite for NPC life
    ticks; useful long before them (time-sensitive choices work solo).
-9. **NPC cognition + cost governance** — tiered NPCs, decision/voice split,
+10. **NPC cognition + cost governance** — tiered NPCs, decision/voice split,
    admission-gate LOD (needs the upstream governance engine ask).
-10. **Deferred**: procedural world generation (as a **template author**, not an
+11. **Deferred**: procedural world generation (as a **template author**, not an
    engine feature — a generator emits a package that imports through the existing
    path, adding no engine surface and keeping worlds-as-data; an LLM naming and
    describing places at *generation* time bakes into the template and stays

@@ -1,0 +1,132 @@
+## 1. Vocabulary and Bellweather Package
+
+- [ ] 1.1 Add failing tests for case, evidence, belief, knowledge, revelation, and
+  companion-bond vocabulary, including immutable and rule-opaque classifications
+- [ ] 1.2 Add failing package-validation tests for one complete case, six suspects,
+  exactly twelve clues/red herrings, ordered timeline, and complete solution references
+- [ ] 1.3 Implement the registered vocabulary and typed authoring records required by
+  those tests
+- [ ] 1.4 Author `fixtures/worlds/bellweather-maze/` with Kit Finch as a character-backed
+  companion candidate and no engine-hardcoded world content
+- [ ] 1.5 Reject import, effect, world-rule, and operator-write attempts that mutate or
+  branch on canonical solution and truth-status predicates
+
+## 2. Case Lifecycle
+
+- [ ] 2.1 Add failing tests for the
+  `cold_open → discovery → investigation → accusation → denouement` phase graph
+- [ ] 2.2 Implement and register `CaseState` as a SemStreams lifecycle participant with
+  lifecycle-manager-exclusive phase writes
+- [ ] 2.3 Add recovery and duplicate-event tests proving one legal transition per
+  structured case event
+
+## 3. Epistemic Projection Safety
+
+- [ ] 3.1 Add table-driven failing tests with unique entity IDs and unique text values for
+  culprit, unrevealed-clue, and revealed-clue canaries across casekeeper, player,
+  companion, public adjudicator, narrator, denouement, verifier, and operator purposes
+- [ ] 3.2 Implement the centralized closed-purpose `EpistemicProjector` with bounded reads
+  and complete omission of unauthorized entities and identifiers
+- [ ] 3.3 Route adjudicator and narrator prompt assembly exclusively through the projector,
+  pin public-adjudicator acting-actor knowledge and exclusions, and remove the
+  audience-agnostic scene view as a direct persona input
+- [ ] 3.4 Assert canaries at projector, serialized prompt, mock-model request, and player
+  egress boundaries before connecting new personas
+
+## 4. Case Decisions and Interpretation Stage
+
+- [ ] 4.1 Add failing schema, validation, closed-vocabulary, deterministic-ID, eight-target,
+  twelve-reveal, duplicate-reference, accuse-field, JSON, and production-decoder tests for
+  `CaseDecision`
+- [ ] 4.2 Implement `CaseDecision` with `Schema()`, strict `Validate()`, alias-only JSON
+  methods, explicit payload registration, and all production/test bootstrap wiring
+- [ ] 4.3 Add the casekeeper role and terminal tool with private purpose-scoped context and
+  no rule-visible prose fields
+- [ ] 4.4 Add the durable `interpreting` turn stage, package-driven applicability, and a
+  deterministic no-model-call artifact for non-mystery turns
+- [ ] 4.5 Add restart and duplicate-delivery tests for one logical case decision per turn
+
+## 5. Knowledge and Testimony
+
+- [ ] 5.1 Add failing authorization tests for eligible reveals, premature solution facts,
+  wrong actors, wrong questioned targets, and attributed false testimony
+- [ ] 5.2 Implement `KnowledgeGranter` with actor-scoped grants and committed turn
+  revelation receipts
+- [ ] 5.3 Add witnessed-discovery and explicit-share flows proving player and companion
+  knowledge remain independent
+- [ ] 5.4 Keep testimony and narration prose in ObjectStore and graph/rule paths limited to
+  structural references
+
+## 6. Deterministic Accusation
+
+- [ ] 6.1 Add failing exact-ID tests for wrong culprit, method, motive, mixed failures, and
+  a complete correct accusation
+- [ ] 6.2 Add schema, strict validation, deterministic-ID, closed-vocabulary, alias-only
+  JSON, registry-bootstrap, and production-decoder tests for `AccusationResult`
+- [ ] 6.3 Implement `AccusationVerifier` without model calls or fuzzy comparison and emit
+  the registered closed `AccusationResult` payload
+- [ ] 6.4 Add rules that enter `accusation`, retain that phase after a wrong result, and
+  request `denouement` only after a correct result
+- [ ] 6.5 Prove wrong results disclose no failed dimension and correct results alone unlock
+  canonical solution context for denouement narration
+
+## 7. Companion Decisions and Bond
+
+- [ ] 7.1 Add failing schema, validation, closed-vocabulary, generic-context,
+  deterministic-ID, eight-evidence, duplicate-reference, JSON, and production-decoder
+  round-trip tests for `CompanionDecision`
+- [ ] 7.2 Implement `CompanionDecision` with `Schema()`, strict `Validate()`, alias-only
+  JSON methods, explicit payload registration, and all production/test bootstrap wiring
+- [ ] 7.3 Implement the durable player-companion bond and package-independent companion
+  role using generic `context_ref` and only the companion actor's epistemic projection
+- [ ] 7.4 Add runtime authorization that refuses any evidence reference outside the
+  companion's knowledge even when the payload is schema-valid
+- [ ] 7.5 Prove a second arbitrary player-character bond works outside Bellweather and
+  outside any mystery case without an engine branch
+
+## 8. Hint Ladder and Bounded Initiative
+
+- [ ] 8.1 Add failing tests for `nudge → connect → next-step`, final-level bounding, exact
+  reset on a newly committed companion knowledge grant, and no reset on duplicate or
+  rejected grants
+- [ ] 8.2 Implement deterministic `HintLadder` selection using companion-known evidence
+- [ ] 8.3 Add structured automatic-intervention triggers whose rule-owned nonzero cap is
+  the hard ceiling, with bond/component policy allowed only to tighten admission and a
+  silent exhaust path
+- [ ] 8.4 Add the durable `companion` turn stage and deterministic no-model-call artifact
+  when no active bond or trigger applies
+- [ ] 8.5 Add restart and duplicate-delivery tests proving one companion call and one
+  resolution at most per triggering turn
+
+## 9. Narration and Player Protocol
+
+- [ ] 9.1 Extend narration to voice only committed case revelations and companion
+  decisions from the player-authorized projection
+- [ ] 9.2 Add denouement-purpose narration and prove canonical solution canaries remain
+  unavailable before a correct accusation
+- [ ] 9.3 Add `CompanionResolution` with closed kind and conditional hint validation; pin
+  no active bond as absent and an active `silent` decision as a present silent summary
+- [ ] 9.4 Pin the new player/v1 fields, closed sets, delivery identity, and retrieval
+  round-trip in protocol tests
+
+## 10. Acceptance and Live Smoke
+
+- [ ] 10.1 Script the deterministic mock-model Bellweather path through discovery,
+  investigation, testimony, sharing, all hint levels, wrong accusation, correct
+  accusation, and denouement
+- [ ] 10.2 Add one full-stack mock E2E asserting case progression, companion behavior,
+  idempotency, and secret canaries with unique IDs and text values at every boundary
+- [ ] 10.3 Add an opt-in Taskfile Gemini smoke for one short investigation and Kit
+  exchange, loading `.env` without printing the key and excluding it from CI
+- [ ] 10.4 Document active polling and fast-abort checks for the paid Gemini smoke
+
+## 11. Quality Gates and Acceptance
+
+- [ ] 11.1 Run backend architecture review for lifecycle ownership, rule/component/persona
+  boundaries, and absence of SemStreams substrate workarounds
+- [ ] 11.2 Run backend code and security review for secret authorization, idempotency,
+  payload registry coverage, and error handling
+- [ ] 11.3 Run unit tests, race tests, mock E2E, lint, build, and strict OpenSpec validation
+- [ ] 11.4 Run the opt-in Gemini smoke only with operator authorization and record its
+  result separately from deterministic acceptance
+- [ ] 11.5 Archive this change only after every normative scenario and quality gate passes
