@@ -30,9 +30,10 @@ defaults:
 #
 # No model API keys, endpoints, or credentials are set either. The full turn
 # loop runs token-free against internal/mockmodel on loopback, and
-# internal/testinfra's TestSuite_NamesNoRemoteEndpoint fails the suite if any
-# committed source or fixture names a remote URL — so "no live inference" is
-# checked, not merely omitted.
+# internal/testinfra's TestSuite_NamesNoRemoteEndpoint fails the suite if
+# committed source or fixtures name a remote URL, except for the exact URL in
+# the inert Gemini live-smoke example — so "no live inference" is checked, not
+# merely omitted, while a deliberately manual configuration can still ship.
 
 jobs:
   lint:

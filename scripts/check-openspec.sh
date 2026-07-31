@@ -22,7 +22,7 @@ OPENSPEC_VERSION=${OPENSPEC_VERSION:-1.5.0}
 if command -v openspec >/dev/null 2>&1; then
   runner=(openspec)
 else
-  runner=(npx --yes "openspec@${OPENSPEC_VERSION}")
+  runner=(npx --yes "@fission-ai/openspec@${OPENSPEC_VERSION}")
 fi
 
 output=$("${runner[@]}" validate --all --strict 2>&1) && status=0 || status=$?

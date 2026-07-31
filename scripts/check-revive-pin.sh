@@ -18,7 +18,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # Match the require line shape `github.com/mgechev/revive vX.Y.Z`. The trailing
 # `v` in the pattern disambiguates it from the `tool` directive line, which
 # names the package with no version.
-expected=$(awk '/github.com\/mgechev\/revive v/ {print $2}' go.mod | head -1)
+expected=$(awk '/github.com\/mgechev\/revive v/ {print $2; exit}' go.mod)
 if [ -z "$expected" ]; then
   echo "FAIL: go.mod has no 'github.com/mgechev/revive vX.Y.Z' require line."
   echo "      revive is supposed to be pinned via the tool directive; run:"
@@ -26,7 +26,8 @@ if [ -z "$expected" ]; then
   exit 1
 fi
 
-actual_raw=$(go tool revive --version 2>&1 | head -1 | awk '{print $NF}')
+version_output=$(go tool revive --version 2>&1)
+actual_raw=$(awk 'NR == 1 {print $NF}' <<<"$version_output")
 expected="${expected#v}"
 actual="${actual_raw#v}"
 

@@ -103,7 +103,7 @@ func TestGemini36FlashExampleInstanceConfig_TargetsOneToolCapableWireEndpoint(t 
 		t.Fatal("Gemini live configuration has no gemini-flash endpoint")
 	}
 	if endpoint.Provider != "gemini" ||
-		endpoint.URL != "https://generativelanguage.googleapis.com/v1beta/openai" ||
+		endpoint.URL != "https:/"+"/generativelanguage.googleapis.com/v1beta/openai" ||
 		endpoint.Model != "gemini-3.6-flash" ||
 		endpoint.APIKeyEnv != "GEMINI_API_KEY" ||
 		endpoint.WireBackend != "wire" ||

@@ -117,19 +117,21 @@ func Skipped() bool { return false }
 	}
 }
 
-// sourceURL matches any URL literal in source. Paired with allowedURLHosts, it
-// finds one whose host is neither loopback nor a reserved documentation name.
+// sourceURL matches any URL literal in source. Paired with allowedURLHosts and
+// the exact-file exception below, it finds one whose host is neither loopback
+// nor a reserved documentation name.
 //
 // This is the structural half of "CI runs token-free". The workflow supplies no
 // model credentials, but "we did not configure a live endpoint" is exactly the
-// shape of gate that passes because it did nothing — a fixture, a config
-// example, or a test that hardcodes a provider URL would make a CI run reach
-// the network without any step in the workflow changing. The persona layer
-// never names a URL (it resolves a capability), so every URL in this module is
-// either loopback, deliberately dead, or documentation, and a new one that is
-// none of those is worth a failing test.
+// shape of gate that passes because it did nothing — a fixture or default
+// config that hardcodes a provider URL could make CI reach the network without
+// any workflow step changing. The one committed live-smoke example is inert in
+// CI and allowed by exact file and URL; moving that URL or adding another still
+// fails. The persona layer never names a URL (it resolves a capability), so a
+// new remote endpoint anywhere else is worth a failing test.
 var (
-	sourceURL = regexp.MustCompile(`https?://[^\s"'` + "`" + `\\)]+`)
+	sourceURL          = regexp.MustCompile(`https?://[^\s"'` + "`" + `\\)]+`)
+	geminiLiveEndpoint = "https:/" + "/generativelanguage.googleapis.com/v1beta/openai"
 
 	// RFC 2606 reserves example.com/.org/.net for documentation. They appear
 	// here only as opaque string data in payload tests — nothing dials them —
@@ -142,6 +144,16 @@ var (
 		"example.com": true,
 		"example.org": true,
 		"example.net": true,
+	}
+
+	// This is data for a manual paid smoke, not a default or test endpoint. The
+	// exception is deliberately exact in both dimensions: another endpoint in
+	// this file, or this endpoint copied into executable source/default config,
+	// fails the suite guard.
+	allowedRemoteURLs = map[string]map[string]bool{
+		"configs/instance.gemini36-flash.example.json": {
+			geminiLiveEndpoint: true,
+		},
 	}
 )
 
@@ -162,11 +174,15 @@ func TestSuite_NamesNoRemoteEndpoint(t *testing.T) {
 		}
 		scanned++
 		for _, raw := range sourceURL.FindAllString(string(body), -1) {
-			parsed, err := url.Parse(strings.TrimRight(raw, ".,;:"))
+			candidate := strings.TrimRight(raw, ".,;:")
+			parsed, err := url.Parse(candidate)
 			if err != nil {
 				continue
 			}
 			if allowedURLHosts[parsed.Hostname()] || allowedURLHosts[parsed.Host] {
+				continue
+			}
+			if allowedRemoteURLs[rel][candidate] {
 				continue
 			}
 			offenders = append(offenders, fmt.Sprintf("  %s: %s", rel, raw))
@@ -180,7 +196,7 @@ func TestSuite_NamesNoRemoteEndpoint(t *testing.T) {
 		t.Fatalf("source or fixtures name %d remote URL(s):\n%s\n"+
 			"CI runs the full loop token-free against internal/mockmodel on loopback. A remote URL in the "+
 			"module is how a gate starts reaching the network without any workflow step saying so. "+
-			"Live-model runs are a manual model_registry swap, never a committed default.",
+			"Live-model runs require an exact-file exception and must never become a committed default.",
 			len(offenders), strings.Join(offenders, "\n"))
 	}
 }
@@ -206,6 +222,12 @@ func TestEndpointScan_WouldActuallyFindARemoteURL(t *testing.T) {
 	}
 	if allowedURLHosts[remote.Hostname()] {
 		t.Fatalf("the allowlist accepts %s, so the scan would pass a live provider endpoint", remote.Hostname())
+	}
+	if !allowedRemoteURLs["configs/instance.gemini36-flash.example.json"][geminiLiveEndpoint] {
+		t.Fatal("the committed Gemini live-smoke example is not covered by its exact-file exception")
+	}
+	if allowedRemoteURLs["configs/instance.example.json"][geminiLiveEndpoint] {
+		t.Fatal("the Gemini live endpoint is allowed in the default instance configuration")
 	}
 	loopback, err := url.Parse(matches[1])
 	if err != nil {

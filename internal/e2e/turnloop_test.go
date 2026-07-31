@@ -422,6 +422,10 @@ func TestE2E_ARedeliveredActionMakesOneTurnAndBuysNoSecondCall(t *testing.T) {
 		t.Errorf("Rook carries %v, want %v", carried, want)
 	}
 
+	// Terminal turn state and ledger archival are separate durable consumers.
+	// Wait for the archive before counting it; reading immediately after the
+	// terminal phase races the ledger writer on a loaded race-enabled suite.
+	_ = awaitManifest(t, response.TurnID)
 	if count := manifestsFor(t, response.TurnID); count != 1 {
 		t.Errorf("the archive holds %d manifests for turn %s, want exactly 1", count, response.TurnID)
 	}
