@@ -374,12 +374,12 @@ func TestMarkImported_RefusesAnInstantiationThatDidNotComeFromClaim(t *testing.T
 	// The positive control: a claim that DID come from Claim still marks, so the
 	// refusal above is about provenance rather than about MarkImported having
 	// stopped working.
-	real, err := gate.Claim(t.Context())
+	genuine, err := gate.Claim(t.Context())
 	if err != nil {
 		t.Fatalf("second claim: %v", err)
 	}
-	real.Fresh = true // the second claim lost, as it must; the provenance is what is under test
-	if _, err := gate.MarkImported(t.Context(), real); err != nil {
+	genuine.Fresh = true // the second claim lost, as it must; the provenance is what is under test
+	if _, err := gate.MarkImported(t.Context(), genuine); err != nil {
 		t.Fatalf("a claim that came from Claim was refused: %v", err)
 	}
 }

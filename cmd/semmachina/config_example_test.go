@@ -33,7 +33,6 @@ func TestExampleInstanceConfig_BuildsAnEngine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the shipped example configuration does not parse: %v", err)
 	}
-
 	world, err := fixtures.StarterWorld()
 	if err != nil {
 		t.Fatalf("StarterWorld: %v", err)
@@ -61,5 +60,28 @@ func TestExampleInstanceConfig_BuildsAnEngine(t *testing.T) {
 	if engine.PlayerID() == "" || engine.SceneID() == "" || engine.CampaignID() == "" {
 		t.Errorf("the example resolved to player %q, scene %q, campaign %q",
 			engine.PlayerID(), engine.SceneID(), engine.CampaignID())
+	}
+}
+
+func TestQwen35ExampleInstanceConfig_TargetsOneLocalLiveSmokeModel(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/instance.qwen35-9b.example.json")
+	if err != nil {
+		t.Fatalf("read the qwen3.5 live-smoke configuration: %v", err)
+	}
+	cfg, err := boot.LoadConfig(raw)
+	if err != nil {
+		t.Fatalf("the qwen3.5 live-smoke configuration does not parse: %v", err)
+	}
+	if len(cfg.Models.Endpoints) != 1 {
+		t.Fatalf("qwen3.5 live-smoke endpoints = %d, want one", len(cfg.Models.Endpoints))
+	}
+	endpoint := cfg.Models.Endpoints["local-qwen"]
+	if endpoint == nil || endpoint.Model != "qwen3.5:9b" || endpoint.URL != "http://127.0.0.1:11434/v1" {
+		t.Fatalf("qwen3.5 live-smoke endpoint = %+v, want local Ollama qwen3.5:9b", endpoint)
+	}
+	for capability, declaration := range cfg.Models.Capabilities {
+		if len(declaration.Preferred) != 1 || declaration.Preferred[0] != "local-qwen" {
+			t.Errorf("capability %s prefers %v, want only local-qwen", capability, declaration.Preferred)
+		}
 	}
 }

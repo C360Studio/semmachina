@@ -13,7 +13,6 @@ import (
 	"github.com/c360studio/semmachina/internal/ledger"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/rulepack"
-	"github.com/c360studio/semmachina/internal/stage"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -211,9 +210,8 @@ func TestWriter_ArchivesOnTheRulePacksResolvedNotification(t *testing.T) {
 
 	// The stage stream is the rule pack's output home; in production the stage
 	// runner ensures it before ingress opens.
-	if _, err := world.harness.Client.EnsureStream(t.Context(), stage.StreamConfig()); err != nil {
-		t.Fatalf("ensure the %s stream: %v", rulepack.StageStream, err)
-	}
+	world.harness.EnsureArchivalStream(t, rulepack.StageStream,
+		[]string{rulepack.StageSubjectFilter}, "")
 	if err := world.writer.Start(context.Background()); err != nil {
 		t.Fatalf("start the ledger writer: %v", err)
 	}

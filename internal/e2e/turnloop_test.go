@@ -138,7 +138,7 @@ func TestE2E_ANoRollTurnResolvesEndToEnd(t *testing.T) {
 		t.Errorf("the manifest records phase %q", manifest.Phase)
 	}
 	if manifest.RollGate.Reported {
-		t.Errorf("the manifest records a reported roll gate of true for a turn that declined the dice")
+		t.Error("the manifest records a reported roll gate of true for a turn that declined the dice")
 	}
 	if count := manifestsFor(t, response.TurnID); count != 1 {
 		t.Errorf("the archive holds %d manifests for turn %s, want exactly 1", count, response.TurnID)
@@ -225,7 +225,7 @@ func TestE2E_EachOutcomeBandIsSelectedBySeedAndCommitted(t *testing.T) {
 				t.Fatalf("the delivered narration voices %+v, want band %q", delivery.Narration, fixture.Band)
 			}
 			if delivery.Result.Resolution == nil || delivery.Result.Resolution.Roll == nil {
-				t.Fatalf("the delivered resolution carries no roll for a turn that rolled")
+				t.Fatal("the delivered resolution carries no roll for a turn that rolled")
 			}
 			if got := delivery.Result.Resolution.Roll.Total; got != fixture.Total {
 				t.Errorf("the delivered resolution card reports total %d, want %d", got, fixture.Total)
@@ -243,14 +243,14 @@ func TestE2E_EachOutcomeBandIsSelectedBySeedAndCommitted(t *testing.T) {
 			// live engine produced rather than one a test constructed.
 			manifest := awaitManifest(t, response.TurnID)
 			if manifest.RollRef == "" {
-				t.Fatalf("the manifest records no roll reference for a turn that rolled")
+				t.Fatal("the manifest records no roll reference for a turn that rolled")
 			}
 			replay, err := w.replayReader(t).Replay(t.Context(), manifest)
 			if err != nil {
 				t.Fatalf("replay the archived turn: %v", err)
 			}
 			if replay.Reproduced == nil {
-				t.Fatalf("the replay reproduced no roll for a turn that rolled")
+				t.Fatal("the replay reproduced no roll for a turn that rolled")
 			}
 			if replay.Reproduced.Band != fixture.Band || replay.Reproduced.Total != fixture.Total {
 				t.Errorf("the replayed roll is band %q total %d, want %q %d",

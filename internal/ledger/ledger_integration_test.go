@@ -92,6 +92,8 @@ type archiveWorld struct {
 func startArchive(t *testing.T) *archiveWorld {
 	t.Helper()
 	harness := testinfra.Require(t)
+	harness.EnsureArchivalStream(t, ledger.Stream, []string{ledger.SubjectFilter},
+		ledger.DuplicateWindow.String())
 	namespace := fmt.Sprintf("w%d", worldCounter.Add(1))
 
 	store, err := graphio.NewStore(harness.Client)

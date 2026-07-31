@@ -108,6 +108,8 @@ func startGateway(t *testing.T) *liveGateway {
 		Subjects:  []string{live.subject},
 		Storage:   jetstream.FileStorage,
 		Retention: jetstream.LimitsPolicy,
+		MaxAge:    turn.ActionMaxAge,
+		MaxBytes:  turn.ActionMaxBytes,
 		Discard:   jetstream.DiscardNew,
 	}); err != nil {
 		t.Fatalf("EnsureStream %s: %v", live.stream, err)
@@ -456,7 +458,7 @@ func (l *liveGateway) awaitDrained(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatalf("the intake consumer never drained")
+	t.Fatal("the intake consumer never drained")
 }
 
 // Identity is not a connection, on the real path: a reconnect publishes actions

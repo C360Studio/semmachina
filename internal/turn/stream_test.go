@@ -1,6 +1,7 @@
 package turn_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/c360studio/semstreams/natsclient"
@@ -9,39 +10,17 @@ import (
 	"github.com/c360studio/semmachina/internal/turn"
 )
 
-// The failure this file exists to prevent, pinned against the DEFAULT it exists
-// to prevent — derived from natsclient rather than restated, so an upstream
-// change to the auto-create policy moves the comparison with it.
-//
-// Comparing the created stream to turn.ActionMaxAge, which is what the
-// integration readback does, proves the broker got what this package asked for
-// and says nothing about whether what it asked for is right: editing the
-// constant moves both sides of that assertion together. This one cannot be
-// satisfied by editing the constant to the wrong value, because the wrong value
-// is named on the other side.
-func TestActionStreamConfig_IsNotTheAutoCreateDefaultNobodyChose(t *testing.T) {
-	defaults := natsclient.DefaultStreamConfig()
-	if defaults == nil {
-		t.Fatal("natsclient no longer publishes an auto-create default; this comparison sees nothing")
-	}
-	if defaults.MaxAge == 0 {
-		t.Fatal("the auto-create default carries no MaxAge, so the hazard this constant guards against " +
-			"no longer exists and the comparison below is vacuous")
+// beta.159 has no auto-create retention default to compare against. The seam
+// now refuses an ordinary stream whose author did not state BOTH bounds, and
+// the action stream must pass that same production check.
+func TestActionStreamConfig_DeclaresTheBoundsBeta159Requires(t *testing.T) {
+	undeclared := jetstream.StreamConfig{Name: turn.ActionStream}
+	if err := natsclient.CheckStreamBounds(undeclared, "test negative control"); !errors.Is(err, natsclient.ErrStreamBoundsUndeclared) {
+		t.Fatalf("an unbounded ordinary stream returned %v, want ErrStreamBoundsUndeclared", err)
 	}
 
-	cfg := turn.ActionStreamConfig()
-	if cfg.MaxAge == defaults.MaxAge {
-		t.Errorf("MaxAge = %s, which is exactly natsclient's auto-create default; an action that expires "+
-			"before the engine reads it is a move that silently never happened, and a limit nobody chose "+
-			"is not a decision", cfg.MaxAge)
-	}
-	if cfg.MaxAge <= 0 {
-		t.Errorf("MaxAge = %s; the ingress queue is time-shaped and its bound is finite and stated",
-			cfg.MaxAge)
-	}
-	if cfg.MaxBytes <= 0 {
-		t.Errorf("MaxBytes = %d; an unbounded ingress queue is an unbounded resource on a single box",
-			cfg.MaxBytes)
+	if err := natsclient.CheckStreamBounds(turn.ActionStreamConfig(), "turn.ActionStreamConfig"); err != nil {
+		t.Fatalf("ActionStreamConfig does not satisfy beta.159's finite-bounds contract: %v", err)
 	}
 }
 

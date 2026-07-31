@@ -2,6 +2,7 @@ package dice_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -204,6 +205,13 @@ func TestIntegration_TheAppendLaneLeavesTwoBandsWhichIsWhyTheMergeLaneIsUsed(t *
 	}
 
 	for attempt := range 2 {
+		// beta.159 deduplicates an identical six-field tuple on the add lane.
+		// Give these occurrences distinct correlation contexts while keeping
+		// source and the single-valued predicate/object identical: that is the anomaly the
+		// merge lane prevents, not byte-identical redelivery.
+		for idx := range triples {
+			triples[idx].Context = fmt.Sprintf("append-control-%d", attempt)
+		}
 		request, err := json.Marshal(graph.AddTriplesBatchRequest{Triples: triples})
 		if err != nil {
 			t.Fatalf("encode add_batch: %v", err)
@@ -217,10 +225,10 @@ func TestIntegration_TheAppendLaneLeavesTwoBandsWhichIsWhyTheMergeLaneIsUsed(t *
 		if err := json.Unmarshal(reply, &response); err != nil {
 			t.Fatalf("decode add_batch response: %v", err)
 		}
-		// F7: a partial commit is a SUCCESS body with a nil error, so the
-		// failed-subject map is the only signal that a write did not land.
-		if len(response.FailedSubjects) != 0 {
-			t.Fatalf("add_batch reported failed subjects: %v", response.FailedSubjects)
+		if response.WrittenCount != len(triples) || response.Deduplicated != 0 ||
+			len(response.FailedSubjects) != 0 {
+			t.Fatalf("distinct-context add response = %+v, want written=%d deduplicated=0 and no failures",
+				response, len(triples))
 		}
 	}
 
@@ -229,6 +237,46 @@ func TestIntegration_TheAppendLaneLeavesTwoBandsWhichIsWhyTheMergeLaneIsUsed(t *
 	if len(bands) < 2 {
 		t.Fatalf("two append-lane writes left %d band(s) (%v); if the append lane now replaces, "+
 			"MergeTriples is no longer load-bearing and its doc comment is stale", len(bands), bands)
+	}
+}
+
+// beta.159 turns a byte-identical add into an explicit successful no-op. The
+// response signal is load-bearing: without it a caller cannot distinguish an
+// already-present occurrence from an empty or silently ignored request.
+func TestIntegration_TheAddLaneReportsAnIdenticalOccurrenceAsDeduplicated(t *testing.T) {
+	const turnID = "c360.semmachina.diceworld5.starter.turn.turn-act-1"
+	store, harness := realStore(t)
+	createTurnEntity(t, store, turnID)
+
+	triple := message.Triple{
+		Subject: turnID, Predicate: vocabulary.TurnRollBand.String(), Object: string(vocabulary.BandPartial),
+		Source: dice.Source, Timestamp: resolveTime, Confidence: 1, Context: "one-roll-occurrence",
+	}
+	add := func() graph.AddTriplesBatchResponse {
+		t.Helper()
+		request, err := json.Marshal(graph.AddTriplesBatchRequest{Triples: []message.Triple{triple}})
+		if err != nil {
+			t.Fatalf("encode add_batch: %v", err)
+		}
+		reply, err := harness.Client.RequestClassified(
+			t.Context(), graphingest.SubjectTripleAddBatch, request, 5*time.Second)
+		if err != nil {
+			t.Fatalf("add_batch: %v", err)
+		}
+		var response graph.AddTriplesBatchResponse
+		if err := json.Unmarshal(reply, &response); err != nil {
+			t.Fatalf("decode add_batch response: %v", err)
+		}
+		return response
+	}
+
+	first := add()
+	if first.WrittenCount != 1 || first.Deduplicated != 0 || len(first.FailedSubjects) != 0 {
+		t.Fatalf("first add response = %+v, want one committed occurrence", first)
+	}
+	second := add()
+	if second.WrittenCount != 0 || second.Deduplicated != 1 || len(second.FailedSubjects) != 0 {
+		t.Fatalf("identical add response = %+v, want written=0 deduplicated=1 and no failures", second)
 	}
 }
 

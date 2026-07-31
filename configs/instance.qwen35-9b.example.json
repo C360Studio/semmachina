@@ -1,0 +1,46 @@
+{
+  "nats_url": "nats://127.0.0.1:4222",
+
+  "org": "c360",
+  "world_ns": "gatehouse-qwen35",
+
+  "player": {
+    "local_id": "one",
+    "name": "The Player",
+    "character": "local:rook",
+    "credential": "CHANGE-ME-local-only-bearer-credential"
+  },
+
+  "socket": {
+    "addr": "127.0.0.1:8422",
+    "path": "/play"
+  },
+
+  "model_registry": {
+    "endpoints": {
+      "local-qwen": {
+        "provider": "openai",
+        "url": "http://127.0.0.1:11434/v1",
+        "model": "qwen3.5:9b",
+        "max_tokens": 32768,
+        "supports_tools": true,
+        "tool_format": "openai"
+      }
+    },
+    "capabilities": {
+      "fiction_adjudication": {
+        "description": "The engine's schema-bearing exit, retargeted to the local qwen3.5:9b live-smoke model.",
+        "preferred": ["local-qwen"],
+        "requires_tools": true
+      },
+      "narration": {
+        "description": "The narration exit uses the same local model for the first live-smoke run.",
+        "preferred": ["local-qwen"],
+        "requires_tools": true
+      }
+    },
+    "defaults": {
+      "model": "local-qwen"
+    }
+  }
+}

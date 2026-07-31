@@ -210,10 +210,42 @@ in play, that is data about the persona or the vocabulary, not a reason to re-ta
 
 ## Migration Plan
 
-Greenfield; nothing to migrate. Local run: NATS (Docker) + `cmd/semmachina` with the
-starter world fixture; CI runs unit + mock-LLM e2e. Rollback = git revert; no persistent
-state contract to preserve until a campaign is worth keeping (pre-v1 clean-break policy
-applies to any NATS state).
+The initial slice is greenfield, so it has no player data to migrate. Dependency upgrades
+can still require a compatibility migration while semstreams is pre-v1. Local run: NATS
+(Docker) + `cmd/semmachina` with the starter world fixture; CI runs unit + mock-LLM e2e.
+Rollback = git revert; no persistent state contract to preserve until a campaign is worth
+keeping (pre-v1 clean-break policy applies to any NATS state).
+
+### Semstreams v1.0.0-beta.159 compatibility migration (2026-07-31)
+
+The pin moved from `v1.0.0-beta.158` to `v1.0.0-beta.159`. The new tag rejects creation of
+an ordinary JetStream stream unless it has finite age and byte bounds or is explicitly
+declared archival. Semmachina now provisions its complete stream inventory immediately
+after connecting, before the component-level direct `EnsureStream` guards bind:
+
+- `ENTITY`, `TURN_STAGES`, and `CAMPAIGN_LEDGER` are explicit archival streams owned by
+  semmachina, with a reason recorded for each permanence contract.
+- `AGENT` and `PLAYER_ACTIONS` retain finite age and byte bounds.
+- The direct guards remain as bind/readback checks; declarative provisioning owns creation.
+
+Migration verification passed with `go test -p 1 ./...`, `go test -race -p 1 ./...`,
+`go vet ./...`, and `go build ./...`; the migration review approved the result. The full
+CI-equivalent gates subsequently passed: lint (including revive 1.15.0 and gate
+self-checks), native and linux/amd64 builds, strict OpenSpec validation, and an uncached
+race run of 2,050 tests across 24 packages with zero skips, including the mock E2E.
+
+The local live-smoke target is Ollama `qwen3.5:9b`. Installation and a direct
+OpenAI-compatible terminal-tool probe succeeded, but the first full live turn did not:
+the accepted action reached adjudication, then Ollama 0.31.2 returned HTTP 500 after
+generating malformed Qwen tool XML (`element <parameter> closed by </function>`). The
+shared 90-second deadline persisted and delivered a `persona-loop-failed` result after
+1m30.069s. A controlled retry on a fresh broker reached the same adjudicator with the same
+13.8 KB request. It produced about 976 output tokens at about 14.3 tokens/second without
+completing the tool call before the fixed 90-second task timeout, then persisted and
+delivered a second `persona-loop-failed` result after 1m30.068s. The current
+`qwen3.5:9b`/Ollama pairing therefore does not meet this production adjudicator contract's
+latency and schema budget; live inference remains an open gate. Both disposable NATS
+containers were stopped and automatically removed.
 
 ## Upstream Verification Findings (task group 1, semstreams v1.0.0-beta.158)
 

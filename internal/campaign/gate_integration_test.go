@@ -226,7 +226,7 @@ func TestIntegration_ClaimRefusesACampaignKeyOccupiedByAReferentialStub(t *testi
 		time.Sleep(50 * time.Millisecond)
 	}
 	if !occupied {
-		t.Fatalf("graph-ingest did not mint a referential stub at the campaign key; the premise no longer holds")
+		t.Fatal("graph-ingest did not mint a referential stub at the campaign key; the premise no longer holds")
 	}
 
 	claim, err := gate.Claim(t.Context())

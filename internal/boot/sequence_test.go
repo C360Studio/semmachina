@@ -259,13 +259,14 @@ func TestNewSequence_RefusesShapesThatCannotBeChecked(t *testing.T) {
 //     persona against a world whose import is unproven.
 var wantDependencies = map[boot.StepID][]boot.StepID{
 	boot.StepConnect:      nil,
-	boot.StepEntityStream: {boot.StepConnect},
+	boot.StepStreams:      {boot.StepConnect},
+	boot.StepEntityStream: {boot.StepStreams},
 	boot.StepGraph:        {boot.StepConnect, boot.StepEntityStream},
-	boot.StepAgentStream:  {boot.StepConnect},
+	boot.StepAgentStream:  {boot.StepStreams},
 	boot.StepPersonas:     {boot.StepConnect},
 	boot.StepAgentic:      {boot.StepAgentStream, boot.StepPersonas},
 	boot.StepWorld:        {boot.StepGraph},
-	boot.StepStageStream:  {boot.StepConnect},
+	boot.StepStageStream:  {boot.StepStreams},
 	boot.StepRules:        {boot.StepStageStream, boot.StepGraph, boot.StepWorld},
 	boot.StepResume: {
 		boot.StepRules, boot.StepStageStream, boot.StepAgentStream, boot.StepAgentic, boot.StepWorld,
@@ -273,7 +274,7 @@ var wantDependencies = map[boot.StepID][]boot.StepID{
 	boot.StepStages:       {boot.StepResume, boot.StepAgentic, boot.StepWorld},
 	boot.StepEgress:       {boot.StepStageStream, boot.StepResume},
 	boot.StepLedger:       {boot.StepWorld, boot.StepResume},
-	boot.StepActionStream: {boot.StepConnect},
+	boot.StepActionStream: {boot.StepStreams},
 	boot.StepIntake: {
 		boot.StepActionStream, boot.StepStages, boot.StepEgress, boot.StepLedger, boot.StepWorld,
 	},

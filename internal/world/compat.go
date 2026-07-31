@@ -19,7 +19,7 @@ const EngineModulePath = "github.com/c360studio/semstreams"
 // constant's honesty is enforced instead by a test that reads go.mod's require
 // directive — bumping the pin without touching this line fails the suite,
 // which is the right moment to re-read every world's engine_compat.
-const EngineVersion = "v1.0.0-beta.158"
+const EngineVersion = "v1.0.0-beta.159"
 
 // Operator is one comparison in an engine-compatibility constraint.
 type Operator string

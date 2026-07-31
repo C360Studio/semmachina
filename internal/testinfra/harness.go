@@ -21,12 +21,14 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	ssconfig "github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/payloadregistry"
 	graphindex "github.com/c360studio/semstreams/processor/graph-index"
 	graphingest "github.com/c360studio/semstreams/processor/graph-ingest"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/testcontainers/testcontainers-go"
 
 	"github.com/c360studio/semmachina/internal/payload"
@@ -78,6 +80,39 @@ type Harness struct {
 	indexErr  error
 
 	stop func()
+}
+
+// EnsureArchivalStream provisions a stream whose contract is permanence through
+// beta.159's declarative seam and returns the live stream. Programmatic
+// EnsureStream intentionally cannot classify an archive and therefore refuses
+// to create one without finite bounds.
+func (h *Harness) EnsureArchivalStream(
+	t *testing.T,
+	name string,
+	subjects []string,
+	duplicates string,
+) jetstream.Stream {
+	t.Helper()
+	cfg := &ssconfig.Config{
+		Version:  "1.0.0",
+		Platform: ssconfig.PlatformConfig{Org: "c360", ID: "semmachina-tests"},
+		Streams: ssconfig.StreamConfigs{
+			name: {
+				Subjects: subjects, Storage: "file", Retention: "limits", Duplicates: duplicates,
+			},
+		},
+		ArchivalStreams: ssconfig.ArchivalStreams{
+			name: {Owner: "semmachina", Reason: "the production stream contract requires permanent test evidence"},
+		},
+	}
+	if err := ssconfig.NewStreamsManager(h.Client, slog.Default()).EnsureStreams(t.Context(), cfg); err != nil {
+		t.Fatalf("provision archival stream %s: %v", name, err)
+	}
+	stream, err := h.Client.GetStream(t.Context(), name)
+	if err != nil {
+		t.Fatalf("read archival stream %s: %v", name, err)
+	}
+	return stream
 }
 
 var (

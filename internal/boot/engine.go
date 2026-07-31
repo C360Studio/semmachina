@@ -46,6 +46,9 @@ import (
 const (
 	// StepConnect opens the NATS connection.
 	StepConnect StepID = "connect"
+	// StepStreams declaratively provisions every ordinary stream this composition
+	// owns before a component can bind or publish.
+	StepStreams StepID = "streams"
 	// StepEntityStream creates the fact lane graph-ingest consumes and the world
 	// importer publishes onto.
 	StepEntityStream StepID = "entity-stream"
@@ -183,7 +186,7 @@ func (e *Engine) Steps() []Step { return e.seq.Steps() }
 // It is stated once, here, because the order IS the correctness argument and a
 // reader should not have to reassemble it from fifteen step declarations:
 //
-//  1. connect, then graph-ingest and graph-index — nothing else can read or
+//  1. connect, provision every stream, then graph-ingest and graph-index — nothing else can read or
 //     write authoritative state until the sole writer is running.
 //  2. the AGENT stream, then the world's persona fragments, then the agentic
 //     loop. The loop binds a consumer per declared input port, so its stream
@@ -298,7 +301,8 @@ func (e *Engine) stopComponents() {
 func (e *Engine) steps() []Step {
 	return []Step{
 		{ID: StepConnect, Run: e.connect},
-		{ID: StepEntityStream, Needs: []StepID{StepConnect}, Run: e.ensureEntityStream},
+		{ID: StepStreams, Needs: []StepID{StepConnect}, Run: e.ensureStreams},
+		{ID: StepEntityStream, Needs: []StepID{StepStreams}, Run: e.ensureEntityStream},
 		{
 			ID: StepGraph,
 			// The fact lane first: graph-ingest binds its input consumer with
@@ -307,7 +311,7 @@ func (e *Engine) steps() []Step {
 			Needs: []StepID{StepConnect, StepEntityStream},
 			Run:   e.startGraph,
 		},
-		{ID: StepAgentStream, Needs: []StepID{StepConnect}, Run: e.ensureAgentStream},
+		{ID: StepAgentStream, Needs: []StepID{StepStreams}, Run: e.ensureAgentStream},
 		{ID: StepPersonas, Needs: []StepID{StepConnect}, Run: e.seedPersonas},
 		{
 			ID: StepAgentic,
@@ -327,7 +331,7 @@ func (e *Engine) steps() []Step {
 			Needs: []StepID{StepGraph},
 			Run:   e.instantiate,
 		},
-		{ID: StepStageStream, Needs: []StepID{StepConnect}, Run: e.ensureStageStream},
+		{ID: StepStageStream, Needs: []StepID{StepStreams}, Run: e.ensureStageStream},
 		{
 			ID: StepRules,
 			// The stage stream must exist before a rule can fire: the pack's
@@ -371,7 +375,7 @@ func (e *Engine) steps() []Step {
 			Run:   e.startEgress,
 		},
 		{ID: StepLedger, Needs: []StepID{StepWorld, StepResume}, Run: e.startLedger},
-		{ID: StepActionStream, Needs: []StepID{StepConnect}, Run: e.ensureActionStream},
+		{ID: StepActionStream, Needs: []StepID{StepStreams}, Run: e.ensureActionStream},
 		{
 			ID: StepIntake,
 			// The last step before a stranger can add work, and the one the

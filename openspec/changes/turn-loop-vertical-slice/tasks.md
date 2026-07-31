@@ -24,6 +24,13 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       via validate-then-commit + idempotent retry; no upstream issue filed
 - [x] 1.4 Pinned `github.com/c360studio/semstreams v1.0.0-beta.158`; `go build ./...` and
       `go vet ./...` clean against the full import surface the slice needs
+- [x] 1.5 Migrated the pin to `v1.0.0-beta.159`. Its ordinary-stream lifecycle contract is
+      declared before component-level direct guards: `ENTITY`, `TURN_STAGES`, and
+      `CAMPAIGN_LEDGER` are explicit semmachina-owned archives; `AGENT` and
+      `PLAYER_ACTIONS` have finite age and byte bounds. Migration verification passed with
+      `go test -p 1 ./...`, `go test -race -p 1 ./...`, `go vet ./...`, and
+      `go build ./...`; the migration review approved the result. Historical beta.158
+      findings below remain the evidence for the original slice design
 
 ## 2. Vocabulary and payloads
 
@@ -650,13 +657,29 @@ speaks and it is expensive to retrofit.
       step's `rejected` entry must be flipped; duplicate action delivery;
       crash-resume at each phase (kill between roll and apply at minimum); reconnect
       retrieval; email-cadence gap (clock-independent processing)
-- [ ] 10.4 CI workflow: lint (revive-clean), `go test -race ./...`, mock-LLM e2e; no live
+- [x] 10.4 CI workflow: lint (revive-clean), `go test -race ./...`, mock-LLM e2e; no live
       inference anywhere in the gate. Assert **zero skips** across the module — that count
       is load-bearing now that missing infrastructure fails rather than skips, so a skip
       creeping back in is a coverage regression the suite would otherwise report as `ok`.
       Note `internal/vocabulary` trips revive's `max-public-structs` (a closed vocabulary is
       exported types by construction — raise or disable it for that package rather than
       contorting the vocabulary), and a few `t.Fatalf` calls with constant strings will want
-      `t.Fatal` once a linter lands
+      `t.Fatal` once a linter lands. Evidence: `task lint` passed `go vet`, gofmt, revive
+      1.15.0, revive self-checks, and zero-skip gate self-checks; `task build` passed native
+      and linux/amd64 cross-compilation; `task spec` passed strict validation; `task test`
+      passed race-enabled and uncached with 2,050 tests across 24 packages, zero skipped,
+      including the mock E2E
 - [ ] 10.5 Run `semmachina-reviewer` on the full slice pre-merge; resolve findings;
       update task truth conservatively with evidence
+- [ ] 10.6 Complete the first live-model turn with local Ollama `qwen3.5:9b`. The model is
+      installed and a direct OpenAI-compatible terminal-tool probe passed, but the first
+      full turn failed after reaching adjudication: Ollama 0.31.2 generated malformed Qwen
+      tool XML (`element <parameter> closed by </function>`) and returned HTTP 500. The
+      shared 90-second deadline then persisted and delivered `persona-loop-failed` after
+      1m30.069s. A controlled retry on a fresh broker sent the same 13.8 KB adjudicator
+      request; the model produced about 976 output tokens at about 14.3 tokens/second but
+      did not complete the tool call before the fixed 90-second timeout. The engine
+      persisted and delivered a second `persona-loop-failed` result after 1m30.068s. The
+      current Qwen/Ollama pairing does not meet this contract's latency and schema budget.
+      Both disposable NATS containers were stopped and automatically removed; this item
+      stays open until a full live turn succeeds

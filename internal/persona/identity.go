@@ -88,10 +88,7 @@ func (i Identity) Validate() error {
 	if err := vocabulary.ValidateIDSegment(i.ActionID); err != nil {
 		return fmt.Errorf("action_id: %w", err)
 	}
-	if err := requireEntityID("scene_id", i.SceneID); err != nil {
-		return err
-	}
-	return nil
+	return requireEntityID("scene_id", i.SceneID)
 }
 
 // metadata renders the identity as the map a task carries.

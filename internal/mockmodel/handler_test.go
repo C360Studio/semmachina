@@ -340,10 +340,10 @@ func TestServe_RecordsTheStructuralFactsOfEachRequest(t *testing.T) {
 		t.Fatalf("the recorded usage is %+v", call.Usage)
 	}
 	if !bytes.Contains(call.Body, []byte("crowbar")) {
-		t.Fatalf("the raw body was not recorded")
+		t.Fatal("the raw body was not recorded")
 	}
 	if len(handler.CallsFor("narrator")) != 0 {
-		t.Fatalf("CallsFor returned calls for a role that was never invoked")
+		t.Fatal("CallsFor returned calls for a role that was never invoked")
 	}
 }
 

@@ -76,8 +76,8 @@ type Option func(*Assembler)
 
 // WithMaxEntities overrides the per-context entity cap. Worlds are data, so a
 // world that genuinely needs a bigger room says so here.
-func WithMaxEntities(max int) Option {
-	return func(a *Assembler) { a.maxEntities = max }
+func WithMaxEntities(limit int) Option {
+	return func(a *Assembler) { a.maxEntities = limit }
 }
 
 // WithClock overrides the assembler's clock, so an assembled view's timestamp is

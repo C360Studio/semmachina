@@ -81,10 +81,8 @@ func startParkedWorld(t *testing.T) *parkedWorld {
 	if err != nil {
 		t.Fatalf("NewRecorder: %v", err)
 	}
-	stream, err := harness.Client.EnsureStream(t.Context(), stage.StreamConfig())
-	if err != nil {
-		t.Fatalf("ensure the stage stream: %v", err)
-	}
+	stream := harness.EnsureArchivalStream(t, rulepack.StageStream,
+		[]string{rulepack.StageSubjectFilter}, "")
 	agent, err := harness.Client.EnsureStream(t.Context(), stage.AgentStreamConfig())
 	if err != nil {
 		t.Fatalf("ensure the agent stream: %v", err)
@@ -189,7 +187,7 @@ func (w *parkedWorld) drainStageTriggers(t *testing.T) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatalf("this world's stage triggers were still pending after 30s; the next test would inherit them")
+	t.Fatal("this world's stage triggers were still pending after 30s; the next test would inherit them")
 }
 
 // stageConsumersIdle reads the engine's stage consumers on a background context.

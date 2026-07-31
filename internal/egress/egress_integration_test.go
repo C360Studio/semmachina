@@ -570,9 +570,8 @@ func (w *egressWorld) requireRetired(t *testing.T, sequence uint64) {
 
 func (w *egressWorld) startNotifier(t *testing.T) {
 	t.Helper()
-	if _, err := w.harness.Client.EnsureStream(t.Context(), stage.StreamConfig()); err != nil {
-		t.Fatalf("ensure the %s stream: %v", rulepack.StageStream, err)
-	}
+	w.harness.EnsureArchivalStream(t, rulepack.StageStream,
+		[]string{rulepack.StageSubjectFilter}, "")
 	if err := w.notifier.Start(context.Background()); err != nil {
 		t.Fatalf("start the egress notifier: %v", err)
 	}
@@ -587,9 +586,8 @@ func (w *egressWorld) startNotifier(t *testing.T) {
 // mid-campaign, and it is an operator deleting a wedged consumer.
 func (w *egressWorld) dropEgressConsumer(t *testing.T) {
 	t.Helper()
-	if _, err := w.harness.Client.EnsureStream(t.Context(), stage.StreamConfig()); err != nil {
-		t.Fatalf("ensure the %s stream: %v", rulepack.StageStream, err)
-	}
+	w.harness.EnsureArchivalStream(t, rulepack.StageStream,
+		[]string{rulepack.StageSubjectFilter}, "")
 	js, err := w.harness.Client.JetStream()
 	if err != nil {
 		t.Fatalf("jetstream: %v", err)

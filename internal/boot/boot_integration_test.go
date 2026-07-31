@@ -99,22 +99,16 @@ func startBroker() (*natsclient.TestClient, error) {
 	return natsclient.NewSharedTestClient(natsclient.WithJetStream())
 }
 
-// keepComponentStatusHistory pre-creates COMPONENT_STATUS with room for history.
+// keepComponentStatusHistory pre-creates COMPONENT_STATUS in the catalog shape.
 //
-// The rule processor creates this bucket itself, with the default history of one
-// — which keeps the latest value per key and nothing else, so a DELETE marker is
-// overwritten by the write that follows it and becomes unobservable. Upstream's
-// CreateKeyValueBucket is get-or-create, so a bucket that already exists is used
-// as it is: making it first, before any processor runs, is what lets a test see
-// that the boot deleted the key rather than merely that somebody wrote one.
-//
-// It changes nothing about the engine's behaviour. History is a retention
-// setting; every read either side of it returns the same latest value.
+// beta.159's framework bucket catalog owns its History=1 declaration and
+// reconciles every reporter acquisition to it, so a delete followed by the
+// processor's status write intentionally leaves only the write observable.
 func keepComponentStatusHistory(client *natsclient.TestClient) error {
 	_, err := client.Client.CreateKeyValueBucket(context.Background(), jetstream.KeyValueConfig{
 		Bucket:      "COMPONENT_STATUS",
 		Description: "Component lifecycle status tracking",
-		History:     10,
+		History:     1,
 	})
 	return err
 }
@@ -447,12 +441,11 @@ func requireRuleStatusPresent(t *testing.T) {
 // always fails — a boot that refuses every deployment — and nothing would say
 // which of the two strings had moved.
 //
-// The REVISION is what proves the mechanism rather than merely the coordinates. A
-// key is planted by a real processor in another namespace; the boot under test
-// then deletes it and its own processor writes a fresh one, so the revision
-// strictly increases. A boot that skipped the delete would leave the planted
-// revision untouched, and the check above would then be reading somebody else's
-// status.
+// The REVISION proves this boot wrote a fresh report rather than merely reading
+// the planted one. The preceding stale-status test is the functional proof that
+// the leftover alone cannot satisfy the resume precondition. beta.159's catalog
+// fixes COMPONENT_STATUS at History=1, so the intermediate delete marker is no
+// longer retained after the subsequent write.
 func TestRuleProcessorStatus_IsDeletedAndRewrittenByEachBoot(t *testing.T) {
 	cfg := bootConfig(t)
 
@@ -482,17 +475,6 @@ func TestRuleProcessorStatus_IsDeletedAndRewrittenByEachBoot(t *testing.T) {
 			"nor rewrote it, so its precondition is reading somebody else's report", entry.Revision())
 	}
 
-	// The revision alone proves a WRITE, and the processor's own report would
-	// supply that whether or not the boot cleared anything first. What makes the
-	// check existential rather than hopeful is the DELETE, so the delete is what
-	// this asserts: a tombstone above the planted revision, which only this boot
-	// could have put there.
-	if !deletedAbove(t, bucket, planted) {
-		t.Errorf("no delete marker sits above revision %d. The boot rewrote the status without first clearing "+
-			"it, so a deployment whose lifecycle reporting is broken would pass this precondition on an earlier "+
-			"boot's leftover key — which is the one ordering constraint that ends live turns", planted)
-	}
-
 	var status struct {
 		Component string `json:"component"`
 		Stage     string `json:"stage"`
@@ -507,22 +489,6 @@ func TestRuleProcessorStatus_IsDeletedAndRewrittenByEachBoot(t *testing.T) {
 		t.Error("the status carries no stage; the check requires one, so an upstream that stopped writing it " +
 			"would refuse every boot")
 	}
-}
-
-// deletedAbove reports whether the key was DELETED at some revision above the
-// given one.
-func deletedAbove(t *testing.T, bucket jetstream.KeyValue, above uint64) bool {
-	t.Helper()
-	history, err := bucket.History(t.Context(), "rule-processor")
-	if err != nil {
-		t.Fatalf("read the rule-processor status history: %v", err)
-	}
-	for _, entry := range history {
-		if entry.Revision() > above && entry.Operation() == jetstream.KeyValueDelete {
-			return true
-		}
-	}
-	return false
 }
 
 // ruleStatusRevision reads the current revision of the rule processor's status.
@@ -745,17 +711,17 @@ func TestBoot_DoesNotMarkAnImportWhoseReadbackRefused(t *testing.T) {
 	}
 }
 
-// The AGENT stream belongs to whoever runs the agentic loop, and EnsureStream is
-// get-or-create with NO reconcile — so a stream somebody else created with
-// narrower subjects is returned exactly as it is.
+// The declarative stream manager owns AGENT provisioning and reconciliation.
+// A stream somebody else created with narrower subjects is repaired before the
+// direct component-boundary guard binds it.
 //
 // Nothing else would notice. The server ACCEPTS a consumer whose filter lies
 // outside its stream's subjects (measured), so the loop and agentic-tools both
 // start, bind everything, and look healthy — until the first tool call is
 // published onto `tool.execute.*`, is captured by nothing, and the persona burns
-// its whole budget waiting for a result that cannot arrive. This boot refuses
-// instead.
-func TestBoot_RefusesAnAgentStreamThatDoesNotCaptureTheToolLane(t *testing.T) {
+// its whole budget waiting for a result that cannot arrive. The manager must
+// make that state impossible before the loop starts.
+func TestBoot_RepairsAnAgentStreamThatDoesNotCaptureTheToolLane(t *testing.T) {
 	client := requireBroker(t)
 	js := jetStream(t)
 
@@ -773,13 +739,20 @@ func TestBoot_RefusesAnAgentStreamThatDoesNotCaptureTheToolLane(t *testing.T) {
 
 	engine := newTestEngine(t, bootConfig(t))
 	t.Cleanup(engine.Stop)
-	err := engine.Start(t.Context())
-	if err == nil {
-		t.Fatal("a boot accepted an AGENT stream that does not capture the tool-dispatch lane; every persona's " +
-			"terminal exit would be published to nobody and every turn would end as a cap exhaustion")
+	if err := engine.StartThrough(t.Context(), boot.StepAgentStream); err != nil {
+		t.Fatalf("boot did not repair the narrow AGENT stream: %v", err)
 	}
-	if !strings.Contains(err.Error(), persona.ToolExecuteSubjectFilter) {
-		t.Errorf("the refusal does not name the uncaptured subject: %v", err)
+	stream, err := js.Stream(t.Context(), persona.TaskStream)
+	if err != nil {
+		t.Fatalf("read the repaired AGENT stream: %v", err)
+	}
+	info, err := stream.Info(t.Context())
+	if err != nil {
+		t.Fatalf("read the repaired AGENT configuration: %v", err)
+	}
+	if !slices.Contains(info.Config.Subjects, persona.ToolExecuteSubjectFilter) {
+		t.Fatalf("repaired AGENT subjects = %v, still missing %s",
+			info.Config.Subjects, persona.ToolExecuteSubjectFilter)
 	}
 }
 

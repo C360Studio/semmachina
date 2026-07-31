@@ -125,13 +125,13 @@ func TestSessions_RebindingLeavesNoResidueOnTheFormerPlayer(t *testing.T) {
 // while every black-box test still passed: forPlayer cross-checks byConnID, so
 // the residue answers correctly and accumulates.
 func TestSessions_CannotGrowPastTheRosterTimesTheCap(t *testing.T) {
-	const cap_ = 2
+	const perPlayerCap = 2
 	players := []string{
 		"c360.semmachina.world1.starter.player.pat",
 		"c360.semmachina.world1.starter.player.alex",
 		"c360.semmachina.world1.starter.player.robin",
 	}
-	table := newSessions(cap_)
+	table := newSessions(perPlayerCap)
 
 	refused := 0
 	for attempt := range 200 {
@@ -148,7 +148,7 @@ func TestSessions_CannotGrowPastTheRosterTimesTheCap(t *testing.T) {
 	if refused == 0 {
 		t.Fatal("200 connections for three players were all admitted, so the bound below proves nothing")
 	}
-	if want := len(players) * cap_; len(table.byConnID) != want {
+	if want := len(players) * perPlayerCap; len(table.byConnID) != want {
 		t.Fatalf("the connection index holds %d entries after 200 attempts, want at most %d — the table's "+
 			"bound is (roster size × cap) and it is what stands in for a session TTL", len(table.byConnID), want)
 	}
@@ -156,8 +156,8 @@ func TestSessions_CannotGrowPastTheRosterTimesTheCap(t *testing.T) {
 		t.Fatalf("the delivery index holds %d player entries, want %d", len(table.byPlayerID), len(players))
 	}
 	for player, connections := range table.byPlayerID {
-		if len(connections) > cap_ {
-			t.Fatalf("player %s holds %d connections, past the cap of %d", player, len(connections), cap_)
+		if len(connections) > perPlayerCap {
+			t.Fatalf("player %s holds %d connections, past the cap of %d", player, len(connections), perPlayerCap)
 		}
 	}
 }

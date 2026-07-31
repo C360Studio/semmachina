@@ -38,15 +38,8 @@ type pendingWorld struct {
 func startPendingWorld(t *testing.T) *pendingWorld {
 	t.Helper()
 	harness := testinfra.Require(t)
-	stream, err := harness.Client.EnsureStream(t.Context(), jetstream.StreamConfig{
-		Name:      rulepack.StageStream,
-		Subjects:  []string{rulepack.StageSubjectFilter},
-		Storage:   jetstream.FileStorage,
-		Retention: jetstream.LimitsPolicy,
-	})
-	if err != nil {
-		t.Fatalf("ensure the stage stream: %v", err)
-	}
+	stream := harness.EnsureArchivalStream(t, rulepack.StageStream,
+		[]string{rulepack.StageSubjectFilter}, "")
 	agent, err := harness.Client.EnsureStream(t.Context(), jetstream.StreamConfig{
 		Name:      persona.TaskStream,
 		Subjects:  []string{persona.AgentSubjectFilter},

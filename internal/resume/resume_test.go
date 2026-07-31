@@ -171,7 +171,7 @@ type fakeDetails struct {
 }
 
 func (f *fakeDetails) PutFailureDetail(
-	_ context.Context, turnEntityID string, detail *content.FailureDetail,
+	_ context.Context, _ string, detail *content.FailureDetail,
 ) (content.Ref, error) {
 	f.stored = append(f.stored, detail)
 	if f.err != nil {

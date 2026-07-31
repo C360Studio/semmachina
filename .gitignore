@@ -30,3 +30,6 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# task test writes its go test -json stream here
+.task-gotest.json

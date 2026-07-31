@@ -355,16 +355,16 @@ func TestAuthenticate_RefusesACredentialThisWorldDoesNotKnow(t *testing.T) {
 // "player_id is a graph entity" is a READ, not a naming convention.
 func TestAuthenticate_RefusesAPlayerThatIsNotARealEntity(t *testing.T) {
 	tests := []struct {
-		name   string
-		break_ func(*fakeStore)
+		name     string
+		sabotage func(*fakeStore)
 	}{
 		{
-			name:   "the player was never imported",
-			break_: func(s *fakeStore) { delete(s.entities, testPlayerID) },
+			name:     "the player was never imported",
+			sabotage: func(s *fakeStore) { delete(s.entities, testPlayerID) },
 		},
 		{
 			name: "the player is only a referential stub",
-			break_: func(s *fakeStore) {
+			sabotage: func(s *fakeStore) {
 				s.entities[testPlayerID] = stubEntity(testPlayerID)
 			},
 		},
@@ -373,7 +373,7 @@ func TestAuthenticate_RefusesAPlayerThatIsNotARealEntity(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			h := newHarness(t)
-			test.break_(h.store)
+			test.sabotage(h.store)
 
 			_, err := h.gateway.Authenticate(t.Context(), testCredential, conn(testConnID))
 			if !errors.Is(err, gateway.ErrUnauthenticated) {

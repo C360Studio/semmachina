@@ -189,9 +189,10 @@ func splitSix(entityID string) [6]string {
 
 // The F14 regression guard for the adjudicator's exit, against a real broker: a
 // resumed persona that exits a second time must leave ONE verdict on the turn.
-// The negative control below is the whole reason this test exists — the same
-// triples through the appending lane leave two, with a success response and no
-// error anywhere.
+// The negative control below is the whole reason this test exists — a distinct
+// observation of the same scalar through the appending lane leaves two, with a
+// success response and no error anywhere. beta.159 correctly deduplicates a
+// byte-identical six-field retry, so provenance is varied deliberately.
 func TestIntegration_ARepeatedVerdictLeavesOneValuePerPredicate(t *testing.T) {
 	world := startLive(t)
 	arguments := world.verdictArguments(t)
@@ -240,13 +241,22 @@ func appendSameVerdict(t *testing.T, world *live, state *graph.EntityState) {
 	if existing.Predicate == "" {
 		t.Fatal("the turn carries no plausibility to duplicate")
 	}
+	existing.Context = "append-lane-negative-control"
 	request, err := json.Marshal(graph.AddTriplesBatchRequest{Triples: []message.Triple{existing}})
 	if err != nil {
 		t.Fatalf("encode batch add: %v", err)
 	}
-	if _, err := world.harness.Client.RequestClassified(
-		t.Context(), "graph.mutation.triple.add_batch", request, graphio.DefaultTimeout); err != nil {
+	reply, err := world.harness.Client.RequestClassified(
+		t.Context(), "graph.mutation.triple.add_batch", request, graphio.DefaultTimeout)
+	if err != nil {
 		t.Fatalf("the appending lane refused the write, so the control proves nothing: %v", err)
+	}
+	var response graph.AddTriplesBatchResponse
+	if err := json.Unmarshal(reply, &response); err != nil {
+		t.Fatalf("decode append-lane response: %v", err)
+	}
+	if response.WrittenCount != 1 || response.Deduplicated != 0 || len(response.FailedSubjects) != 0 {
+		t.Fatalf("distinct-context add response = %+v, want written=1 deduplicated=0 and no failures", response)
 	}
 }
 
@@ -370,7 +380,7 @@ func TestIntegration_TheResumeCheckReadsTheArtifactTheGraphActuallyHolds(t *test
 		t.Fatalf("Check(narrator): %v", err)
 	}
 	if narrator.Decision != persona.DecisionRun {
-		t.Fatalf("the narrator was skipped on the strength of the adjudicator's work")
+		t.Fatal("the narrator was skipped on the strength of the adjudicator's work")
 	}
 }
 

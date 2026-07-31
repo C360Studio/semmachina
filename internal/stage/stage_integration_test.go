@@ -100,6 +100,8 @@ func startLoop(t *testing.T) *loop {
 	t.Helper()
 	harness := testinfra.Require(t)
 	harness.RequireIndex(t)
+	harness.EnsureArchivalStream(t, rulepack.StageStream,
+		[]string{rulepack.StageSubjectFilter}, "")
 	namespace := fmt.Sprintf("w%d", worldCounter.Add(1))
 
 	store, err := graphio.NewStore(harness.Client)

@@ -211,6 +211,9 @@ func startIntake(t *testing.T, opts ...turn.IntakeOption) *liveIntake {
 		Subjects:  []string{subject},
 		Storage:   jetstream.FileStorage,
 		Retention: jetstream.LimitsPolicy,
+		MaxAge:    turn.ActionMaxAge,
+		MaxBytes:  turn.ActionMaxBytes,
+		Discard:   jetstream.DiscardNew,
 	}); err != nil {
 		t.Fatalf("EnsureStream %s: %v", stream, err)
 	}
@@ -534,6 +537,12 @@ func TestIntegration_TheAppendLaneLeavesTwoPhasesWhichIsWhyTheMergeLaneIsUsed(t 
 	}
 
 	for attempt := range 2 {
+		// beta.159 deduplicates an identical six-field tuple. These are two
+		// distinct observations of the same single-valued phase, which the add
+		// lane must preserve and the merge lane must replace.
+		for idx := range triples {
+			triples[idx].Context = fmt.Sprintf("append-control-%d", attempt)
+		}
 		request, err := json.Marshal(graph.AddTriplesBatchRequest{Triples: triples})
 		if err != nil {
 			t.Fatalf("encode add_batch: %v", err)
@@ -547,10 +556,10 @@ func TestIntegration_TheAppendLaneLeavesTwoPhasesWhichIsWhyTheMergeLaneIsUsed(t 
 		if err := json.Unmarshal(reply, &response); err != nil {
 			t.Fatalf("decode add_batch response: %v", err)
 		}
-		// A partial commit is a SUCCESS body with a nil error, so the
-		// failed-subject map is the only signal that a write did not land.
-		if len(response.FailedSubjects) != 0 {
-			t.Fatalf("add_batch reported failed subjects: %v", response.FailedSubjects)
+		if response.WrittenCount != len(triples) || response.Deduplicated != 0 ||
+			len(response.FailedSubjects) != 0 {
+			t.Fatalf("distinct-context add response = %+v, want written=%d deduplicated=0 and no failures",
+				response, len(triples))
 		}
 	}
 
@@ -1076,12 +1085,7 @@ func TestIntegration_AStubAtATurnsKeyIsRefusedRatherThanReadAsAPhaselessTurn(t *
 func TestIntegration_TheDefaultStreamCoordinatesAgree(t *testing.T) {
 	harness := testinfra.Require(t)
 
-	stream, err := harness.Client.EnsureStream(t.Context(), jetstream.StreamConfig{
-		Name:      turn.ActionStream,
-		Subjects:  []string{turn.ActionSubjectPrefix},
-		Storage:   jetstream.FileStorage,
-		Retention: jetstream.LimitsPolicy,
-	})
+	stream, err := harness.Client.EnsureStream(t.Context(), turn.ActionStreamConfig())
 	if err != nil {
 		t.Fatalf("EnsureStream %s: %v", turn.ActionStream, err)
 	}

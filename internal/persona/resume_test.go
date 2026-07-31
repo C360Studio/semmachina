@@ -97,7 +97,7 @@ func TestGuard_ReadsEachPersonasOwnArtifactAndNotAnyArtifact(t *testing.T) {
 		t.Fatalf("Check(narrator): %v", err)
 	}
 	if narrator.Decision != persona.DecisionRun {
-		t.Fatalf("the narrator was skipped on a turn carrying every artifact but its own")
+		t.Fatal("the narrator was skipped on a turn carrying every artifact but its own")
 	}
 
 	adjudicator, err := guard.Check(t.Context(), persona.Adjudicator(), testTurnID, testTurnEntityID)
@@ -105,7 +105,7 @@ func TestGuard_ReadsEachPersonasOwnArtifactAndNotAnyArtifact(t *testing.T) {
 		t.Fatalf("Check(adjudicator): %v", err)
 	}
 	if adjudicator.Decision != persona.DecisionSkip {
-		t.Fatalf("the adjudicator was re-run on a turn that already records its verdict")
+		t.Fatal("the adjudicator was re-run on a turn that already records its verdict")
 	}
 }
 

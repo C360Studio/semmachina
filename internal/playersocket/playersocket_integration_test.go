@@ -113,6 +113,8 @@ func startLive(t *testing.T, socketOpts ...playersocket.Option) *liveSocket {
 		Subjects:  []string{live.subject},
 		Storage:   jetstream.FileStorage,
 		Retention: jetstream.LimitsPolicy,
+		MaxAge:    turn.ActionMaxAge,
+		MaxBytes:  turn.ActionMaxBytes,
 		Discard:   jetstream.DiscardNew,
 	}); err != nil {
 		t.Fatalf("EnsureStream %s: %v", live.stream, err)
