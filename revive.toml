@@ -1,0 +1,80 @@
+# SemMachina revive configuration.
+#
+# Derived from the semstreams config (the substrate this engine composes) so a
+# developer moving between the two repos meets one ruleset, not two. Divergences
+# from upstream are commented at the rule that diverges; anything uncommented is
+# upstream's choice, kept deliberately.
+#
+# revive is pinned by go.mod's `tool` directive (Go 1.24+) and invoked as
+# `go tool revive`. There is no install step and no PATH lookup, so the version
+# that runs locally is the version that runs in CI, and a new revive release
+# cannot introduce warnings until the pin in go.mod is deliberately bumped.
+# This is also why the linter of record here is revive rather than
+# golangci-lint: the golangci-lint on this machine is built against an older Go
+# toolchain than the module targets and refuses to load the packages at all,
+# which is a lint gate that reports nothing while looking installed.
+
+ignoreGeneratedHeader = false
+severity = "warning"
+confidence = 0.8
+errorCode = 1
+# warningCode = 1 makes a warning a build failure. Upstream flipped this from 0
+# on 2026-06-03 after finding that the previous value silently let warnings ship
+# to CI; a lint gate whose findings do not fail is a report, not a gate. Adopted
+# here from the first commit that has a linter at all, so this repo never
+# accumulates the backlog that flip had to clear.
+warningCode = 1
+
+[rule.blank-imports]
+[rule.context-as-argument]
+[rule.context-keys-type]
+[rule.dot-imports]
+[rule.error-return]
+[rule.error-strings]
+[rule.error-naming]
+[rule.exported]
+[rule.if-return]
+[rule.increment-decrement]
+[rule.var-naming]
+[rule.var-declaration]
+[rule.package-comments]
+[rule.range]
+[rule.receiver-naming]
+[rule.time-naming]
+[rule.unexported-return]
+[rule.indent-error-flow]
+[rule.errorf]
+[rule.empty-block]
+[rule.superfluous-else]
+[rule.unused-parameter]
+[rule.unreachable-code]
+[rule.redefines-builtin-id]
+
+# Disabled upstream and here: line length is enforced by review, and struct tags
+# routinely exceed any useful limit.
+# [rule.line-length-limit]
+#   arguments = [120]
+
+# function-length: arguments = [maxStatements, maxLines]; 0 disables the
+# corresponding check. Upstream's rationale applies unchanged — a scenario test
+# that exercises a full flow inline (setup, dispatch, assertions) runs past 50
+# statements without being too long, and this repo's e2e and integration tests
+# are exactly that shape.
+[rule.function-length]
+  arguments = [80, 0]
+
+[rule.max-public-structs]
+  arguments = [10]
+  # internal/vocabulary is excluded, not tuned. The rule counts exported type
+  # declarations per file, and a closed vocabulary is exported types by
+  # construction: classes.go declares eleven `type X string` enums because the
+  # engine has eleven closed sets, and merging or unexporting any of them to
+  # satisfy a count would make the vocabulary worse. The rule has no signal
+  # there. What actually guards that package's shape is stronger than a count —
+  # closure_test.go AST-scans the package's own source and fails if any declared
+  # constant is missing from its enumeration, so "closed" is checked rather than
+  # assumed.
+  #
+  # Excludes are regex-or-glob file filters matched against the file path, so
+  # the pattern below covers the package's files and nothing else.
+  exclude = ["**/internal/vocabulary/**"]

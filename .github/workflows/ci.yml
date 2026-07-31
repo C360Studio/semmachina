@@ -1,0 +1,298 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # Not cosmetic. GitHub's default for `run:` is `bash -e {0}`, which does NOT
+    # set pipefail — so `go test ... | tee log` reports the exit status of tee
+    # and a failing suite passes the step. Naming bash explicitly selects
+    # `bash --noprofile --norc -eo pipefail {0}`. This is the single most
+    # common way a CI gate becomes green without proving anything, and it is
+    # fixed here once for every job.
+    shell: bash
+
+# NOTE ON WHAT IS DELIBERATELY ABSENT
+#
+# SEMMACHINA_SKIP_INTEGRATION must never be set anywhere in this file. It is the
+# developer escape hatch for a machine without Docker (see
+# internal/testinfra.SkipEnv): with it set, every real-infrastructure test skips
+# and every package still reports `ok`. A CI run with it set certifies nothing
+# while looking identical to one that certified everything. The test job asserts
+# its absence at runtime rather than trusting this comment.
+#
+# No model API keys, endpoints, or credentials are set either. The full turn
+# loop runs token-free against internal/mockmodel on loopback, and
+# internal/testinfra's TestSuite_NamesNoRemoteEndpoint fails the suite if any
+# committed source or fixture names a remote URL — so "no live inference" is
+# checked, not merely omitted.
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        # go-version-file rather than a literal: the toolchain CI runs is the
+        # one go.mod requires, and cannot drift from it.
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: gofmt
+        # `gofmt -l` REPORTS; `go fmt` rewrites. A gate that fixes the thing it
+        # is checking passes on the second run for the wrong reason, and leaves
+        # a dirty tree behind for any later step that diffs.
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+          echo "OK: gofmt clean"
+
+      - name: revive version matches the go.mod pin
+        # revive is pinned by go.mod's `tool` directive (Go 1.24+) and run via
+        # `go tool revive` — no install step, no PATH lookup, and a new revive
+        # release cannot introduce warnings until the pin is deliberately
+        # bumped. This step catches the one residual drift: a build cache
+        # serving a binary built from a different version than go.mod names.
+        #
+        # (This is also why revive rather than golangci-lint is the linter of
+        # record here: golangci-lint has been unrunnable in this project's
+        # environment for weeks because the installed binary is built against an
+        # older toolchain than the module targets. A lint gate that cannot load
+        # the packages is a lint gate that reports nothing.)
+        run: bash scripts/check-revive-pin.sh
+
+      - name: revive
+        run: go tool revive -config revive.toml -formatter friendly ./...
+
+      - name: Prove the lint gate can fail
+        # revive exiting 0 means either "clean" or "examined nothing", and those
+        # look identical in a log. This feeds revive known-bad files and
+        # requires the expected findings — including proof that the one
+        # max-public-structs exclusion is scoped to internal/vocabulary and has
+        # not become a global disable.
+        run: bash scripts/check-revive-fires.sh
+
+      - name: Prove the zero-skip gate can fail
+        # Same discipline for the coverage gate: a matrix of synthetic
+        # `go test -json` streams, including the package-with-no-test-files
+        # shape that must NOT be a false positive. Fast — no Docker, no build.
+        run: bash scripts/check-no-skips_fixture_test.sh
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go build
+        run: go build ./...
+
+      - name: Cross-compile linux/amd64
+        # Part of the project's stated local gate ("CI green before push: lint,
+        # -race tests, cross-compile"). The MVP target is Apple Silicon and the
+        # hosted target is the same image on a rented Linux box, so this is the
+        # deployment artifact rather than a formality.
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags="-w -s" \
+            -o semmachina-linux-amd64 \
+            ./cmd/semmachina
+
+      - name: The binary refuses to start without configuration
+        # Not `--version || true`. The binary REQUIRES -config, so running it
+        # bare must exit non-zero with a usage message — which proves the
+        # artifact links and executes, and that its own precondition is live.
+        # A step that swallowed the status would prove only that a file exists.
+        run: |
+          out="${RUNNER_TEMP}/bare-start.out"
+          err="${RUNNER_TEMP}/bare-start.err"
+          if ./semmachina-linux-amd64 >"$out" 2>"$err"; then
+            echo "FAIL: the binary started with no -config; it is supposed to refuse."
+            cat "$out" "$err"
+            exit 1
+          fi
+          if ! grep -qi "config" "$err" "$out"; then
+            echo "FAIL: the binary exited non-zero but said nothing about configuration:"
+            cat "$out" "$err"
+            exit 1
+          fi
+          echo "OK: cross-compiled binary runs and refuses an unconfigured start"
+          cat "$err"
+
+      - name: Upload the linux/amd64 binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: semmachina-linux-amd64
+          path: semmachina-linux-amd64
+          retention-days: 7
+
+  test:
+    name: Test (race, full module)
+    runs-on: ubuntu-latest
+    # Measured on this tree (Apple Silicon, -race, -p 2): 528s of summed package
+    # time, ~5 minutes of wall clock, dominated by four packages —
+    # internal/e2e 228s, internal/stage 116s, internal/boot 83s,
+    # internal/resume 53s. A 4-vCPU ubuntu-latest runner with a cold Docker
+    # cache will be several times slower. 60 minutes is a ceiling that catches a
+    # wedge, not a target; report-test-json.sh prints the real distribution
+    # every run so this comment can be corrected from data rather than guessed.
+    timeout-minutes: 60
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Docker is required, and is not optional
+        # The integration tests do not skip without Docker — they fail (that is
+        # the whole point of internal/testinfra's opt-out polarity). Asserting
+        # it up front turns "the runner image changed" into a one-line failure
+        # instead of a twenty-minute one.
+        run: |
+          docker info >/dev/null
+          echo "OK: docker daemon reachable"
+
+      # No image pre-pull step. The NATS image tag comes from the pinned
+      # semstreams test client's default, not from anything in this repo, so
+      # naming a tag here would be a guess that silently warms the wrong layer.
+      # testcontainers pulls what it needs inside its own 180s start budget.
+
+      - name: go test -race ./... and the zero-skip gate
+        # ONE run over ./..., deliberately, and it is worth stating why since
+        # splitting it would halve the wall clock:
+        #
+        #   - `./...` is the only selector that cannot silently omit a package.
+        #     A split into "e2e" and "everything else" makes the union a thing
+        #     someone has to keep true, and a package that falls out of both
+        #     lists produces a green run with less coverage — precisely the
+        #     failure class this gate exists to catch.
+        #   - The zero-skip assertion is a claim about the MODULE. One run
+        #     produces one JSON stream, and the count in it is the count.
+        #   - Attribution does not need job splitting: the JSON names the
+        #     package and test for every failure, and report-test-json.sh
+        #     prints failing output plus the per-package wall clock, so the
+        #     expensive packages are visible every run rather than guessed at.
+        #
+        # -p 2 caps concurrent test PACKAGES, so at most two NATS containers
+        # boot at once. Unbounded package parallelism (default GOMAXPROCS, 4 on
+        # ubuntu-latest) CPU/IO-starves the shared Docker host until
+        # contention-sensitive tests exhaust their wait windows — upstream
+        # measured exactly this and settled on the same number.
+        #
+        # -timeout is PER PACKAGE, so 20m does not mean the job may run 20m.
+        # -count=1 keeps this an uncached run: a cached `ok` proves nothing
+        # about today's tree.
+        #
+        # The test run and the gate are in ONE step on purpose. Any env scoping
+        # that reached `go test` also reaches the checker, so a step-level
+        # SEMMACHINA_SKIP_INTEGRATION cannot hide from it.
+        run: |
+          json="${RUNNER_TEMP}/gotest.json"
+          go test -json -race -p 2 -timeout=20m -count=1 ./... >"$json" && status=0 || status=$?
+
+          # Rendering only, and deliberately not a gate — its status is dropped
+          # so a formatting problem can never mask a test result. The raw JSON
+          # is uploaded as an artifact either way. Everything that DOES gate is
+          # below, and neither branch is reachable without evaluating both.
+          bash scripts/report-test-json.sh "$json" \
+            || echo "(could not render the test report; see the gotest-json artifact)"
+
+          # The gate runs even when the suite failed: a run that both failed and
+          # skipped has two problems, and hiding the second behind the first is
+          # how the skip comes back.
+          bash scripts/check-no-skips.sh "$json" && gate=0 || gate=$?
+
+          if [ "$status" -ne 0 ]; then
+            echo "go test exited $status"
+            exit "$status"
+          fi
+          exit "$gate"
+
+      - name: Upload the raw test JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gotest-json
+          path: ${{ runner.temp }}/gotest.json
+          retention-days: 7
+
+  spec:
+    name: OpenSpec
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: openspec validate --all --strict
+        # --all is load-bearing: `openspec validate --strict` with no target
+        # validates nothing and exits 0. The script also asserts the reported
+        # item count is non-zero, so a layout move that empties the selection
+        # is loud rather than green.
+        run: bash scripts/check-openspec.sh
+
+  status-check:
+    name: CI Status Check
+    runs-on: ubuntu-latest
+    needs: [lint, build, test, spec]
+    if: always()
+    steps:
+      - name: Every job must have succeeded
+        # `if: always()` plus explicit result comparison, rather than relying on
+        # needs alone: a needed job that is skipped or cancelled does not fail
+        # the workflow by default, so a branch-protection rule pointed at this
+        # check would pass on a cancelled test job.
+        run: |
+          failed=0
+          for result in \
+            "lint=${{ needs.lint.result }}" \
+            "build=${{ needs.build.result }}" \
+            "test=${{ needs.test.result }}" \
+            "spec=${{ needs.spec.result }}"; do
+            echo "$result"
+            if [ "${result#*=}" != "success" ]; then
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "One or more CI jobs did not succeed."
+            exit 1
+          fi
+          echo "All CI jobs passed."

@@ -1,0 +1,74 @@
+version: '3'
+
+# The local half of the gate in .github/workflows/ci.yml.
+#
+# Every check that has any logic lives in scripts/, and both this file and the
+# workflow invoke the SAME script — a local gate that reimplements CI is a
+# second source of truth, and the two diverge on the day it matters. The one-line
+# checks (vet, gofmt, revive) are duplicated as one line each rather than
+# wrapped, because a wrapper around `go vet ./...` hides more than it shares.
+
+tasks:
+  default:
+    desc: Everything CI runs, in CI's order. Slow — the test task dominates.
+    cmds:
+      - task: lint
+      - task: build
+      - task: spec
+      - task: test
+
+  lint:
+    desc: vet, gofmt, revive (pinned via go.mod's tool directive), and the gate self-checks
+    cmds:
+      - go vet ./...
+      # `gofmt -l` reports; `go fmt` rewrites. A gate that fixes what it checks
+      # passes the second time for the wrong reason.
+      - |
+        unformatted=$(gofmt -l .)
+        if [ -n "$unformatted" ]; then
+          echo "not gofmt-clean:"; echo "$unformatted"; exit 1
+        fi
+        echo "OK: gofmt clean"
+      - bash scripts/check-revive-pin.sh
+      - go tool revive -config revive.toml -formatter friendly ./...
+      - bash scripts/check-revive-fires.sh
+      - bash scripts/check-no-skips_fixture_test.sh
+
+  build:
+    desc: Build the module and cross-compile the linux/amd64 deployment artifact
+    cmds:
+      - go build ./...
+      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o /dev/null ./cmd/semmachina
+      - 'echo "OK: builds and cross-compiles"'
+
+  test:
+    desc: |
+      The full suite under -race, with the zero-skip gate over its JSON.
+
+      Needs Docker: the integration tests FAIL without it rather than skipping.
+      SEMMACHINA_SKIP_INTEGRATION turns those proofs off for a machine that
+      genuinely cannot run Docker — and then this task refuses to certify the
+      run, which is the point of it existing.
+    vars:
+      JSON: '{{.JSON | default ".task-gotest.json"}}'
+    cmds:
+      - |
+        go test -json -race -p 2 -timeout=20m -count=1 ./... >"{{.JSON}}" && status=0 || status=$?
+        bash scripts/report-test-json.sh "{{.JSON}}" || echo "(could not render the test report)"
+        bash scripts/check-no-skips.sh "{{.JSON}}" && gate=0 || gate=$?
+        if [ "$status" -ne 0 ]; then echo "go test exited $status"; exit "$status"; fi
+        exit "$gate"
+
+  spec:
+    desc: openspec validate --all --strict (the --all is load-bearing; without it nothing is validated)
+    cmds:
+      - bash scripts/check-openspec.sh
+
+  tool-versions:
+    desc: |
+      Print the pinned developer tool versions. They come from go.mod's `tool`
+      directive (Go 1.24+) and run via `go tool`, so there is no install step
+      and no local-vs-CI drift. Must be run from inside the module.
+    cmds:
+      - 'echo "pinned tool versions (from the go.mod tool directive):"'
+      - go tool revive --version
