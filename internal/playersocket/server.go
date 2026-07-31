@@ -16,6 +16,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/c360studio/semmachina/internal/egress"
 	"github.com/c360studio/semmachina/internal/gateway"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/vocabulary"
@@ -72,6 +73,18 @@ type Gate interface {
 // The claim above, enforced by the compiler rather than by a doc comment.
 var _ Gate = (*gateway.Gateway)(nil)
 
+// ResultRetriever is the durable, read-only player result surface. Authorization
+// remains here at the authenticated transport boundary: ByTurn and ByAction are
+// globally addressable inside one world, so merely possessing an id never grants
+// access to its result.
+type ResultRetriever interface {
+	ByTurnForPlayer(ctx context.Context, playerID, turnID string) (*payload.TurnDelivery, error)
+	ByActionForPlayer(ctx context.Context, playerID, actionID string) (*payload.TurnDelivery, error)
+	Latest(ctx context.Context, playerID string) (*payload.TurnDelivery, error)
+}
+
+var _ ResultRetriever = (*egress.Results)(nil)
+
 // Config is one instance's transport configuration.
 type Config struct {
 	// Addr is the TCP address to bind, host and port.
@@ -100,6 +113,7 @@ type Config struct {
 // Server is the WebSocket transport for one world instance.
 type Server struct {
 	gate     Gate
+	results  ResultRetriever
 	config   Config
 	logger   *slog.Logger
 	upgrader websocket.Upgrader
@@ -139,6 +153,14 @@ func WithPongTimeout(d time.Duration) Option {
 // WithWriteTimeout overrides how long one write to one socket may take.
 func WithWriteTimeout(d time.Duration) Option {
 	return func(s *Server) { s.writeTimeout = d }
+}
+
+// WithResultRetriever enables authenticated reconnect retrieval. It is optional
+// for adapter-only compositions, which continue to speak the pre-retrieval v1
+// submission path; a retrieval request to an unwired server is explicitly
+// refused as unavailable.
+func WithResultRetriever(results ResultRetriever) Option {
+	return func(s *Server) { s.results = results }
 }
 
 // NewServer builds the transport, refusing a configuration that would quietly
@@ -477,7 +499,7 @@ func (s *Server) serve(ctx context.Context, ws *websocket.Conn, player gateway.V
 	go s.probe(c, stopped)
 
 	s.logger.Info("a player connected", "player", session.PlayerID, "connection", connID)
-	s.readLoop(ctx, c)
+	s.readLoop(ctx, c, session.PlayerID)
 	s.logger.Info("a player's connection ended", "player", session.PlayerID, "connection", connID)
 }
 
@@ -538,7 +560,7 @@ func (s *Server) probe(c *conn, stopped <-chan struct{}) {
 }
 
 // readLoop reads submissions until the socket ends.
-func (s *Server) readLoop(ctx context.Context, c *conn) {
+func (s *Server) readLoop(ctx context.Context, c *conn, playerID string) {
 	// The bound the gateway cannot apply to itself. Gorilla enforces it against
 	// the frame HEADER's declared length, so an oversize frame's payload is never
 	// read and never allocated — and the peer is sent a 1009 close, which is what
@@ -578,6 +600,31 @@ func (s *Server) readLoop(ctx context.Context, c *conn) {
 			}
 			continue
 		}
+		operation, typed, typeErr := inspectRequestType(raw)
+		if typed && typeErr != nil {
+			if err := c.send(ctx, operationFrame(operationRefused("", OperationMalformed,
+				"the operation type must be a non-empty string"))); err != nil {
+				s.logger.Warn("an operation refusal could not be delivered", "connection", c.id, "error", err)
+				return
+			}
+			continue
+		}
+		if typed && operation != RequestRetrieve {
+			if err := c.send(ctx, operationFrame(operationRefused(string(operation), OperationUnsupported,
+				"this player protocol does not support that operation"))); err != nil {
+				s.logger.Warn("an operation refusal could not be delivered", "connection", c.id, "error", err)
+				return
+			}
+			continue
+		}
+		if typed {
+			response := s.retrieve(ctx, playerID, raw)
+			if err := c.send(ctx, retrievalFrame(response)); err != nil {
+				s.logger.Warn("a retrieval answer could not be delivered", "connection", c.id, "error", err)
+				return
+			}
+			continue
+		}
 
 		response, submitErr := s.gate.Submit(ctx, c.id, raw)
 		if submitErr != nil {
@@ -590,6 +637,55 @@ func (s *Server) readLoop(ctx context.Context, c *conn) {
 			s.logger.Warn("a submission answer could not be delivered", "connection", c.id, "error", err)
 			return
 		}
+	}
+}
+
+// retrieve answers one lookup through a surface that authorizes the turn's
+// ownership scalar against the authenticated session before composing private
+// artifacts. Latest cannot name another player at all.
+func (s *Server) retrieve(ctx context.Context, playerID string, raw []byte) *RetrieveResponse {
+	request, err := decodeRetrieveRequest(raw)
+	if err != nil {
+		return retrievalRefused(RetrieveLatest, "", RetrieveMalformed, err.Error())
+	}
+	if s.results == nil {
+		return retrievalRefused(request.By, request.ID, RetrieveUnavailable,
+			"result retrieval is unavailable on this server")
+	}
+
+	var delivery *payload.TurnDelivery
+	switch request.By {
+	case RetrieveByTurn:
+		delivery, err = s.results.ByTurnForPlayer(ctx, playerID, request.ID)
+	case RetrieveByAction:
+		delivery, err = s.results.ByActionForPlayer(ctx, playerID, request.ID)
+	case RetrieveLatest:
+		delivery, err = s.results.Latest(ctx, playerID)
+	}
+	switch {
+	case errors.Is(err, egress.ErrTurnNotFound), errors.Is(err, egress.ErrResultNotAccessible):
+		return retrievalRefused(request.By, request.ID, RetrieveNotFound,
+			"no accessible result exists for that lookup")
+	case errors.Is(err, egress.ErrNoResult):
+		return retrievalRefused(request.By, request.ID, RetrieveNotReady,
+			"that lookup has no terminal result yet")
+	case err != nil:
+		s.logger.Error("a durable player result could not be retrieved",
+			"player", playerID, "by", request.By, "error", err)
+		return retrievalRefused(request.By, request.ID, RetrieveUnavailable,
+			"the result could not be retrieved")
+	case delivery == nil || delivery.Result == nil:
+		s.logger.Error("the result surface returned an empty delivery",
+			"player", playerID, "by", request.By)
+		return retrievalRefused(request.By, request.ID, RetrieveUnavailable,
+			"the result could not be retrieved")
+	case delivery.Result.PlayerID != playerID:
+		s.logger.Error("the scoped result surface returned another player's result",
+			"player", playerID, "result_player", delivery.Result.PlayerID, "by", request.By)
+		return retrievalRefused(request.By, request.ID, RetrieveUnavailable,
+			"the result could not be retrieved")
+	default:
+		return retrievalFound(request, delivery)
 	}
 }
 

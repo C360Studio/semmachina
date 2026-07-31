@@ -148,7 +148,10 @@ func startLive(t *testing.T, socketOpts ...playersocket.Option) *liveSocket {
 	}
 
 	server, err := playersocket.NewServer(gw, playersocket.Config{Addr: "127.0.0.1:0"},
-		append([]playersocket.Option{playersocket.WithLogger(newLogger(capture))}, socketOpts...)...)
+		append([]playersocket.Option{
+			playersocket.WithLogger(newLogger(capture)),
+			playersocket.WithResultRetriever(live.results),
+		}, socketOpts...)...)
 	if err != nil {
 		t.Fatalf("playersocket.NewServer: %v", err)
 	}
@@ -386,5 +389,75 @@ func TestIntegration_AResultFollowsAReconnectRatherThanTheSubmittingConnection(t
 	}
 	if got := second.delivery(t).Result.TurnID; got != turnID {
 		t.Fatalf("the reconnected socket received turn %q, want %q", got, turnID)
+	}
+}
+
+// Durable retrieval is spoken by the reconnected CLIENT, not called as an
+// in-process Results helper. Named lookups are authorized from the turn's owner
+// before private artifacts are composed, so knowing another player's turn id is
+// not enough even to read their stored fiction on the server side.
+func TestIntegration_AReconnectedPlayerRetrievesTheirResultAndNotAnotherPlayers(t *testing.T) {
+	live := startLive(t)
+	turnID := live.resolvedTurn(t, live.playerOne, "retrieval-key")
+	actionID, err := payload.ActionIDForTurn(turnID)
+	if err != nil {
+		t.Fatalf("derive action id: %v", err)
+	}
+
+	first := live.dial(t, patCredential, live.playerOne)
+	first.close(t)
+	live.awaitTargets(t, live.playerOne, 0)
+	reconnected := live.dial(t, patCredential, live.playerOne)
+
+	for _, request := range []*playersocket.RetrieveRequest{
+		{Protocol: payload.PlayerProtocolV1, Type: playersocket.RequestRetrieve,
+			By: playersocket.RetrieveByTurn, ID: turnID},
+		{Protocol: payload.PlayerProtocolV1, Type: playersocket.RequestRetrieve,
+			By: playersocket.RetrieveByAction, ID: actionID},
+		{Protocol: payload.PlayerProtocolV1, Type: playersocket.RequestRetrieve,
+			By: playersocket.RetrieveLatest},
+	} {
+		response := reconnected.retrieve(t, request)
+		if response.Status != playersocket.RetrieveFound || response.Delivery == nil {
+			t.Fatalf("%s retrieval was not found: %+v", request.By, response)
+		}
+		if response.Delivery.Result.TurnID != turnID {
+			t.Fatalf("%s retrieval answered with turn %q, want %q",
+				request.By, response.Delivery.Result.TurnID, turnID)
+		}
+	}
+
+	other := live.dial(t, alexCredential, live.playerTwo)
+	for _, lookup := range []struct {
+		by      playersocket.RetrieveBy
+		foreign string
+		missing string
+	}{
+		{playersocket.RetrieveByTurn, turnID, "turn-act-no-such-result"},
+		{playersocket.RetrieveByAction, actionID, "act-no-such-result"},
+	} {
+		foreign := other.retrieve(t, &playersocket.RetrieveRequest{
+			Protocol: payload.PlayerProtocolV1, Type: playersocket.RequestRetrieve,
+			By: lookup.by, ID: lookup.foreign,
+		})
+		missing := other.retrieve(t, &playersocket.RetrieveRequest{
+			Protocol: payload.PlayerProtocolV1, Type: playersocket.RequestRetrieve,
+			By: lookup.by, ID: lookup.missing,
+		})
+		for name, response := range map[string]*playersocket.RetrieveResponse{
+			"foreign": foreign, "missing": missing,
+		} {
+			if response.Status != playersocket.RetrieveRefused || response.Refusal == nil ||
+				response.Refusal.Code != playersocket.RetrieveNotFound {
+				t.Fatalf("%s %s lookup was not uniformly hidden: %+v", name, lookup.by, response)
+			}
+			if response.Delivery != nil {
+				t.Fatalf("%s %s refusal disclosed a result", name, lookup.by)
+			}
+		}
+		if foreign.Refusal.Message != missing.Refusal.Message {
+			t.Fatalf("%s lookup is a state oracle: foreign says %q, missing says %q",
+				lookup.by, foreign.Refusal.Message, missing.Refusal.Message)
+		}
 	}
 }

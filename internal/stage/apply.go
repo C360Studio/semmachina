@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/c360studio/semstreams/graph"
+	semerrs "github.com/c360studio/semstreams/pkg/errs"
 
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/effect"
@@ -104,10 +105,14 @@ func (e *Effector) Phase() vocabulary.TurnPhase { return vocabulary.PhaseApplyin
 //
 // A rejection is a NORMAL outcome, not an exception: the applier classifies its
 // refusals into closed codes, the explanation is stored, and the turn ends
-// explicitly. What is NOT normal is an uncoded failure — a corrupt turn record,
-// a transport fault — and that is returned rather than recorded, because writing
-// a game outcome onto a record whose readability the applier just disputed would
-// state a verdict on evidence it does not have.
+// explicitly. A transient incomplete commit is different: it is returned to the
+// durable runner while the turn remains in applying, and redelivery re-applies
+// the same derived batch. An invalid or fatal classified commit cannot improve
+// on redelivery, so it ends once under the closed incomplete-commit reason. What
+// is also NOT normal is an uncoded failure — a corrupt turn record, a transport
+// fault — and that is returned rather than recorded, because writing a game
+// outcome onto a record whose readability the applier just disputed would state
+// a verdict on evidence it does not have.
 func (e *Effector) Run(ctx context.Context, trigger Trigger) error {
 	run, err := enter(ctx, e.recorder, trigger, e.Phase())
 	if err != nil {
@@ -142,6 +147,12 @@ func (e *Effector) Run(ctx context.Context, trigger Trigger) error {
 
 	outcome, applyErr := e.applier.Apply(ctx, batch, trigger.TurnEntityID, ref.String())
 	if applyErr != nil {
+		var incomplete *effect.CommitError
+		if errors.As(applyErr, &incomplete) && semerrs.Classify(incomplete.Err) == semerrs.ErrorTransient {
+			return fmt.Errorf(
+				"effect batch commit for turn %s is incomplete; retry the applying stage: %w",
+				trigger.TurnEntityID, applyErr)
+		}
 		return e.refuse(ctx, trigger, applyErr)
 	}
 	if !outcome.Applied {
@@ -151,7 +162,8 @@ func (e *Effector) Run(ctx context.Context, trigger Trigger) error {
 	return nil
 }
 
-// refuse ends the turn on a classified applier failure.
+// refuse ends the turn on a deterministic applier rejection or a nonretryable
+// classified commit failure.
 //
 // The reason on the graph is a closed code and the explanation is a reference,
 // which is the same discipline every other failure here follows — and the detail
@@ -170,14 +182,14 @@ func (e *Effector) refuse(ctx context.Context, trigger Trigger, applyErr error) 
 		Reason:  reason,
 		Message: applyErr.Error(),
 	}
+	var rejection *effect.RejectionError
+	if errors.As(applyErr, &rejection) {
+		detail.Target = rejection.Target
+	}
 	var commit *effect.CommitError
 	if errors.As(applyErr, &commit) {
 		detail.Target = commit.Target
 		detail.Committed = commit.Committed
-	}
-	var rejection *effect.RejectionError
-	if errors.As(applyErr, &rejection) {
-		detail.Target = rejection.Target
 	}
 
 	ref, storeErr := e.details.PutFailureDetail(ctx, trigger.TurnEntityID, detail)

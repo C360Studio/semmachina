@@ -4,17 +4,23 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semmachina/internal/content"
+	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/persona"
 	"github.com/c360studio/semmachina/internal/scene"
 	"github.com/c360studio/semmachina/internal/stage"
+	"github.com/c360studio/semmachina/internal/testinfra"
 	"github.com/c360studio/semmachina/internal/turn"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
@@ -72,26 +78,46 @@ func (f *fakeGuard) Check(
 type fakeAssembler struct {
 	journal *journal
 	calls   int
+	view    *scene.View
 }
 
 func (f *fakeAssembler) Assemble(_ context.Context, turnID, turnEntityID string) (*scene.View, error) {
 	f.journal.note("assemble")
 	f.calls++
+	if f.view != nil {
+		return f.view, nil
+	}
 	return &scene.View{TurnID: turnID, TurnEntityID: turnEntityID, SceneID: testSceneID}, nil
 }
 
-type fakePrompter struct{ journal *journal }
+type fakePrompter struct {
+	journal  *journal
+	actionID string
+}
+
+func (f *fakePrompter) identity(view *scene.View) persona.Identity {
+	identity := identityFor(view)
+	if f.actionID != "" {
+		identity.ActionID = f.actionID
+	}
+	return identity
+}
 
 func (f *fakePrompter) Adjudicate(_ context.Context, view *scene.View) (persona.TaskRequest, error) {
 	f.journal.note("prompt:adjudicate")
-	return persona.TaskRequest{Identity: identityFor(view), Prompt: "judge this"}, nil
+	attempt, err := payload.ResumeAttemptsFromTriples(view.Turn.Triples)
+	return persona.TaskRequest{
+		Identity: f.identity(view), ResumeAttempt: attempt, Prompt: "judge this",
+	}, err
 }
 
 func (f *fakePrompter) Narrate(_ context.Context, view *scene.View) (persona.TaskRequest, error) {
 	f.journal.note("prompt:narrate")
+	attempt, err := payload.ResumeAttemptsFromTriples(view.Turn.Triples)
 	return persona.TaskRequest{
-		Identity: identityFor(view), Band: vocabulary.BandPartial, Prompt: "voice this",
-	}, nil
+		Identity: f.identity(view), ResumeAttempt: attempt,
+		Band: vocabulary.BandPartial, Prompt: "voice this",
+	}, err
 }
 
 func identityFor(view *scene.View) persona.Identity {
@@ -107,12 +133,36 @@ type fakePublisher struct {
 	journal  *journal
 	subjects []string
 	payloads [][]byte
+	msgIDs   []string
 }
 
-func (f *fakePublisher) PublishToStream(_ context.Context, subject string, data []byte) error {
+type acknowledgedThenFailedPublisher struct {
+	client interface {
+		PublishToStreamWithMsgID(context.Context, string, []byte, string) error
+	}
+	calls int
+}
+
+func (p *acknowledgedThenFailedPublisher) PublishToStreamWithMsgID(
+	ctx context.Context, subject string, data []byte, msgID string,
+) error {
+	p.calls++
+	if err := p.client.PublishToStreamWithMsgID(ctx, subject, data, msgID); err != nil {
+		return err
+	}
+	if p.calls == 1 {
+		return errors.New("the server stored the task, but the caller lost the PubAck")
+	}
+	return nil
+}
+
+func (f *fakePublisher) PublishToStreamWithMsgID(
+	_ context.Context, subject string, data []byte, msgID string,
+) error {
 	f.journal.note("publish:" + subject)
 	f.subjects = append(f.subjects, subject)
 	f.payloads = append(f.payloads, data)
+	f.msgIDs = append(f.msgIDs, msgID)
 	return nil
 }
 
@@ -210,6 +260,32 @@ func TestSpawner_ResumedStageStillRunsWhenNoArtifactExists(t *testing.T) {
 	}
 }
 
+func TestSpawner_UsesThePersistedResumeAttemptAsTaskGeneration(t *testing.T) {
+	fixture := newSpawnFixture(t, persona.Adjudicator())
+	fixture.assembler.view = &scene.View{
+		TurnID: testTurnID, TurnEntityID: testTurnEntityID, SceneID: testSceneID,
+		Turn: scene.Entity{ID: testTurnEntityID, Triples: []message.Triple{{
+			Subject: testTurnEntityID, Predicate: vocabulary.TurnResumeAttempts.String(), Object: float64(1),
+		}}},
+	}
+
+	if err := fixture.spawner.Run(t.Context(), testTrigger()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var envelope struct {
+		Payload agentic.TaskMessage `json:"payload"`
+	}
+	if err := json.Unmarshal(fixture.publisher.payloads[0], &envelope); err != nil {
+		t.Fatalf("decode task: %v", err)
+	}
+	if want := string(persona.RoleAdjudicator) + "/" + testTurnID + "/resume/1"; envelope.Payload.TaskID != want {
+		t.Fatalf("resumed task id = %q, want %q", envelope.Payload.TaskID, want)
+	}
+	if fixture.publisher.msgIDs[0] != envelope.Payload.TaskID {
+		t.Fatalf("resumed MsgID = %q, want task id %q", fixture.publisher.msgIDs[0], envelope.Payload.TaskID)
+	}
+}
+
 func TestSpawner_DeclinedTriggerSpendsNothingAndNeverAsksTheGuard(t *testing.T) {
 	fixture := newSpawnFixture(t, persona.Narrator())
 	fixture.recorder.transition = turn.Transition{
@@ -265,6 +341,9 @@ func TestSpawner_PublishesATaskCarryingTheInjectedIdentity(t *testing.T) {
 		t.Fatalf("the published task is not a BaseMessage envelope the agentic loop can decode: %v", err)
 	}
 	task := envelope.Payload
+	if got := fixture.publisher.msgIDs[0]; got != task.TaskID {
+		t.Errorf("Nats-Msg-Id = %q, want deterministic task id %q", got, task.TaskID)
+	}
 	if task.Role != string(persona.RoleNarrator) {
 		t.Errorf("task role = %q, want %q", task.Role, persona.RoleNarrator)
 	}
@@ -285,6 +364,107 @@ func TestSpawner_PublishesATaskCarryingTheInjectedIdentity(t *testing.T) {
 		if got, _ := task.Metadata[key].(string); got != want {
 			t.Errorf("task metadata %q = %q, want %q", key, got, want)
 		}
+	}
+}
+
+// This is the exact publish crash window: JetStream accepts the first task and
+// returns a PubAck, but the process loses that success and the stage delivery is
+// retried. The deterministic TaskID is also the Nats-Msg-Id, so the second
+// publish is acknowledged as a duplicate and only one task is stored/delivered.
+func TestSpawner_AckLostAfterStoreAndRedeliveryProducesOneTask(t *testing.T) {
+	harness := testinfra.Require(t)
+	stream, err := harness.Client.EnsureStream(t.Context(), stage.AgentStreamConfig())
+	if err != nil {
+		t.Fatalf("ensure AGENT: %v", err)
+	}
+	before, err := stream.Info(t.Context())
+	if err != nil {
+		t.Fatalf("read AGENT before publish: %v", err)
+	}
+
+	journal := &journal{}
+	publisher := &acknowledgedThenFailedPublisher{client: harness.Client}
+	uniqueActionID := "crash-window-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	uniqueTurnID := "turn-" + uniqueActionID
+	spawner, err := stage.NewSpawner(
+		persona.Adjudicator(),
+		&fakeRecorder{journal: journal, transition: turn.Transition{Outcome: turn.OutcomeAdvanced}},
+		&fakeGuard{journal: journal, resumption: persona.Resumption{Decision: persona.DecisionRun}},
+		&fakeAssembler{journal: journal},
+		&fakePrompter{journal: journal, actionID: uniqueActionID},
+		publisher,
+	)
+	if err != nil {
+		t.Fatalf("NewSpawner: %v", err)
+	}
+	trigger := stage.Trigger{
+		TurnID:       uniqueTurnID,
+		TurnEntityID: strings.TrimSuffix(testTurnEntityID, testTurnID) + uniqueTurnID,
+		Subject:      "semmachina.turn.adjudicating",
+	}
+	if err := spawner.Run(t.Context(), trigger); err == nil {
+		t.Fatal("first delivery saw success even though its PubAck was deliberately lost")
+	}
+	if err := spawner.Run(t.Context(), trigger); err != nil {
+		t.Fatalf("redelivered stage: %v", err)
+	}
+
+	after, err := stream.Info(t.Context())
+	if err != nil {
+		t.Fatalf("read AGENT after publish: %v", err)
+	}
+	wantTaskID := string(persona.RoleAdjudicator) + "-" + uniqueTurnID
+	stored := 0
+	for seq := before.State.LastSeq + 1; seq <= after.State.LastSeq; seq++ {
+		raw, getErr := stream.GetMsg(t.Context(), seq)
+		if getErr != nil {
+			if errors.Is(getErr, jetstream.ErrMsgNotFound) {
+				continue
+			}
+			t.Fatalf("read AGENT sequence %d: %v", seq, getErr)
+		}
+		var envelope struct {
+			Payload agentic.TaskMessage `json:"payload"`
+		}
+		if json.Unmarshal(raw.Data, &envelope) == nil && envelope.Payload.TaskID == wantTaskID {
+			stored++
+		}
+	}
+	if stored != 1 {
+		t.Fatalf("stored tasks with TaskID %q = %d, want exactly 1", wantTaskID, stored)
+	}
+
+	consumerName := "crash-window-" + strings.TrimPrefix(uniqueActionID, "crash-window-")
+	consumer, err := stream.CreateOrUpdateConsumer(t.Context(), jetstream.ConsumerConfig{
+		Name:          consumerName,
+		Durable:       consumerName,
+		DeliverPolicy: jetstream.DeliverByStartSequencePolicy,
+		OptStartSeq:   before.State.LastSeq + 1,
+		AckPolicy:     jetstream.AckExplicitPolicy,
+		FilterSubject: stage.TaskSubjectFor(persona.RoleAdjudicator),
+	})
+	if err != nil {
+		t.Fatalf("create proof consumer: %v", err)
+	}
+	t.Cleanup(func() { _ = stream.DeleteConsumer(context.Background(), consumerName) })
+	batch, err := consumer.Fetch(256, jetstream.FetchMaxWait(250*time.Millisecond))
+	if err != nil {
+		t.Fatalf("fetch stored tasks: %v", err)
+	}
+	delivered := 0
+	for msg := range batch.Messages() {
+		var envelope struct {
+			Payload agentic.TaskMessage `json:"payload"`
+		}
+		if json.Unmarshal(msg.Data(), &envelope) == nil && envelope.Payload.TaskID == wantTaskID {
+			delivered++
+		}
+		if err := msg.Ack(); err != nil {
+			t.Fatalf("ack proof delivery: %v", err)
+		}
+	}
+	if delivered != 1 {
+		t.Fatalf("delivered tasks with TaskID %q = %d, want exactly 1", wantTaskID, delivered)
 	}
 }
 

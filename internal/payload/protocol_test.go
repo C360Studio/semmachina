@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/playersocket"
 )
 
 // The field set of PlayerProtocolV1, written out. This is not a shape test for
@@ -27,7 +28,17 @@ import (
 // account of why lives behind turn.failure.ref and is operator data, not fiction.
 func protocolV1Surface() map[string][]string {
 	return map[string][]string{
-		"SubmitAction": {"idempotency_key", "protocol", "text"},
+		"DeliveredNarration": {"band", "prose", "turn_id"},
+		"Frame":              {"delivery", "operation", "protocol", "response", "retrieval", "type"},
+		"OperationRefusal":   {"code", "message", "operation"},
+		"OperationResponse":  {"protocol", "refusal", "status"},
+		"RetrieveRefusal":    {"code", "message"},
+		"RetrieveRequest":    {"by", "id", "protocol", "type"},
+		"RetrieveResponse":   {"by", "delivery", "id", "protocol", "refusal", "status"},
+		"SubmitAction":       {"idempotency_key", "protocol", "text"},
+		"SubmitRefusal":      {"active_turn_id", "code", "field", "message"},
+		"SubmitResponse":     {"action_id", "arrived_at", "idempotency_key", "protocol", "refusal", "status", "turn_id"},
+		"TurnDelivery":       {"narration", "protocol", "result"},
 		"TurnResult": {
 			"action_id", "failure_reason", "narration_ref", "phase", "player_id",
 			"protocol", "resolution", "resolved_at", "turn_id",
@@ -41,12 +52,22 @@ func protocolV1Surface() map[string][]string {
 
 func TestPlayerProtocol_V1FieldSetIsPinned(t *testing.T) {
 	types := map[string]reflect.Type{
-		"SubmitAction":   reflect.TypeFor[payload.SubmitAction](),
-		"TurnResult":     reflect.TypeFor[payload.TurnResult](),
-		"TurnResolution": reflect.TypeFor[payload.TurnResolution](),
-		"TurnRoll":       reflect.TypeFor[payload.TurnRoll](),
-		"VerdictScalars": reflect.TypeFor[payload.VerdictScalars](),
-		"Modifier":       reflect.TypeFor[payload.Modifier](),
+		"DeliveredNarration": reflect.TypeFor[payload.DeliveredNarration](),
+		"Frame":              reflect.TypeFor[playersocket.Frame](),
+		"OperationRefusal":   reflect.TypeFor[playersocket.OperationRefusal](),
+		"OperationResponse":  reflect.TypeFor[playersocket.OperationResponse](),
+		"RetrieveRefusal":    reflect.TypeFor[playersocket.RetrieveRefusal](),
+		"RetrieveRequest":    reflect.TypeFor[playersocket.RetrieveRequest](),
+		"RetrieveResponse":   reflect.TypeFor[playersocket.RetrieveResponse](),
+		"SubmitAction":       reflect.TypeFor[payload.SubmitAction](),
+		"SubmitRefusal":      reflect.TypeFor[payload.SubmitRefusal](),
+		"SubmitResponse":     reflect.TypeFor[payload.SubmitResponse](),
+		"TurnDelivery":       reflect.TypeFor[payload.TurnDelivery](),
+		"TurnResult":         reflect.TypeFor[payload.TurnResult](),
+		"TurnResolution":     reflect.TypeFor[payload.TurnResolution](),
+		"TurnRoll":           reflect.TypeFor[payload.TurnRoll](),
+		"VerdictScalars":     reflect.TypeFor[payload.VerdictScalars](),
+		"Modifier":           reflect.TypeFor[payload.Modifier](),
 	}
 
 	surface := protocolV1Surface()
@@ -77,6 +98,32 @@ func TestPlayerProtocol_V1FieldSetIsPinned(t *testing.T) {
 					name, got, "PlayerProtocolV1", surface[name])
 			}
 		})
+	}
+}
+
+func TestPlayerProtocolV1_SocketClosedSetsArePinned(t *testing.T) {
+	want := map[string]string{
+		"request":           strings.Join([]string{"retrieve_result"}, ","),
+		"by":                strings.Join([]string{"action", "latest", "turn"}, ","),
+		"status":            strings.Join([]string{"found", "refused"}, ","),
+		"refusal":           strings.Join([]string{"malformed_request", "not_found", "not_ready", "unavailable"}, ","),
+		"operation status":  strings.Join([]string{"refused"}, ","),
+		"operation refusal": strings.Join([]string{"malformed_operation", "unsupported_operation"}, ","),
+		"frame types":       strings.Join([]string{"operation_response", "retrieve_response", "submit_response", "turn_delivery"}, ","),
+	}
+	got := map[string]string{
+		"request":           strings.Join(playersocket.RequestTypeStrings(), ","),
+		"by":                strings.Join(playersocket.RetrieveByStrings(), ","),
+		"status":            strings.Join(playersocket.RetrieveStatusStrings(), ","),
+		"refusal":           strings.Join(playersocket.RetrieveRefusalCodeStrings(), ","),
+		"operation status":  strings.Join(playersocket.OperationStatusStrings(), ","),
+		"operation refusal": strings.Join(playersocket.OperationRefusalCodeStrings(), ","),
+		"frame types":       strings.Join(playersocket.FrameTypeStrings(), ","),
+	}
+	for set, expected := range want {
+		if got[set] != expected {
+			t.Errorf("%s = %q, want pinned player/v1 set %q", set, got[set], expected)
+		}
 	}
 }
 

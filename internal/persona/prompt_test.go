@@ -173,6 +173,68 @@ func TestAdjudicatePrompt_FollowsTheActionReferenceTheAssemblerLeavesAlone(t *te
 	}
 }
 
+func TestPromptBuilder_CarriesThePersistedResumeAttemptForBothRoles(t *testing.T) {
+	t.Run("adjudicator", func(t *testing.T) {
+		fixture := newPromptFixture(t, fact(vocabulary.TurnResumeAttempts, float64(1)))
+		request, err := fixture.builder.Adjudicate(t.Context(), fixture.view)
+		if err != nil {
+			t.Fatalf("Adjudicate: %v", err)
+		}
+		if request.ResumeAttempt != 1 {
+			t.Fatalf("resume attempt = %d, want 1", request.ResumeAttempt)
+		}
+	})
+
+	t.Run("narrator", func(t *testing.T) {
+		fixture := newPromptFixture(t,
+			fact(vocabulary.TurnResumeAttempts, float64(2)),
+			fact(vocabulary.TurnRollBand, string(vocabulary.BandPartial)),
+			fact(vocabulary.TurnRollTotal, 8),
+			fact(vocabulary.TurnEffectsBatch, payload.BatchIDForTurn(testTurnID)),
+		)
+		fixture.storeVerdict(t, rollingVerdict())
+		request, err := fixture.builder.Narrate(t.Context(), fixture.view)
+		if err != nil {
+			t.Fatalf("Narrate: %v", err)
+		}
+		if request.ResumeAttempt != 2 {
+			t.Fatalf("resume attempt = %d, want 2", request.ResumeAttempt)
+		}
+	})
+}
+
+func TestPromptBuilder_RefusesInvalidResumeAttemptsForBothRoles(t *testing.T) {
+	cases := map[string][]message.Triple{
+		"duplicate": {
+			fact(vocabulary.TurnResumeAttempts, 1),
+			fact(vocabulary.TurnResumeAttempts, 2),
+		},
+		"fractional": {fact(vocabulary.TurnResumeAttempts, 1.5)},
+		"zero":       {fact(vocabulary.TurnResumeAttempts, 0)},
+		"negative":   {fact(vocabulary.TurnResumeAttempts, -1)},
+	}
+	roles := map[string]func(*promptFixture) error{
+		"adjudicator": func(f *promptFixture) error {
+			_, err := f.builder.Adjudicate(t.Context(), f.view)
+			return err
+		},
+		"narrator": func(f *promptFixture) error {
+			_, err := f.builder.Narrate(t.Context(), f.view)
+			return err
+		},
+	}
+	for role, build := range roles {
+		for name, triples := range cases {
+			t.Run(role+"/"+name, func(t *testing.T) {
+				fixture := newPromptFixture(t, triples...)
+				if err := build(fixture); err == nil {
+					t.Fatal("invalid persisted resume attempt was accepted")
+				}
+			})
+		}
+	}
+}
+
 func TestAdjudicatePrompt_RefusesATurnWithNoActionToJudge(t *testing.T) {
 	fixture := newPromptFixture(t)
 	fixture.view.Turn.Triples = slices.DeleteFunc(fixture.view.Turn.Triples, func(t message.Triple) bool {

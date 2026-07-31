@@ -122,6 +122,34 @@ func TestByAction_AnswersWithTheTurnThatActionProduced(t *testing.T) {
 	}
 }
 
+func TestByTurnForPlayer_RejectsAForeignTurnBeforeReadingPrivateArtifacts(t *testing.T) {
+	h := newHarness(t)
+	h.completedTurn(t, testTurnID, testOtherID, testTime)
+
+	_, err := h.results.ByTurnForPlayer(t.Context(), testPlayerID, testTurnID)
+	if !errors.Is(err, egress.ErrResultNotAccessible) {
+		t.Fatalf("foreign lookup = %v, want ErrResultNotAccessible", err)
+	}
+	if h.artifacts.rollReads != 0 || h.artifacts.proseReads != 0 {
+		t.Fatalf("foreign lookup read %d rolls and %d narrations before authorization",
+			h.artifacts.rollReads, h.artifacts.proseReads)
+	}
+}
+
+func TestByActionForPlayer_UsesTheSamePreCompositionAuthorization(t *testing.T) {
+	h := newHarness(t)
+	h.completedTurn(t, testTurnID, testOtherID, testTime)
+
+	_, err := h.results.ByActionForPlayer(t.Context(), testPlayerID, testActionID)
+	if !errors.Is(err, egress.ErrResultNotAccessible) {
+		t.Fatalf("foreign lookup = %v, want ErrResultNotAccessible", err)
+	}
+	if h.artifacts.rollReads != 0 || h.artifacts.proseReads != 0 {
+		t.Fatalf("foreign lookup read %d rolls and %d narrations before authorization",
+			h.artifacts.rollReads, h.artifacts.proseReads)
+	}
+}
+
 // A turn still running is answered as such rather than as absent. The two are
 // different answers to the player, and a surface that spelled them the same way
 // would leave them unable to tell waiting from a typo.

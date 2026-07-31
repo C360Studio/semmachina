@@ -10,6 +10,7 @@ import (
 	"github.com/c360studio/semmachina/internal/ledger"
 	"github.com/c360studio/semmachina/internal/persona"
 	"github.com/c360studio/semmachina/internal/rulepack"
+	"github.com/c360studio/semmachina/internal/stage"
 	"github.com/c360studio/semmachina/internal/turn"
 	"github.com/c360studio/semmachina/internal/world"
 )
@@ -51,6 +52,10 @@ func TestStreamDeclarations_BoundWorkQueuesAndNamePermanentArchives(t *testing.T
 		if decl.MaxAge == "" || decl.MaxBytes <= 0 || decl.Discard == "" {
 			t.Errorf("work stream %s is not finitely bounded: %+v", name, decl)
 		}
+	}
+	if got := cfg.Streams[persona.TaskStream].Duplicates; got != stage.AgentStreamMaxAge.String() {
+		t.Errorf("AGENT duplicate window = %q, want the complete retained-task horizon %q",
+			got, stage.AgentStreamMaxAge.String())
 	}
 }
 

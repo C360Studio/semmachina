@@ -138,9 +138,10 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       `graphio.Store.MergeTriples` already refuses a foreign subject locally — rely on that,
       never on graph-ingest to route one for you;
       tests: validation rejection leaves the world unchanged, a failing per-entity merge
-      fails the turn with the target named, re-application converges, committed effects
-      graph-visible, and a single-valued effect applied twice leaves one value (the F14
-      regression guard, against a real graph)
+      fails the apply attempt with the unconfirmed target and confirmed response prefix,
+      re-application converges even when that target mutated before its response failed,
+      committed effects graph-visible, and a single-valued effect applied twice leaves one
+      value (the F14 regression guard, against a real graph)
 
 ## 6. Turn intake and phase management
 
@@ -172,7 +173,14 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       shared triple projection gates object *shape* (scalar, bounded length), not closure,
       so an applier- or persona-authored sentence would pass every gate and land free text
       on the rule-matching surface. `RuleOpaque` (8.0) stops a rule branching on it; nothing
-      stops it being written
+      stops it being written. **Recovery correction:** a transient or unclassified
+      `effect.CommitError` deliberately bypasses `Fail`: the stage returns it while the turn
+      remains `applying`, so the unlimited durable delivery retries the same derived batch
+      until its replace-lane writes and final marker converge. An invalid or fatal classified
+      cause ends once with `effect-commit-incomplete`; deterministic validation rejections
+      remain terminal turn outcomes too. A real Runner/JetStream test pins the delivery
+      contract: the first transient `CommitError` leaves the acknowledgement floor below its
+      sequence, the production 30-second NAK redelivers it, and convergence advances the floor
 
 ## 7. Personas and context assembly
 
@@ -308,8 +316,9 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       trigger when it PUBLISHES the persona task and the real work then sits unacked where
       upstream redelivers it. It reads each subject from its consumer's acknowledgement
       floor (finding the loop's consumer by FILTER SUBJECT, since its name is an unexported
-      sanitisation plus an operator suffix — semstreams#733), and disposes on that: queued means the substrate owns it, counted and
-      untouched; nothing queued with the artifact absent is stranded and gets a stage
+      sanitisation plus an operator suffix — semstreams#733), and disposes on that: queued
+      means the substrate owns it, counted and untouched; nothing queued with the artifact
+      absent is stranded and gets a stage
       re-triggered under `resume.MaxAttempts`, then `vocabulary.FailureTurnStranded` — its
       own stage, or for a turn still in `accepted` the FIRST stage, which is the single
       unconditional derivation the pass makes (index 0 only; any other index is a route
@@ -381,7 +390,20 @@ is the framework source of truth — read it, don't assume. Spec scenarios are t
       landed, and `LoopFailureWatcher` records the first rather than logging it. The claim
       this line used to make — that the turn waits "until the next boot's recovery replay" —
       was false in both halves: no replay fires for a parked turn, and there was no code to
-      record; ~~(c) tighten `checkArtifactGate`~~ **DONE** — it now asks the specific
+      record. **Crash-window follow-up:** persona task publish now uses a deterministic
+      role + turn + persisted-resume-attempt `TaskID` as `Nats-Msg-Id`; generation zero keeps
+      the legacy `role-turn` ID and generation N uses injective `role/turn/resume/N` framing
+      whose slash delimiter cannot occur in a validated turn ID. AGENT's duplicate window
+      equals its `MaxAge` in both stream declarations and declarative boot repairs/readbacks
+      it. The exact lost-PubAck test stores and delivers one task after same-generation
+      redelivery, while the stranded-turn test proves the persisted next generation is new
+      work rather than a suppressed duplicate. Boot also starts and durably catches up
+      the loop-failure consumer before binding stage consumers, so a queued failure wins over
+      an old trigger. The guarantee remains bounded: `MaxBytes` + `DiscardOld` followed by a
+      NATS restart, or a purge, can erase the task and recoverable duplicate evidence; this
+      is not universal at-most-once billing. Durable upstream TaskID claims/fencing remain a
+      requirement tracked by [SemStreams issue #807](https://github.com/C360Studio/semstreams/issues/807);
+      ~~(c) tighten `checkArtifactGate`~~ **DONE** — it now asks the specific
       question: for each phase a rule pins with `eq`, does another condition name a predicate
       in `vocabulary.StageArtifacts(that phase)`? The old "gated on something besides the
       phase" test is gone, so a *birth-record* fact like `turn.action.player` — present the
@@ -587,8 +609,9 @@ speaks and it is expensive to retrofit.
       query until the imported membership edges actually appear — never on the absence of
       `ErrIndexNotReady`**, which is inert in exactly that window: the index latches ready
       when the target count is zero and enumeration completes, so on a fresh
-      instance-per-world boot it reports ready *before the import writes anything*; `RegisterPayloads` called at every binary's bootstrap
-      (grep-check across `cmd/`). **Guard instantiation: import only when the world instance
+      instance-per-world boot it reports ready *before the import writes anything*;
+      `RegisterPayloads` called at every binary's bootstrap (grep-check across `cmd/`).
+      **Guard instantiation: import only when the world instance
       does not already exist** — a boot-time import into a live campaign resets every
       template-declared fact and drops play-created relationships, which is the exact
       inverse of "a restart must not replay the dragon eating you". Gate it the way
@@ -656,7 +679,9 @@ speaks and it is expensive to retrofit.
       wrong-*kind* target** (moving a character into an item, F16's own example), and that
       step's `rejected` entry must be flipped; duplicate action delivery;
       crash-resume at each phase (kill between roll and apply at minimum); reconnect
-      retrieval; email-cadence gap (clock-independent processing)
+      retrieval through the real authenticated client (ByTurn, ByAction, Latest, plus
+      cross-player denial — never an in-process `Results` helper); email-cadence gap
+      (clock-independent processing)
 - [x] 10.4 CI workflow: lint (revive-clean), `go test -race ./...`, mock-LLM e2e; no live
       inference anywhere in the gate. Assert **zero skips** across the module — that count
       is load-bearing now that missing infrastructure fails rather than skips, so a skip
@@ -664,13 +689,17 @@ speaks and it is expensive to retrofit.
       Note `internal/vocabulary` trips revive's `max-public-structs` (a closed vocabulary is
       exported types by construction — raise or disable it for that package rather than
       contorting the vocabulary), and a few `t.Fatalf` calls with constant strings will want
-      `t.Fatal` once a linter lands. Evidence: `task lint` passed `go vet`, gofmt, revive
+      `t.Fatal` once a linter lands. Post-remediation evidence: `task lint` passed `go vet`, gofmt, revive
       1.15.0, revive self-checks, and zero-skip gate self-checks; `task build` passed native
       and linux/amd64 cross-compilation; `task spec` passed strict validation; `task test`
-      passed race-enabled and uncached with 2,050 tests across 24 packages, zero skipped,
+      passed race-enabled and uncached with 2,121 tests across 24 packages, zero skipped,
       including the mock E2E
-- [ ] 10.5 Run `semmachina-reviewer` on the full slice pre-merge; resolve findings;
-      update task truth conservatively with evidence
+- [x] 10.5 Run `semmachina-reviewer` on the full slice pre-merge; resolve findings;
+      update task truth conservatively with evidence. The final integrated review compared
+      base `0e6af04` through the working tree, resolved its last two findings — injective
+      recovery `TaskID` framing and correct handling of an empty-string typed operation — and
+      returned APPROVED with no remaining actionable findings. The final post-fix candidate
+      then passed the complete 2,121-test race gate with zero skips
 - [x] 10.6 Completed the first live-model turn with Gemini 3.6 Flash on a fresh disposable
       broker. One paid action was accepted at `2026-07-31T19:05:02.293802Z` as turn
       `turn-TQNA3EAVZJUM5HMRXGKQM7JBNNQEFJ3ZILF67CSQLXTLMWW7EUUQ`; provider `gemini`,

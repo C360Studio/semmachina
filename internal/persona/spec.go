@@ -272,6 +272,11 @@ type TaskRequest struct {
 	// Identity is who the task is about. Injected onto every tool call the loop
 	// dispatches; never asked of the model.
 	Identity Identity
+	// ResumeAttempt is the persisted turn-resume attempt for this execution. Zero
+	// is the original execution. It is part of TaskID so a publish retry inside
+	// one execution deduplicates while work explicitly re-triggered by recovery
+	// is a new task the AGENT stream must accept.
+	ResumeAttempt int
 	// Band is the committed outcome the narrator is voicing. Required for a
 	// persona whose spec declares NeedsBand, refused for one that does not.
 	Band vocabulary.OutcomeBand
@@ -298,15 +303,22 @@ type TaskRequest struct {
 //   - Metadata is the identity channel. The loop merges it onto every tool call
 //     it dispatches, and the model cannot write to it.
 //
-// TaskID is derived from the role and the turn rather than minted, so a
-// re-spawned stage after a crash correlates with the attempt it is repeating
-// instead of looking like unrelated work.
+// TaskID is derived from role + turn + persisted execution generation rather
+// than minted. Generation zero preserves the legacy role-turn ID. A resumed
+// execution uses slash-delimited fields because slash is impossible in a
+// validated turn ID; appending a suffix would collide with a different valid
+// turn whose ID already ended in that suffix. A redelivery inside one attempt
+// carries the same ID and deduplicates.
 func (s Spec) Task(request TaskRequest) (agentic.TaskMessage, error) {
 	if err := s.Validate(); err != nil {
 		return agentic.TaskMessage{}, err
 	}
 	if err := request.Identity.Validate(); err != nil {
 		return agentic.TaskMessage{}, err
+	}
+	if request.ResumeAttempt < 0 {
+		return agentic.TaskMessage{}, fmt.Errorf(
+			"persona %q was spawned with negative resume attempt %d", s.Role, request.ResumeAttempt)
 	}
 	if request.Prompt == "" {
 		return agentic.TaskMessage{}, fmt.Errorf(
@@ -330,8 +342,12 @@ func (s Spec) Task(request TaskRequest) (agentic.TaskMessage, error) {
 	}
 
 	budget := s.MaxIterations
+	taskID := fmt.Sprintf("%s-%s", s.Role, request.Identity.TurnID)
+	if request.ResumeAttempt > 0 {
+		taskID = fmt.Sprintf("%s/%s/resume/%d", s.Role, request.Identity.TurnID, request.ResumeAttempt)
+	}
 	task := agentic.TaskMessage{
-		TaskID:        fmt.Sprintf("%s-%s", s.Role, request.Identity.TurnID),
+		TaskID:        taskID,
 		Role:          string(s.Role),
 		Model:         s.Capability,
 		Prompt:        request.Prompt,

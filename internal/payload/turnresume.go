@@ -3,12 +3,71 @@ package payload
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/c360studio/semstreams/message"
 
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
+
+// ResumeAttemptsFromTriples reads the persisted recovery generation from a
+// turn's graph facts. Absence is generation zero. A present value is
+// single-valued, whole, and positive; accepting any weaker shape would let the
+// reconciler and the persona task builder disagree about which execution they
+// are running.
+func ResumeAttemptsFromTriples(triples []message.Triple) (int, error) {
+	var objects []any
+	for _, triple := range triples {
+		if triple.Predicate == vocabulary.TurnResumeAttempts.String() {
+			objects = append(objects, triple.Object)
+		}
+	}
+	switch len(objects) {
+	case 0:
+		return 0, nil
+	case 1:
+	default:
+		return 0, fmt.Errorf("holds %d values for the single-valued %s",
+			len(objects), vocabulary.TurnResumeAttempts)
+	}
+
+	attempts, ok := wholeInt(objects[0])
+	if !ok {
+		return 0, fmt.Errorf("records %v (%T) for %s, want a whole number of attempts",
+			objects[0], objects[0], vocabulary.TurnResumeAttempts)
+	}
+	if attempts < 1 {
+		return 0, fmt.Errorf("records %d attempts for %s; absence is generation zero, so a persisted count must be positive",
+			attempts, vocabulary.TurnResumeAttempts)
+	}
+	return attempts, nil
+}
+
+func wholeInt(object any) (int, bool) {
+	switch value := object.(type) {
+	case int:
+		return value, true
+	case int64:
+		converted := int(value)
+		return converted, int64(converted) == value
+	case float64:
+		if math.IsNaN(value) || math.IsInf(value, 0) || math.Trunc(value) != value {
+			return 0, false
+		}
+		converted := int(value)
+		return converted, float64(converted) == value
+	case json.Number:
+		parsed, err := value.Int64()
+		if err != nil {
+			return 0, false
+		}
+		converted := int(parsed)
+		return converted, int64(converted) == parsed
+	default:
+		return 0, false
+	}
+}
 
 // TurnResume is the boot-time stranded-turn pass's mark on a turn: how many
 // times it has re-triggered this turn's parked stage.

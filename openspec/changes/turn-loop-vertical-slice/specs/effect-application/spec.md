@@ -42,22 +42,32 @@ recorded reason.
   reason is retrievable from the turn entity
 
 ### Requirement: Partial commits are detected, never mistaken for success
-The applier SHALL treat a batch as applied only when every per-entity merge succeeded; when
-any merge fails, the turn SHALL move to phase `failed` recording the failed target and the
-targets already committed. Each per-entity merge returns its own classified error — the
-merge lane carries no aggregate failed-subject list — so a batch touching N targets can
-commit some and fail others. Recovery is idempotent re-application under the `turn_id`
-batch identity, never a partial-batch repair.
+The applier SHALL treat a batch as applied only when every per-entity merge succeeded. When
+a merge returns a transient or unclassified `CommitError`, the turn SHALL remain in phase
+`applying` and the stage SHALL return the error so its durable delivery is retried. The
+error names the target whose response failed and the preceding targets whose responses
+confirmed success. These fields are response bookkeeping, not a proof that the named target
+did not mutate: its write may have landed before the response failed. Recovery is idempotent
+re-application under the `turn_id` batch identity, never a partial-batch repair. A transient
+partial commit is not a fictional rejection and SHALL NOT terminally fail the player's turn;
+an invalid or fatal classified cause SHALL end it once with `effect-commit-incomplete`
+rather than retry forever.
 
-#### Scenario: A failing merge fails the turn
-- **WHEN** a batch's Nth per-entity merge fails after N−1 have committed
-- **THEN** the turn moves to phase `failed` naming the failed target and recording the
-  committed ones, and the turn is never reported as applied
+#### Scenario: A transiently failing merge leaves the applying stage retryable
+- **WHEN** a batch's Nth per-entity merge returns a transient failure after N−1 confirmed
+- **THEN** the stage returns a `CommitError` naming the unconfirmed target and confirmed
+  response prefix, the turn remains in `applying`, and the durable trigger is not acknowledged
+
+#### Scenario: A response failure after mutation still converges
+- **WHEN** a target mutation lands but its response fails and does not enter `Committed`
+- **THEN** the retry re-applies that target with replace semantics and converges with one
+  intended value and one applied-batch marker
 
 #### Scenario: Re-application after a partial commit converges
 - **WHEN** a batch partially committed and the apply stage runs again for the same turn
 - **THEN** re-application under the same `turn_id` batch identity converges the world to
-  the full intended batch state, with already-committed subjects unchanged by replacement
+  the full intended batch state, with already-committed subjects unchanged by replacement,
+  one applied-batch marker, and no terminal failure recorded
 
 ### Requirement: Multi-valued predicates are written as complete sets
 A write to a multi-valued predicate SHALL publish the predicate's full intended value set,

@@ -392,6 +392,10 @@ func TestAgentStreamConfig_StatesEveryEvictionLimit(t *testing.T) {
 	if cfg.MaxBytes <= 0 {
 		t.Errorf("MaxBytes is %d; -1 and 0 both mean unlimited, which is not a stated limit", cfg.MaxBytes)
 	}
+	if cfg.Duplicates != stage.AgentStreamMaxAge {
+		t.Errorf("Duplicates is %v, want the complete retained-task horizon %v",
+			cfg.Duplicates, stage.AgentStreamMaxAge)
+	}
 	if cfg.Discard != jetstream.DiscardOld {
 		t.Errorf("discard policy %v; refusing NEW publishes would stop the engine spawning personas at all",
 			cfg.Discard)

@@ -81,6 +81,26 @@ already-advanced phase is a no-op.
   call. Replace-writes converge on *one* value, not on the *same* value, so a resumed
   persona stage does not promise the output the interrupted attempt would have produced
 
+#### Scenario: Persona task was stored but its PubAck was lost
+- **WHEN** the agent stream stores a persona task but the stage caller observes an error,
+  and redelivery in the same persisted resume generation publishes the same deterministic
+  `TaskID` again within the configured agent-stream retention horizon
+- **THEN** both publishes carry that `TaskID` as `Nats-Msg-Id`, JetStream stores and
+  delivers one task, and the redelivery does not buy a second model call. This is a bounded
+  local crash-window guarantee, not universal at-most-once billing: `MaxBytes` plus
+  `DiscardOld` followed by a NATS restart, or an operator purge, can remove both the old
+  task and the server's recoverable duplicate evidence; durable TaskID claims/fencing remain
+  an upstream requirement tracked by [SemStreams issue #807](https://github.com/C360Studio/semstreams/issues/807)
+
+#### Scenario: Recovery replaces acknowledged persona work that produced no artifact
+- **WHEN** a persona task was acknowledged without producing its stage artifact and the boot
+  pass persists resume attempt N before re-triggering that stage
+- **THEN** both persona roles derive their task ID from the assembled turn: generation zero
+  retains the legacy `role-turn` ID, generation N uses `role/turn/resume/N` with a delimiter
+  forbidden in validated turn IDs, and retries within generation N still deduplicate while
+  the intentional recovered execution is accepted as new work without colliding with another
+  valid turn's generation-zero ID
+
 #### Scenario: A skipped stage is an error, not a decline
 - **WHEN** a trigger would advance a turn past a stage that never ran
 - **THEN** the transition is refused as illegal rather than silently declined, because a
@@ -110,7 +130,8 @@ modifiers and can therefore shift the total and the band even on identical dice.
   process restarts
 - **THEN** a boot-time pass over every turn in the world finds it — by reading which turns
   the stage stream still holds an unacknowledged trigger for, not by asking which rules
-  would match — re-triggers the stage its phase names, and the turn resolves
+  would match — persists the next resume attempt, re-triggers the stage its phase names,
+  and the turn resolves
 
 #### Scenario: A turn whose first hop never arrived
 - **WHEN** a turn is created and the hop that would start it is lost or never published, so
@@ -134,6 +155,14 @@ modifiers and can therefore shift the total and the band even on identical dice.
 - **THEN** the boot pass leaves the turn alone, because that task will be redelivered — the
   work is in flight inside the restarting process rather than lost, and re-triggering the
   stage would buy a second billed persona call racing the first to write the same artifact
+
+#### Scenario: A queued loop failure wins over an older stage trigger on restart
+- **WHEN** a loop-failure event and an older trigger for its persona stage are both queued
+  while the engine is down
+- **THEN** boot binds the durable loop-failure watcher and waits for its pending and
+  acknowledgement-pending counts to reach zero before binding stage consumers, so the
+  failure terminally records the turn and the old trigger is declined without another model
+  call
 
 #### Scenario: A sequencing rule fired and its publish did not
 - **WHEN** a rule's publish action fails — an open circuit breaker, a disconnected client, a

@@ -33,6 +33,7 @@ func TestE2E_ATurnResolvesWithNobodyConnectedAndTheAnswerWaits(t *testing.T) {
 	// The player leaves. Everything from here happens with no session for this
 	// player anywhere in the process.
 	player.close()
+	w.awaitPlayerConnections(t, 0)
 
 	if phase := awaitTerminal(t, turnEntityID); phase != vocabulary.PhaseComplete {
 		t.Fatalf("the turn ended in %q with nobody watching; no turn-loop step may wait on a player", phase)
@@ -45,12 +46,15 @@ func TestE2E_ATurnResolvesWithNobodyConnectedAndTheAnswerWaits(t *testing.T) {
 	requireNothingQueuedFor(t, turnEntityID)
 	requireResolvedNotificationAcked(t, turnEntityID)
 
-	// The answer is composed from the graph and the object store, by the same
-	// production surface the push path uses. Nothing was remembered.
-	first, err := w.results(t).Latest(t.Context(), w.playerID)
-	if err != nil {
-		t.Fatalf("retrieve the player's last terminal result: %v", err)
+	// The player reconnects and asks through the authenticated public socket.
+	// Nothing was remembered by the adapter, and no in-process test helper gets
+	// privileged access to the result.
+	reconnected := w.dial(t)
+	firstResponse := reconnected.retrieve(t, playersocket.RetrieveLatest, "")
+	if firstResponse.Status != playersocket.RetrieveFound || firstResponse.Delivery == nil {
+		t.Fatalf("retrieve the player's last terminal result: %+v", firstResponse)
 	}
+	first := firstResponse.Delivery
 	if first.Result.TurnID != response.TurnID {
 		t.Errorf("retrieval answered with turn %q, want %q", first.Result.TurnID, response.TurnID)
 	}
@@ -64,10 +68,11 @@ func TestE2E_ATurnResolvesWithNobodyConnectedAndTheAnswerWaits(t *testing.T) {
 	// would make a result read differently on Tuesday than it did on Monday —
 	// which is precisely the assumption email-cadence play forbids.
 	time.Sleep(1200 * time.Millisecond)
-	second, err := w.results(t).Latest(t.Context(), w.playerID)
-	if err != nil {
-		t.Fatalf("retrieve the same result again: %v", err)
+	secondResponse := reconnected.retrieve(t, playersocket.RetrieveLatest, "")
+	if secondResponse.Status != playersocket.RetrieveFound || secondResponse.Delivery == nil {
+		t.Fatalf("retrieve the same result again: %+v", secondResponse)
 	}
+	second := secondResponse.Delivery
 	if !second.Result.ResolvedAt.Equal(first.Result.ResolvedAt) {
 		t.Errorf("the same turn reports resolved_at %s and then %s; retrieval time has become part of the "+
 			"record", first.Result.ResolvedAt, second.Result.ResolvedAt)
@@ -126,20 +131,22 @@ func TestE2E_ADeliveryFollowsThePlayerAcrossAReconnect(t *testing.T) {
 	// They are assembled by one composition from one record, and a divergence
 	// between them would mean a player who was watching and a player who came back
 	// are told different things about one turn.
-	retrieved, err := w.results(t).ByTurn(t.Context(), response.TurnID)
-	if err != nil {
-		t.Fatalf("retrieve the turn by id: %v", err)
+	retrieval := second.retrieve(t, playersocket.RetrieveByTurn, response.TurnID)
+	if retrieval.Status != playersocket.RetrieveFound || retrieval.Delivery == nil {
+		t.Fatalf("retrieve the turn by id: %+v", retrieval)
 	}
+	retrieved := retrieval.Delivery
 	if !bytesEqual(t, delivery, retrieved) {
 		t.Error("the pushed delivery and the retrieved one are different documents")
 	}
 
 	// Retrieval by ACTION id answers with the same turn, which is what a client
 	// holding only its own idempotency-derived id can ask.
-	byAction, err := w.results(t).ByAction(t.Context(), response.ActionID)
-	if err != nil {
-		t.Fatalf("retrieve the turn by action id: %v", err)
+	byActionResponse := second.retrieve(t, playersocket.RetrieveByAction, response.ActionID)
+	if byActionResponse.Status != playersocket.RetrieveFound || byActionResponse.Delivery == nil {
+		t.Fatalf("retrieve the turn by action id: %+v", byActionResponse)
 	}
+	byAction := byActionResponse.Delivery
 	if byAction.Result.TurnID != response.TurnID {
 		t.Errorf("retrieval by action %q answered with turn %q", response.ActionID, byAction.Result.TurnID)
 	}

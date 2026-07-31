@@ -61,7 +61,7 @@ type parkedWorld struct {
 func startParkedWorld(t *testing.T) *parkedWorld {
 	t.Helper()
 	harness := testinfra.Require(t)
-	namespace := fmt.Sprintf("p%d", worldCounter.Add(1))
+	namespace := nextTestNamespace("p")
 
 	store, err := graphio.NewStore(harness.Client)
 	if err != nil {
@@ -959,7 +959,7 @@ func TestTurnLoop_AStrandedTurnResumesAndCompletesAfterTheBootPass(t *testing.T)
 	world := startLoop(t)
 	drop(t, persona.RoleAdjudicator)
 
-	_, entityID := world.submit(t, "act-stranded", "I lean on the gate and wait.")
+	turnID, entityID := world.submit(t, "act-stranded", "I lean on the gate and wait.")
 	select {
 	case <-world.spawned:
 	case <-time.After(45 * time.Second):
@@ -1005,7 +1005,14 @@ func TestTurnLoop_AStrandedTurnResumesAndCompletesAfterTheBootPass(t *testing.T)
 	if report.StageRetriggered != 1 {
 		t.Fatalf("report = %+v; the stranded turn's stage was not re-triggered", report)
 	}
-
+	select {
+	case resumed := <-world.spawned:
+		if want := string(persona.RoleAdjudicator) + "/" + turnID + "/resume/1"; resumed.TaskID != want {
+			t.Fatalf("recovered task id = %q, want %q", resumed.TaskID, want)
+		}
+	case <-time.After(45 * time.Second):
+		t.Fatal("the persisted recovery attempt did not spawn a new adjudicator task")
+	}
 	state := world.awaitPhase(t, entityID, vocabulary.PhaseComplete)
 	if got := testinfra.ObjectsFor(state, vocabulary.TurnResumeAttempts.String()); len(got) != 1 ||
 		fmt.Sprint(got[0]) != "1" {

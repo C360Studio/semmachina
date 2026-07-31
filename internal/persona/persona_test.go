@@ -632,6 +632,110 @@ func TestTask_CarriesTheBudgetTheToolsAndTheInjectedIdentity(t *testing.T) {
 	}
 }
 
+func TestTaskID_IsStableWithinOneExecutionAndChangesAfterAResume(t *testing.T) {
+	for _, spec := range []persona.Spec{persona.Adjudicator(), persona.Narrator()} {
+		t.Run(string(spec.Role), func(t *testing.T) {
+			request := persona.TaskRequest{
+				Identity: testIdentity(), Prompt: "world",
+			}
+			if spec.Role == persona.RoleNarrator {
+				request.Band = vocabulary.BandPartial
+			}
+			initial, err := spec.Task(request)
+			if err != nil {
+				t.Fatalf("initial Task: %v", err)
+			}
+			if want := string(spec.Role) + "-" + testIdentity().TurnID; initial.TaskID != want {
+				t.Fatalf("generation-zero task id = %q, want legacy id %q", initial.TaskID, want)
+			}
+			retry, err := spec.Task(request)
+			if err != nil {
+				t.Fatalf("same-generation Task: %v", err)
+			}
+			request.ResumeAttempt = 1
+			resumed, err := spec.Task(request)
+			if err != nil {
+				t.Fatalf("resumed Task: %v", err)
+			}
+			if initial.TaskID != retry.TaskID {
+				t.Fatalf("same execution generation produced task ids %q and %q", initial.TaskID, retry.TaskID)
+			}
+			if resumed.TaskID == initial.TaskID {
+				t.Fatalf("resumed execution reused task id %q; AGENT would suppress the work for seven days",
+					resumed.TaskID)
+			}
+			if want := fmt.Sprintf("%s/%s/resume/1", spec.Role, request.Identity.TurnID); resumed.TaskID != want {
+				t.Fatalf("resumed task id = %q, want %q", resumed.TaskID, want)
+			}
+		})
+	}
+}
+
+func TestResumedTaskID_FramingIsInjectiveAndWireCompatible(t *testing.T) {
+	identityForAction := func(actionID string) persona.Identity {
+		turnID := payload.TurnIDForAction(actionID)
+		return persona.Identity{
+			TurnID:       turnID,
+			TurnEntityID: strings.TrimSuffix(testTurnEntityID, testTurnID) + turnID,
+			ActionID:     actionID,
+			SceneID:      testSceneID,
+		}
+	}
+	spec := persona.Adjudicator()
+	resumed, err := spec.Task(persona.TaskRequest{
+		Identity: identityForAction("foo"), ResumeAttempt: 1, Prompt: "world",
+	})
+	if err != nil {
+		t.Fatalf("resumed Task: %v", err)
+	}
+	legacyLookalike, err := spec.Task(persona.TaskRequest{
+		Identity: identityForAction("foo-resume-1"), Prompt: "world",
+	})
+	if err != nil {
+		t.Fatalf("lookalike generation-zero Task: %v", err)
+	}
+	if resumed.TaskID == legacyLookalike.TaskID {
+		t.Fatalf("resumed turn-foo and generation-zero turn-foo-resume-1 collided on %q", resumed.TaskID)
+	}
+	if want := "adjudicator/turn-foo/resume/1"; resumed.TaskID != want {
+		t.Fatalf("resumed task id = %q, want injectively framed %q", resumed.TaskID, want)
+	}
+	if want := "adjudicator-turn-foo-resume-1"; legacyLookalike.TaskID != want {
+		t.Fatalf("generation-zero task id = %q, want legacy id %q", legacyLookalike.TaskID, want)
+	}
+	if err := resumed.Validate(); err != nil {
+		t.Fatalf("framework TaskMessage rejected slash-framed id: %v", err)
+	}
+	wire, err := json.Marshal(resumed)
+	if err != nil {
+		t.Fatalf("marshal resumed task: %v", err)
+	}
+	var decoded agentic.TaskMessage
+	if err := json.Unmarshal(wire, &decoded); err != nil {
+		t.Fatalf("unmarshal resumed task: %v", err)
+	}
+	if decoded.TaskID != resumed.TaskID {
+		t.Fatalf("task id round-tripped as %q, want %q", decoded.TaskID, resumed.TaskID)
+	}
+	if err := decoded.Validate(); err != nil {
+		t.Fatalf("round-tripped TaskMessage rejected slash-framed id: %v", err)
+	}
+}
+
+func TestTask_RefusesANegativeResumeAttempt(t *testing.T) {
+	for _, spec := range []persona.Spec{persona.Adjudicator(), persona.Narrator()} {
+		t.Run(string(spec.Role), func(t *testing.T) {
+			_, err := spec.Task(persona.TaskRequest{
+				Identity: testIdentity(), ResumeAttempt: -1,
+				Band: vocabulary.BandPartial, Prompt: "world",
+			})
+			if err == nil || !strings.Contains(err.Error(), "negative resume attempt") {
+				t.Fatalf("error = %v, want negative resume attempt rejection", err)
+			}
+		})
+	}
+}
+
 // The narration spec's "no mutation-capable tool" made structural: the task
 // carries an explicit allowlist of one, and Tools being non-nil is what makes it
 // an override rather than "whatever happens to be registered".

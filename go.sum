@@ -12,8 +12,6 @@ github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERo
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
-github.com/c360studio/semstreams v1.0.0-beta.158 h1:crr+/WxUr+LNQ6sg37umCPFUIS8fN1TV7/k+ACMCIn4=
-github.com/c360studio/semstreams v1.0.0-beta.158/go.mod h1:Cww6rrZCnjrzv/0ZbzGhiRPPY8L79bFUaJjvhtO9xgU=
 github.com/c360studio/semstreams v1.0.0-beta.159 h1:qvI5ujyjxY3pHQMeD/obnrQ0g2yiKMc/vlG/+/Orfqg=
 github.com/c360studio/semstreams v1.0.0-beta.159/go.mod h1:Cww6rrZCnjrzv/0ZbzGhiRPPY8L79bFUaJjvhtO9xgU=
 github.com/cenkalti/backoff/v4 v4.3.0 h1:MyRJ/UdXutAwSAT+s3wNd7MfTIcy71VQueUuFK343L8=

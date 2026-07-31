@@ -31,6 +31,10 @@ var (
 	ErrNoResult = errors.New("no terminal result for this turn")
 	// ErrTurnNotFound reports a turn id nothing in this world ever created.
 	ErrTurnNotFound = errors.New("no such turn")
+	// ErrResultNotAccessible reports a named turn that does not belong to the
+	// authenticated player asking for it. Public adapters intentionally collapse
+	// it with ErrTurnNotFound so ids cannot be used as a cross-player state oracle.
+	ErrResultNotAccessible = errors.New("result is not accessible to this player")
 	// ErrNarrationMissing reports a result whose narration reference resolves to
 	// no object.
 	//
@@ -133,6 +137,34 @@ func (r *Results) ByTurn(ctx context.Context, turnID string) (*payload.TurnDeliv
 	return r.deliverable(ctx, turnID, turnEntityID, state)
 }
 
+// ByTurnForPlayer answers only when the named turn belongs to playerID.
+// Ownership is checked from the turn's birth scalar before any artifact is
+// dereferenced, so a foreign lookup cannot read another player's dice or prose.
+func (r *Results) ByTurnForPlayer(
+	ctx context.Context,
+	playerID, turnID string,
+) (*payload.TurnDelivery, error) {
+	if err := types.ValidateEntityID(playerID); err != nil {
+		return nil, fmt.Errorf("a scoped result lookup needs a player entity id: %w", err)
+	}
+	turnEntityID, err := r.identity.EntityID(turnID)
+	if err != nil {
+		return nil, err
+	}
+	state, err := r.read(ctx, turnEntityID)
+	if err != nil {
+		return nil, err
+	}
+	owner, err := resultOwner(state, turnEntityID)
+	if err != nil {
+		return nil, err
+	}
+	if owner != playerID {
+		return nil, fmt.Errorf("%w: turn %s", ErrResultNotAccessible, turnID)
+	}
+	return r.deliverable(ctx, turnID, turnEntityID, state)
+}
+
 // ByAction answers with the delivery for the turn one action produced.
 //
 // It DERIVES the turn rather than looking it up, because turn and action are 1:1
@@ -143,6 +175,17 @@ func (r *Results) ByAction(ctx context.Context, actionID string) (*payload.TurnD
 		return nil, err
 	}
 	return r.ByTurn(ctx, payload.TurnIDForAction(actionID))
+}
+
+// ByActionForPlayer is the action-id form of ByTurnForPlayer.
+func (r *Results) ByActionForPlayer(
+	ctx context.Context,
+	playerID, actionID string,
+) (*payload.TurnDelivery, error) {
+	if err := payload.RequireActionID(actionID); err != nil {
+		return nil, err
+	}
+	return r.ByTurnForPlayer(ctx, playerID, payload.TurnIDForAction(actionID))
 }
 
 // Latest answers with a player's most recent TERMINAL result.
@@ -229,6 +272,16 @@ func (r *Results) Latest(ctx context.Context, playerID string) (*payload.TurnDel
 		if err != nil {
 			return nil, err
 		}
+		owner, err := resultOwner(state, turnEntityID)
+		if err != nil {
+			return nil, err
+		}
+		if owner != playerID {
+			// A stale or corrupt pointer at another player's turn is not an
+			// address this player may follow. The other candidate can still
+			// answer, and no private artifact has been read.
+			continue
+		}
 		delivery, err := r.deliverable(ctx, turnID, turnEntityID, state)
 		if errors.Is(err, ErrNoResult) {
 			// The turn is still running. Normal for the current pointer, and the
@@ -246,6 +299,20 @@ func (r *Results) Latest(ctx context.Context, playerID string) (*payload.TurnDel
 		return nil, fmt.Errorf("%w: player %s has finished no turn", ErrNoResult, playerID)
 	}
 	return best, nil
+}
+
+// resultOwner reads the authorization scalar written atomically when a turn is
+// born. It deliberately performs no artifact reads.
+func resultOwner(state *graph.EntityState, turnEntityID string) (string, error) {
+	playerID, err := soleString(state, vocabulary.TurnActionPlayer)
+	if err != nil {
+		return "", err
+	}
+	if err := types.ValidateEntityID(playerID); err != nil {
+		return "", fmt.Errorf("turn %s records an invalid player at %s: %w",
+			turnEntityID, vocabulary.TurnActionPlayer, err)
+	}
+	return playerID, nil
 }
 
 // candidateTurns is the bounded set of turns a most-recent lookup will read.

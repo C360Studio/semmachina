@@ -35,10 +35,10 @@ const (
 	// inside an item.
 	FailureEffectEntityKind FailureReason = "effect-entity-kind"
 	// FailureEffectCommitIncomplete reports a batch whose per-entity writes
-	// partially landed. The merge lane is per-entity, so a multi-target batch is
-	// N independent writes and any of them can fail after its predecessors
-	// committed; the turn fails naming the target that did not land, and
-	// recovery is idempotent re-application, never a partial-batch repair.
+	// could not all be confirmed. A transient cause is retried and never records
+	// this reason; an invalid or fatal classified cause ends once with it. The
+	// named target may have mutated before its response failed, while Committed
+	// is only the confirmed-success response prefix.
 	FailureEffectCommitIncomplete FailureReason = "effect-commit-incomplete"
 	// FailurePersonaCapExhausted reports a persona loop that reached its
 	// MaxIterations cap without a terminal exit.

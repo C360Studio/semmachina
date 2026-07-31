@@ -158,12 +158,17 @@
 //
 // # What travels on this socket
 //
-// Client to server: a bare payload.SubmitAction, exactly the document the public
-// protocol defines, so the gateway's strict decoding — unknown field refused,
-// server-owned field refused by name — applies to the client's own bytes.
+// Client to server: either a bare payload.SubmitAction, retained exactly for v1
+// compatibility so the gateway's strict decoding applies to the client's own
+// bytes, or an explicitly typed RetrieveRequest. Retrieval never accepts a
+// player id: Latest derives it from authentication, and named lookups authorize
+// the turn's ownership scalar against that same session BEFORE resolving dice or
+// prose. A foreign id and an absent id receive the same not-found refusal, so the
+// operation is not a cross-player state oracle.
 //
 // Server to client: a Frame, which is a typed envelope, because this direction
-// carries TWO documents (a submission's answer and a turn's result) and a client
+// carries submission answers, pushed turns, retrieval answers, and typed
+// operation refusals, and a client
 // that had to infer which one arrived would guess wrong on the path it exercises
 // least. The envelope is this adapter's and not the protocol's: multiplexing is a
 // property of a duplex socket, and an email adapter delivering one document per

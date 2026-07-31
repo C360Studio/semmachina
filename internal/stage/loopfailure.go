@@ -50,6 +50,9 @@ const (
 	// DefaultFailureHeartbeat resets the ack clock while the watcher is
 	// working.
 	DefaultFailureHeartbeat = 10 * time.Second
+	// failureCatchUpPoll is the broker-state polling cadence used only during
+	// boot. Completion is authoritative consumer state, not elapsed time.
+	failureCatchUpPoll = 10 * time.Millisecond
 )
 
 // The agentic stream's eviction limits.
@@ -117,6 +120,14 @@ func AgentStreamConfig() jetstream.StreamConfig {
 		Retention: jetstream.LimitsPolicy,
 		MaxAge:    AgentStreamMaxAge,
 		MaxBytes:  AgentStreamMaxBytes,
+		// A task's TaskID is also its Nats-Msg-Id. Holding duplicate history for
+		// the complete retention horizon closes the publish-ack crash window for
+		// every task that can still be present on an ordinary running stream.
+		// This is deliberately a bounded local guarantee: DiscardOld under
+		// MaxBytes, an operator purge, or a NATS restart after the oldest bytes
+		// were evicted can remove the message and its dedup evidence. It is not a
+		// universal at-most-once billing claim.
+		Duplicates: AgentStreamMaxAge,
 		// DiscardOld rather than the ledger's DiscardNew. These are time-shaped
 		// events whose value decays: when the cap is reached the oldest agentic
 		// traffic is the least useful thing on the stream, while refusing NEW
@@ -317,6 +328,41 @@ func (w *LoopFailureWatcher) Start(ctx context.Context) error {
 		return fmt.Errorf("bind the loop-failure consumer: %w", err)
 	}
 	return nil
+}
+
+// CatchUp waits until the durable consumer has acknowledged every loop failure
+// that preceded this boot. Start must be called first.
+//
+// Boot uses this barrier before it binds stage-trigger consumers. A queued loop
+// failure can therefore terminally record its turn before an older redelivered
+// stage trigger gets a chance to spawn the same persona again. NumPending alone
+// is insufficient: it reaches zero while the handler is still running, so the
+// acknowledgement-pending count is part of the barrier.
+func (w *LoopFailureWatcher) CatchUp(ctx context.Context) error {
+	stream, err := w.streams.GetStream(ctx, TaskStream)
+	if err != nil {
+		return fmt.Errorf("read the %s stream while catching up loop failures: %w", TaskStream, err)
+	}
+	consumer, err := stream.Consumer(ctx, w.consumerName)
+	if err != nil {
+		return fmt.Errorf("read loop-failure consumer %s: %w", w.consumerName, err)
+	}
+	ticker := time.NewTicker(failureCatchUpPoll)
+	defer ticker.Stop()
+	for {
+		info, infoErr := consumer.Info(ctx)
+		if infoErr != nil {
+			return fmt.Errorf("read loop-failure consumer %s state: %w", w.consumerName, infoErr)
+		}
+		if info.NumPending == 0 && info.NumAckPending == 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("catch up loop failures: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 // Handle records one loop failure against the turn it belonged to. Its return

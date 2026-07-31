@@ -187,8 +187,9 @@ func (a *Applier) commit(
 			graphio.WithClearedPredicates(cleared...)); err != nil {
 			// The merge lane is per-entity and its response carries no
 			// failed-subject list, so this is where a multi-entity batch stops
-			// being atomic. Naming what landed is the difference between a
-			// recoverable turn and a world nobody can explain.
+			// being atomic. A response error cannot say whether this target
+			// mutated before the reply failed, so written is only the confirmed
+			// response prefix and recovery re-applies this target too.
 			return Outcome{}, &CommitError{
 				BatchID: batch.BatchID, Target: entityID, Committed: written, Err: err,
 			}

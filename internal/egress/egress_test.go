@@ -285,6 +285,8 @@ func turnIDOf(turnEntityID string) string {
 type fakeArtifacts struct {
 	rolls      map[string]*payload.RollResult
 	narrations map[string]*content.Narration
+	rollReads  int
+	proseReads int
 }
 
 func newFakeArtifacts() *fakeArtifacts {
@@ -295,6 +297,7 @@ func newFakeArtifacts() *fakeArtifacts {
 }
 
 func (a *fakeArtifacts) GetRoll(_ context.Context, ref content.Ref) (*payload.RollResult, error) {
+	a.rollReads++
 	roll, ok := a.rolls[ref.String()]
 	if !ok {
 		return nil, fmt.Errorf("resolve %s: %w", ref, content.ErrArtifactNotFound)
@@ -303,6 +306,7 @@ func (a *fakeArtifacts) GetRoll(_ context.Context, ref content.Ref) (*payload.Ro
 }
 
 func (a *fakeArtifacts) GetNarration(_ context.Context, ref content.Ref) (*content.Narration, error) {
+	a.proseReads++
 	narration, ok := a.narrations[ref.String()]
 	if !ok {
 		return nil, fmt.Errorf("resolve %s: %w", ref, content.ErrArtifactNotFound)

@@ -95,7 +95,13 @@ registered predicate list), `set_status` (condition enum). The applier validates
 against the vocabulary, per-type bounds, and target-entity existence; valid intents commit
 through `graph.mutation.*`; any invalid intent fails the whole batch → turn phase
 `failed` with a recorded reason (no partial batches). Rejection is a normal, tested path,
-not an exception.
+not an exception. A transient infrastructure failure after one or more per-entity merges
+is not a rejection: the turn remains in `applying`, the stage returns the `CommitError` to
+its durable consumer, and redelivery re-applies the same derived batch under replace
+semantics until the world and final turn marker converge. Invalid and fatal classified
+commit failures end once with `effect-commit-incomplete`; they cannot improve on redelivery.
+The error's `Committed` slice is only the confirmed-success response prefix. The failing
+`Target` may already have mutated before its response was lost, so recovery always re-applies it.
 
 ### D6 — Campaign ledger: JetStream stream of turn manifests
 
@@ -136,8 +142,16 @@ reply-to address). The WebSocket input component only authenticates-by-configura
 (single player), normalizes, and publishes; the output component watches for narration
 refs addressed to the player's channel binding and delivers prose + a minimal resolution
 summary (verdict class, roll, band — the stage-3 resolution card's data, available early).
-Reconnect replays the last completed turn's result by reading the turn entity + ObjectStore,
-not from adapter memory.
+Reconnect recovery is an explicit typed request on the authenticated WebSocket: by turn id,
+by action id, or latest terminal result. The first two authorize the composed result against
+the session's player from the turn entity before dereferencing private artifacts; foreign and
+absent ids are deliberately the same not-found answer. Latest accepts no player id at all. The adapter
+reads the turn entity + ObjectStore rather than retaining delivery memory; bare v1
+`SubmitAction` remains compatible and cannot be confused with the typed retrieval operation.
+A present unknown `type` gets its own typed operation refusal rather than falling through to
+a `SubmitResponse`; an explicitly empty or non-string `type` is a malformed operation, never
+an absent discriminator. Player/v1 pins the fields and closed values of all these socket documents
+in `internal/payload/protocol_test.go`, alongside the existing action/result surface.
 
 ### D10 — Personas and context assembly
 
@@ -559,6 +573,29 @@ turn is ended immediately rather than spending a budget proving it. Nothing deri
 successor phase, or a route from the pack; `PhaseRank` and `PhasePredecessors` are
 deliberately unused, because reaching for them to publish the *next* phase's trigger rebuilds
 the second FSM one layer down.
+
+The publish boundary closes the narrower crash window locally. Persona `TaskID` is
+deterministic from role + turn + the persisted `turn.resume.attempts` execution generation:
+generation zero retains the legacy `role-turn` ID, while generation N uses the injectively
+framed `role/turn/resume/N`. Slash cannot occur in a validated turn ID, so the resumed ID
+cannot collide with a generation-zero turn whose otherwise-valid ID resembles a suffix.
+`Spawner` sends that ID as `Nats-Msg-Id`, and `AGENT` declares a duplicate window equal to
+its seven-day `MaxAge` in both the programmatic and declarative stream configurations.
+Declarative boot reconciliation repairs older live streams. If the first PubAck reached the
+server but not the stage caller, redelivery within the same generation republishes the same
+ID and one task is stored and delivered. The reconciler persists the next attempt before it
+publishes the recovery trigger, so intentionally re-running acknowledged work gets a new ID
+instead of being suppressed as the old task's duplicate. This is deliberately not universal
+at-most-once billing: `AGENT` is bounded by `MaxBytes` with `DiscardOld`, and an eviction
+followed by a NATS restart (or an operator purge) can remove the old task and the duplicate
+evidence reconstructible from it. Durable TaskID claims/fencing therefore remain an upstream
+requirement tracked by [SemStreams issue #807](https://github.com/C360Studio/semstreams/issues/807).
+
+Queued loop failures have precedence at boot. After the stranded-turn measurement, boot
+starts the durable `LoopFailureWatcher` and waits until both its pending and ack-pending
+counts are zero before binding a stage consumer. A failure emitted before the crash
+therefore terminally records its turn before an older trigger can reach a persona spawner;
+the phase recorder declines that trigger and no extra model request is made.
 
 **Ordering, settled by probe rather than argument.** The measurement is only sound if
 nothing is publishing while it is taken, and the rule engine's bootstrap replay publishes

@@ -69,7 +69,10 @@ const (
 	StepRules StepID = "rules"
 	// StepResume runs the boot-time stranded-turn pass.
 	StepResume StepID = "resume"
-	// StepStages binds the stage runners and the loop-failure watcher.
+	// StepLoopFailures binds the durable loop-failure watcher and drains failures
+	// that accumulated before this boot.
+	StepLoopFailures StepID = "loop-failures"
+	// StepStages binds the executable stage runners.
 	StepStages StepID = "stages"
 	// StepEgress binds the resolved-turn notifier.
 	StepEgress StepID = "egress"
@@ -100,6 +103,7 @@ type Engine struct {
 	recorder *turn.Recorder
 	gate     *campaign.Gate
 	importer *world.Importer
+	results  *egress.Results
 
 	pkg      *world.Package
 	plan     *world.Plan
@@ -355,13 +359,20 @@ func (e *Engine) steps() []Step {
 			Run:   e.reconcileStrandedTurns,
 		},
 		{
+			ID: StepLoopFailures,
+			// A queued failure is terminal evidence from work that already ran.
+			// Drain it before an old stage trigger can spawn that work again.
+			Needs: []StepID{StepResume, StepAgentStream, StepWorld},
+			Run:   e.startLoopFailures,
+		},
+		{
 			ID: StepStages,
 			// After the pass, so no stage consumer drains a trigger the pass is
 			// still measuring. This is the step after which a persona can run, so
 			// it is where both gates that protect a persona live: the marker is
 			// re-read, and the two lanes the agentic loop waits on are proven to
 			// have somebody consuming them.
-			Needs: []StepID{StepResume, StepAgentic, StepWorld},
+			Needs: []StepID{StepLoopFailures, StepAgentic, StepWorld},
 			Check: e.checkStagePreconditions,
 			Run:   e.startStages,
 		},
@@ -534,8 +545,18 @@ func (e *Engine) deps() component.Dependencies {
 // binds a consumer on (including tool.result.>, which upstream's subject
 // derivation does not produce and without which the loop does not start).
 func (e *Engine) ensureAgentStream(ctx context.Context) error {
-	if _, err := e.client.EnsureStream(ctx, stage.AgentStreamConfig()); err != nil {
+	stream, err := e.client.EnsureStream(ctx, stage.AgentStreamConfig())
+	if err != nil {
 		return fmt.Errorf("ensure the %s stream: %w", stage.TaskStream, err)
+	}
+	info, err := stream.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("read the %s stream after declarative reconciliation: %w", stage.TaskStream, err)
+	}
+	if info.Config.MaxAge != stage.AgentStreamMaxAge || info.Config.Duplicates != info.Config.MaxAge {
+		return fmt.Errorf(
+			"the %s stream retained tasks for %s but duplicate evidence for %s; both must equal %s",
+			stage.TaskStream, info.Config.MaxAge, info.Config.Duplicates, stage.AgentStreamMaxAge)
 	}
 	return checkStreamCaptures(ctx, e.client, stage.TaskStream, agentStreamSubjects...)
 }
@@ -799,8 +820,7 @@ func (e *Engine) checkStagePreconditions(ctx context.Context) error {
 	return e.checkAgenticBridges(ctx)
 }
 
-// startStages binds every stage of the turn loop and the watcher that ends a
-// turn whose persona loop died.
+// startStages binds every executable stage of the turn loop.
 func (e *Engine) startStages(ctx context.Context) error {
 	assembler, err := scene.NewAssembler(e.graph)
 	if err != nil {
@@ -864,17 +884,23 @@ func (e *Engine) startStages(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := runner.Start(ctx); err != nil {
-		return err
-	}
+	return runner.Start(ctx)
+}
 
+// startLoopFailures binds the durable watcher and waits until every failure
+// queued before this boot is acknowledged. Keeping this as its own sequence
+// step makes the ordering relative to stage consumers explicit and testable.
+func (e *Engine) startLoopFailures(ctx context.Context) error {
 	watcher, err := stage.NewLoopFailureWatcher(
 		e.client, e.client, message.NewDecoder(e.cfg.Registry), e.recorder, e.content,
 		stage.WithLoopFailureLogger(e.log()))
 	if err != nil {
 		return err
 	}
-	return watcher.Start(ctx)
+	if err := watcher.Start(ctx); err != nil {
+		return err
+	}
+	return watcher.CatchUp(ctx)
 }
 
 // startEgress binds the push half of player delivery.
@@ -883,6 +909,7 @@ func (e *Engine) startEgress(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	e.results = results
 	if err := e.buildGateway(); err != nil {
 		return err
 	}
@@ -924,6 +951,16 @@ func (e *Engine) buildGateway() error {
 	return nil
 }
 
+// PlayerConnectionCount reports how many live WebSocket sessions the configured
+// player currently owns. It is operational state, not durable player identity;
+// callers use it to synchronize shutdown and reconnect boundaries.
+func (e *Engine) PlayerConnectionCount() int {
+	if e.gatewaySv == nil || e.playerID == "" {
+		return 0
+	}
+	return len(e.gatewaySv.SessionsFor(e.playerID))
+}
+
 // startLedger creates the archive, reconciles it against ENTITY_STATES, and
 // binds the resolved-turn consumer.
 func (e *Engine) startLedger(ctx context.Context) error {
@@ -955,7 +992,8 @@ func (e *Engine) startIngress(ctx context.Context) error {
 	if err := e.gatewaySv.Start(ctx, e.client); err != nil {
 		return err
 	}
-	server, err := playersocket.NewServer(e.gatewaySv, e.cfg.Socket, playersocket.WithLogger(e.log()))
+	server, err := playersocket.NewServer(e.gatewaySv, e.cfg.Socket,
+		playersocket.WithLogger(e.log()), playersocket.WithResultRetriever(e.results))
 	if err != nil {
 		return err
 	}

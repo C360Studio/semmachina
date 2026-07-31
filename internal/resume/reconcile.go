@@ -756,59 +756,11 @@ func carriesStageArtifact(state *graph.EntityState, phase vocabulary.TurnPhase) 
 // the turn is held to; a non-integral value is a corrupted record rather than a
 // count to round.
 func recordedAttempts(state *graph.EntityState) (int, error) {
-	var objects []any
-	for _, triple := range state.Triples {
-		if triple.Predicate == vocabulary.TurnResumeAttempts.String() {
-			objects = append(objects, triple.Object)
-		}
-	}
-	switch len(objects) {
-	case 0:
-		return 0, nil
-	case 1:
-	default:
-		return 0, fmt.Errorf(
-			"holds %d values for the single-valued %s; a counter written on an appending lane leaves the "+
-				"re-trigger budget unenforceable", len(objects), vocabulary.TurnResumeAttempts)
-	}
-	attempts, ok := asInt(objects[0])
-	if !ok {
-		return 0, fmt.Errorf("records a %v (%T) for %s, want a whole number of attempts",
-			objects[0], objects[0], vocabulary.TurnResumeAttempts)
-	}
-	if attempts < 0 {
-		return 0, fmt.Errorf("records %d attempts for %s, which is not a count",
-			attempts, vocabulary.TurnResumeAttempts)
+	attempts, err := payload.ResumeAttemptsFromTriples(state.Triples)
+	if err != nil {
+		return 0, fmt.Errorf("read persisted resume attempts: %w", err)
 	}
 	return attempts, nil
-}
-
-// asInt narrows a stored numeric object back to an int.
-//
-// The float64 case is not defensive padding: a triple object read back through
-// the graph's JSON round trip arrives as float64, so an int comparison against
-// the raw object would fail for every attempt ever recorded. Non-integral values
-// are refused rather than truncated.
-func asInt(object any) (int, bool) {
-	switch value := object.(type) {
-	case int:
-		return value, true
-	case int64:
-		return int(value), true
-	case float64:
-		if value != float64(int(value)) {
-			return 0, false
-		}
-		return int(value), true
-	case json.Number:
-		parsed, err := value.Int64()
-		if err != nil {
-			return 0, false
-		}
-		return int(parsed), true
-	default:
-		return 0, false
-	}
 }
 
 // recordedPhase reads a turn's phase without demanding that it be non-terminal.

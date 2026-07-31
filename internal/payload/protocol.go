@@ -6,9 +6,11 @@ import (
 	"slices"
 )
 
-// PlayerProtocolVersion is the version of the PUBLIC player protocol: the pair
-// of documents an untrusted client exchanges with the player-session gateway
-// (SubmitAction in, TurnResult out).
+// PlayerProtocolVersion is the version of the PUBLIC player protocol: the
+// documents an untrusted client exchanges with the player-session gateway.
+// Player/v1 includes bare SubmitAction, the explicitly typed WebSocket
+// RetrieveRequest, and every Frame response document (submission answer, pushed
+// delivery, retrieval answer, and typed unsupported-operation refusal).
 //
 // It is a SEPARATE version from SchemaVersion, and conflating the two is the
 // mistake this type exists to prevent. SchemaVersion is the payload registry's
@@ -22,7 +24,8 @@ import (
 //
 // # What a version covers
 //
-// One version fixes: the field set and meaning of SubmitAction and TurnResult,
+// One version fixes: the field set and meaning of SubmitAction, RetrieveRequest,
+// every response Frame and its embedded documents, and TurnResult,
 // the closed vocabularies their values are drawn from (plausibility, risk,
 // consequence, outcome band, modifier source, failure reason, turn phase), the
 // bounds on client-supplied text and keys, and the shape of Modifier, which both
@@ -39,8 +42,9 @@ import (
 //
 // # The asymmetry is deliberate
 //
-// A REQUEST is strict — SubmitAction refuses a field it does not recognise and
-// refuses a server-owned one by name — while a RESULT is additive. They point
+// A REQUEST is strict — SubmitAction and RetrieveRequest refuse fields they do
+// not recognise, and SubmitAction refuses a server-owned one by name — while a
+// RESULT is additive. They point
 // opposite ways because the costs do. Acting on a misunderstood request is a
 // correctness failure a player pays for (see SubmitAction: the sharpest case is
 // a client that could name its own action_id), and a silently-ignored request

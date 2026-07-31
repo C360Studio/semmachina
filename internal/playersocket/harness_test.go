@@ -532,6 +532,22 @@ func (c *liveClient) delivery(t *testing.T) *payload.TurnDelivery {
 	return deliveredTurn(t, c.ws)
 }
 
+func (c *liveClient) retrieve(t *testing.T, request *playersocket.RetrieveRequest) *playersocket.RetrieveResponse {
+	t.Helper()
+	raw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("encode a retrieval: %v", err)
+	}
+	if err := c.ws.WriteMessage(websocket.TextMessage, raw); err != nil {
+		t.Fatalf("write a retrieval: %v", err)
+	}
+	frame := readFrame(t, c.ws)
+	if frame.Type != playersocket.FrameRetrieveResponse || frame.Retrieval == nil {
+		t.Fatalf("retrieval was answered with %+v", frame)
+	}
+	return frame.Retrieval
+}
+
 func (c *liveClient) expectNothing(t *testing.T, why string) {
 	t.Helper()
 	expectNothing(t, c.ws, why)

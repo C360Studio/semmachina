@@ -76,6 +76,10 @@ func (b *Builder) Adjudicate(ctx context.Context, view *scene.View) (TaskRequest
 	if view == nil {
 		return TaskRequest{}, errors.New("rendering an adjudication prompt requires an assembled view")
 	}
+	resumeAttempt, err := resumeAttemptOf(view)
+	if err != nil {
+		return TaskRequest{}, err
+	}
 	action, err := b.action(ctx, view)
 	if err != nil {
 		return TaskRequest{}, err
@@ -93,7 +97,7 @@ func (b *Builder) Adjudicate(ctx context.Context, view *scene.View) (TaskRequest
 	out.WriteString(VerdictToolName)
 	out.WriteString(".\n")
 
-	return TaskRequest{Identity: identity, Prompt: out.String()}, nil
+	return TaskRequest{Identity: identity, ResumeAttempt: resumeAttempt, Prompt: out.String()}, nil
 }
 
 // Narrate renders the narrator's spawn request from an assembled view.
@@ -108,6 +112,10 @@ func (b *Builder) Adjudicate(ctx context.Context, view *scene.View) (TaskRequest
 func (b *Builder) Narrate(ctx context.Context, view *scene.View) (TaskRequest, error) {
 	if view == nil {
 		return TaskRequest{}, errors.New("rendering a narration prompt requires an assembled view")
+	}
+	resumeAttempt, err := resumeAttemptOf(view)
+	if err != nil {
+		return TaskRequest{}, err
 	}
 	action, err := b.action(ctx, view)
 	if err != nil {
@@ -136,7 +144,17 @@ func (b *Builder) Narrate(ctx context.Context, view *scene.View) (TaskRequest, e
 	out.WriteString(NarrationToolName)
 	out.WriteString(".\n")
 
-	return TaskRequest{Identity: identity, Band: outcome.Band, Prompt: out.String()}, nil
+	return TaskRequest{
+		Identity: identity, ResumeAttempt: resumeAttempt, Band: outcome.Band, Prompt: out.String(),
+	}, nil
+}
+
+func resumeAttemptOf(view *scene.View) (int, error) {
+	attempt, err := payload.ResumeAttemptsFromTriples(view.Turn.Triples)
+	if err != nil {
+		return 0, fmt.Errorf("read the persisted resume attempt for turn %s: %w", view.TurnEntityID, err)
+	}
+	return attempt, nil
 }
 
 // action follows turn.action.ref — the reference the assembler leaves alone.

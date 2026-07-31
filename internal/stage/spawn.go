@@ -53,7 +53,7 @@ type Prompter interface {
 
 // TaskPublisher hands a composed task to the agentic loop.
 type TaskPublisher interface {
-	PublishToStream(ctx context.Context, subject string, data []byte) error
+	PublishToStreamWithMsgID(ctx context.Context, subject string, data []byte, msgID string) error
 }
 
 // The claims above, enforced by the compiler rather than by doc comments.
@@ -231,7 +231,7 @@ func (s *Spawner) publish(ctx context.Context, task agentic.TaskMessage) error {
 		return fmt.Errorf("encode the %s task: %w", s.spec.Role, err)
 	}
 	subject := TaskSubjectFor(s.spec.Role)
-	if err := s.tasks.PublishToStream(ctx, subject, data); err != nil {
+	if err := s.tasks.PublishToStreamWithMsgID(ctx, subject, data, task.TaskID); err != nil {
 		return fmt.Errorf("publish the %s task to %s: %w", s.spec.Role, subject, err)
 	}
 	return nil

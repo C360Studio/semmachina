@@ -3,8 +3,10 @@ package boot_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"slices"
 	"strings"
@@ -24,6 +26,7 @@ import (
 	"github.com/c360studio/semmachina/fixtures"
 	"github.com/c360studio/semmachina/internal/boot"
 	"github.com/c360studio/semmachina/internal/campaign"
+	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/persona"
@@ -131,6 +134,14 @@ func requireBroker(t *testing.T) *natsclient.TestClient {
 
 var worldCounter atomic.Int64
 
+type bootTestActionStore struct{ instance string }
+
+func (s bootTestActionStore) PutAction(
+	_ context.Context, turnEntityID string, _ *payload.PlayerAction,
+) (content.Ref, error) {
+	return content.Ref{Instance: s.instance, Key: "turn/" + turnEntityID + "/action"}, nil
+}
+
 // bootConfig gives each test its own world namespace, so two boots against the
 // shared broker are disjoint campaigns rather than a race for one.
 func bootConfig(t *testing.T) boot.Config {
@@ -188,6 +199,223 @@ func TestBoot_StartsTheWholeEngineOnABareBroker(t *testing.T) {
 	if !consumerExistsOn(t, js, persona.TaskStream, persona.TaskSubjectFilter) {
 		t.Error("no consumer filters " + persona.TaskSubjectFilter + "; no persona could ever run")
 	}
+}
+
+// A failure emitted before a restart is terminal evidence from a persona that
+// already ran. Boot must settle that evidence before it exposes an older stage
+// trigger to the spawner, or one turn can buy a second model call during the
+// restart window.
+func TestBoot_QueuedLoopFailureWinsOverAnOlderPersonaTrigger(t *testing.T) {
+	engine, cfg, modelCalls := startFailureRestartProof(t)
+
+	store, recorder := restartProofRecorder(t, cfg)
+	actionID := "queued-failure"
+	accepted := acceptAndParkRestartProofTurn(t, recorder, engine, actionID)
+	triggerSequence := queueOldAdjudicatingTrigger(t, accepted)
+	taskID := string(persona.RoleAdjudicator) + "-" + accepted.TurnID
+	queueRestartProofFailure(t, engine, accepted, actionID, taskID)
+
+	requireFailureCatchUp(t, engine, store, accepted.TurnEntityID)
+	agentStream := streamNamed(t, persona.TaskStream)
+	agentBefore := requireStreamInfo(t, agentStream, "AGENT before stage binding")
+	if err := engine.StartThrough(t.Context(), boot.StepStages); err != nil {
+		t.Fatalf("bind stages after failure catch-up: %v", err)
+	}
+	requireStageAcknowledged(t, triggerSequence)
+	agentAfter := requireStreamInfo(t, agentStream, "AGENT after old trigger settled")
+	if published := countStoredTask(t, agentStream, agentBefore.State.LastSeq+1, agentAfter.State.LastSeq, taskID); published != 0 {
+		t.Fatalf("old trigger published %d persona tasks after its queued failure won", published)
+	}
+	if got := modelCalls.Load(); got != 0 {
+		t.Fatalf("model endpoint received %d calls after queued failure terminalized the turn", got)
+	}
+}
+
+func startFailureRestartProof(t *testing.T) (*boot.Engine, boot.Config, *atomic.Int64) {
+	t.Helper()
+	var modelCalls atomic.Int64
+	modelServer := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		modelCalls.Add(1)
+	}))
+	t.Cleanup(modelServer.Close)
+
+	cfg := bootConfig(t)
+	cfg.Models = testModels()
+	cfg.Models.Endpoints["stub"].URL = modelServer.URL
+	engine := newTestEngine(t, cfg)
+	t.Cleanup(engine.Stop)
+	if err := engine.StartThrough(t.Context(), boot.StepResume); err != nil {
+		t.Fatalf("boot through stranded-turn reconciliation: %v", err)
+	}
+	return engine, cfg, &modelCalls
+}
+
+func restartProofRecorder(t *testing.T, cfg boot.Config) (*graphio.Store, *turn.Recorder) {
+	t.Helper()
+	store := graphStore(t)
+	recorder, err := turn.NewRecorder(
+		store,
+		bootTestActionStore{instance: cfg.ContentBucket},
+		turn.Identity{Org: cfg.Org, WorldNS: cfg.WorldNS, Template: "starter"},
+	)
+	if err != nil {
+		t.Fatalf("turn.NewRecorder: %v", err)
+	}
+	return store, recorder
+}
+
+func acceptAndParkRestartProofTurn(
+	t *testing.T, recorder *turn.Recorder, engine *boot.Engine, actionID string,
+) turn.Acceptance {
+	t.Helper()
+	action := &payload.PlayerAction{
+		ActionID: actionID, PlayerID: engine.PlayerID(), CampaignID: engine.CampaignID(),
+		SceneID: engine.SceneID(), Text: "I try the gate.", ArrivedAt: time.Now().UTC(),
+		Channel: payload.ChannelBinding{Adapter: vocabulary.AdapterWebSocket, ReplyTo: "restart-proof"},
+	}
+	accepted, err := recorder.Accept(t.Context(), action)
+	if err != nil {
+		t.Fatalf("accept test turn: %v", err)
+	}
+	if _, err := recorder.Advance(
+		t.Context(), accepted.TurnID, accepted.TurnEntityID, vocabulary.PhaseAdjudicating,
+	); err != nil {
+		t.Fatalf("park test turn in adjudicating: %v", err)
+	}
+	return accepted
+}
+
+func queueOldAdjudicatingTrigger(t *testing.T, accepted turn.Acceptance) uint64 {
+	t.Helper()
+	stageSubject, err := rulepack.SubjectForPhase(vocabulary.PhaseAdjudicating)
+	if err != nil {
+		t.Fatalf("adjudicating subject: %v", err)
+	}
+	trigger, err := json.Marshal(map[string]any{
+		"entity_id": accepted.TurnEntityID,
+		"subject":   stageSubject,
+		"source":    "restart-proof",
+	})
+	if err != nil {
+		t.Fatalf("encode old stage trigger: %v", err)
+	}
+	triggerAck, err := requireBroker(t).Client.PublishToStreamWithAck(t.Context(), stageSubject, trigger)
+	if err != nil {
+		t.Fatalf("queue old persona-stage trigger: %v", err)
+	}
+	return triggerAck.Sequence
+}
+
+func queueRestartProofFailure(
+	t *testing.T, engine *boot.Engine, accepted turn.Acceptance, actionID, taskID string,
+) {
+	t.Helper()
+	loopID := "loop-" + taskID
+	failure := &agentic.LoopFailedEvent{
+		LoopID: loopID, TaskID: taskID, Outcome: agentic.OutcomeFailed,
+		Reason: "handler_error", Error: "the pre-restart loop stopped",
+		Role: string(persona.RoleAdjudicator), Iterations: 1,
+		Metadata: map[string]any{
+			persona.MetadataKeyTurnID:       accepted.TurnID,
+			persona.MetadataKeyTurnEntityID: accepted.TurnEntityID,
+			persona.MetadataKeyActionID:     actionID,
+			persona.MetadataKeySceneID:      engine.SceneID(),
+		},
+	}
+	failureData, err := json.Marshal(message.NewBaseMessage(failure.Schema(), failure, "agentic-loop"))
+	if err != nil {
+		t.Fatalf("encode queued loop failure: %v", err)
+	}
+	if err := requireBroker(t).Client.PublishToStream(
+		t.Context(), "agent.failed."+loopID, failureData,
+	); err != nil {
+		t.Fatalf("queue loop failure: %v", err)
+	}
+}
+
+func requireFailureCatchUp(
+	t *testing.T, engine *boot.Engine, store *graphio.Store, turnEntityID string,
+) {
+	t.Helper()
+	if err := engine.StartThrough(t.Context(), boot.StepLoopFailures); err != nil {
+		t.Fatalf("boot did not catch up queued loop failures: %v", err)
+	}
+	failed, err := store.GetEntity(t.Context(), turnEntityID)
+	if err != nil {
+		t.Fatalf("read failed turn after catch-up: %v", err)
+	}
+	if got := testinfra.FirstObject(failed, vocabulary.TurnPhaseCurrent.String()); got !=
+		string(vocabulary.PhaseFailed) {
+		t.Fatalf("phase after failure catch-up = %v, want %s before stage consumers bind",
+			got, vocabulary.PhaseFailed)
+	}
+}
+
+func streamNamed(t *testing.T, name string) jetstream.Stream {
+	t.Helper()
+	stream, err := jetStream(t).Stream(t.Context(), name)
+	if err != nil {
+		t.Fatalf("read stream %s: %v", name, err)
+	}
+	return stream
+}
+
+func requireStreamInfo(t *testing.T, stream jetstream.Stream, label string) *jetstream.StreamInfo {
+	t.Helper()
+	info, err := stream.Info(t.Context())
+	if err != nil {
+		t.Fatalf("read %s: %v", label, err)
+	}
+	return info
+}
+
+func requireStageAcknowledged(t *testing.T, triggerSequence uint64) {
+	t.Helper()
+	stageStream := streamNamed(t, rulepack.StageStream)
+	consumer, err := stageStream.Consumer(
+		t.Context(), rulepack.StageConsumerName(vocabulary.PhaseAdjudicating),
+	)
+	if err != nil {
+		t.Fatalf("read adjudicating consumer: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		info, infoErr := consumer.Info(t.Context())
+		if infoErr != nil {
+			t.Fatalf("read adjudicating consumer state: %v", infoErr)
+		}
+		if info.AckFloor.Stream >= triggerSequence {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("old trigger sequence %d was not acknowledged; ack floor=%d pending=%d",
+				triggerSequence, info.AckFloor.Stream, info.NumAckPending)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func countStoredTask(
+	t *testing.T, agentStream jetstream.Stream, first, last uint64, taskID string,
+) int {
+	t.Helper()
+	publishedTasks := 0
+	for seq := first; seq <= last; seq++ {
+		raw, getErr := agentStream.GetMsg(t.Context(), seq)
+		if getErr != nil {
+			if errors.Is(getErr, jetstream.ErrMsgNotFound) {
+				continue
+			}
+			t.Fatalf("read AGENT sequence %d: %v", seq, getErr)
+		}
+		var envelope struct {
+			Payload agentic.TaskMessage `json:"payload"`
+		}
+		if json.Unmarshal(raw.Data, &envelope) == nil && envelope.Payload.TaskID == taskID {
+			publishedTasks++
+		}
+	}
+	return publishedTasks
 }
 
 // The world lands whole: every planned entity queryable and NON-STUB, the
@@ -712,8 +940,8 @@ func TestBoot_DoesNotMarkAnImportWhoseReadbackRefused(t *testing.T) {
 }
 
 // The declarative stream manager owns AGENT provisioning and reconciliation.
-// A stream somebody else created with narrower subjects is repaired before the
-// direct component-boundary guard binds it.
+// A stream somebody else created with narrower subjects and a stale retention
+// horizon is repaired before the direct component-boundary guard binds it.
 //
 // Nothing else would notice. The server ACCEPTS a consumer whose filter lies
 // outside its stream's subjects (measured), so the loop and agentic-tools both
@@ -721,7 +949,7 @@ func TestBoot_DoesNotMarkAnImportWhoseReadbackRefused(t *testing.T) {
 // published onto `tool.execute.*`, is captured by nothing, and the persona burns
 // its whole budget waiting for a result that cannot arrive. The manager must
 // make that state impossible before the loop starts.
-func TestBoot_RepairsAnAgentStreamThatDoesNotCaptureTheToolLane(t *testing.T) {
+func TestBoot_ReconcilesTheAgentStreamSubjectsAndRetentionHorizon(t *testing.T) {
 	client := requireBroker(t)
 	js := jetStream(t)
 
@@ -733,6 +961,8 @@ func TestBoot_RepairsAnAgentStreamThatDoesNotCaptureTheToolLane(t *testing.T) {
 	})
 	narrow := stage.AgentStreamConfig()
 	narrow.Subjects = []string{persona.AgentSubjectFilter}
+	narrow.MaxAge = time.Hour
+	narrow.Duplicates = 2 * time.Minute
 	if _, err := client.Client.EnsureStream(t.Context(), narrow); err != nil {
 		t.Fatalf("create the narrow %s stream: %v", persona.TaskStream, err)
 	}
@@ -753,6 +983,14 @@ func TestBoot_RepairsAnAgentStreamThatDoesNotCaptureTheToolLane(t *testing.T) {
 	if !slices.Contains(info.Config.Subjects, persona.ToolExecuteSubjectFilter) {
 		t.Fatalf("repaired AGENT subjects = %v, still missing %s",
 			info.Config.Subjects, persona.ToolExecuteSubjectFilter)
+	}
+	if info.Config.Duplicates != stage.AgentStreamMaxAge {
+		t.Fatalf("repaired AGENT duplicate window = %v, want retained-task horizon %v",
+			info.Config.Duplicates, stage.AgentStreamMaxAge)
+	}
+	if info.Config.MaxAge != stage.AgentStreamMaxAge {
+		t.Fatalf("repaired AGENT max age = %v, want retained-task horizon %v",
+			info.Config.MaxAge, stage.AgentStreamMaxAge)
 	}
 }
 

@@ -8,13 +8,13 @@ import (
 )
 
 // coded is the interface a failure implements when it carries a closed reason
-// code for the turn's recorded failure.
+// code the stage can record if the failure is terminal.
 //
-// The code, not the message, is the contract. The failure reason lands on the
-// turn entity where rules match, and the shared triple projection gates an
-// object's shape but not its closure — so a sentence would pass every gate and
-// put free text on the rule-matching surface. Explanatory detail belongs behind
-// a reference; the graph gets the code.
+// The code, not the message, is the contract. A CommitError also carries the
+// cause's handling class: transient causes retry without recording this code;
+// invalid or fatal ones end the turn with it. When a reason lands on the turn
+// entity, the shared triple projection gates an object's shape but not its
+// closure — so explanatory detail belongs behind a reference.
 type coded interface {
 	error
 	// Reason returns the closed failure code for this failure.
@@ -55,18 +55,20 @@ func (e *RejectionError) Reason() vocabulary.FailureReason { return e.Code }
 // CommitError reports a batch whose per-entity writes partially landed.
 //
 // It exists because the transport cannot promise otherwise: the merge lane is
-// per-entity and its response carries no failed-subject list, so a batch
-// touching several entities is several independent writes and any of them can
-// fail after its predecessors committed. Naming what landed and what did not is
-// the difference between a recoverable turn and a world nobody can explain.
+// per-entity, so a batch touching several entities is several independent
+// writes and any response can fail after its mutation landed. Target and
+// Committed therefore describe RESPONSE knowledge, not an assertion about
+// storage: Committed writes returned success; Target is the first write whose
+// outcome could not be confirmed. Re-application must include both classes.
 type CommitError struct {
 	// BatchID is the batch identity derived from the turn.
 	BatchID string
-	// Target is the entity whose write did not land.
+	// Target is the entity whose write did not return success. Its mutation may
+	// already have landed before the response failed.
 	Target string
-	// Committed are the entities written before the failure, in commit order.
-	// Re-application under the same batch identity converges them, since every
-	// write replaces rather than accumulates.
+	// Committed are the entities whose earlier writes returned success, in
+	// commit order. They are a confirmed lower bound, not the complete set of
+	// mutations that may have landed.
 	Committed []string
 	// Err is the transport or handler failure.
 	Err error
@@ -75,7 +77,7 @@ type CommitError struct {
 // Error implements error.
 func (e *CommitError) Error() string {
 	return fmt.Sprintf(
-		"effect batch %s committed %d target(s) %v and then failed writing %s: %v; "+
+		"effect batch %s confirmed %d target write(s) %v and then could not confirm writing %s: %v; "+
 			"the batch is not applied, and recovery is re-application under the same batch identity",
 		e.BatchID, len(e.Committed), e.Committed, e.Target, e.Err)
 }
@@ -90,9 +92,10 @@ func (e *CommitError) Reason() vocabulary.FailureReason {
 
 // FailureReasonFor returns the closed failure code an error carries, if any.
 //
-// It is the single call the turn's phase management makes to turn an applier
-// failure into the code recorded on the turn entity, so the mapping from
-// failure to code lives with the failures rather than at the call site.
+// It is the single call the turn's phase management makes after deciding a
+// failure is terminal, so the mapping from failure to recorded code lives with
+// the failures rather than at the call site. A transient CommitError is coded
+// for diagnostics but is retried before this mapping is recorded.
 //
 // # The false branch is a real answer, not a gap
 //

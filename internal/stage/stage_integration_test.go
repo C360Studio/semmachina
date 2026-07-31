@@ -16,6 +16,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	semerrs "github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/rule"
 	ssvocab "github.com/c360studio/semstreams/vocabulary"
 	"github.com/nats-io/nats.go/jetstream"
@@ -67,6 +68,16 @@ func TestMain(m *testing.M) {
 
 var worldCounter atomic.Int64
 
+// testRunID makes graph and task identities unique across repeated `go test`
+// processes that point at the same persistent broker. A package-local counter
+// alone restarts at one in every process, while AGENT deliberately remembers
+// Nats-Msg-Id values for seven days.
+var testRunID = fmt.Sprintf("r%014x", uint64(time.Now().UnixNano())&((1<<56)-1))
+
+func nextTestNamespace(kind string) string {
+	return fmt.Sprintf("%s-%s%d", testRunID, kind, worldCounter.Add(1))
+}
+
 const (
 	testOrg      = "c360"
 	testTemplate = "starter"
@@ -102,7 +113,7 @@ func startLoop(t *testing.T) *loop {
 	harness.RequireIndex(t)
 	harness.EnsureArchivalStream(t, rulepack.StageStream,
 		[]string{rulepack.StageSubjectFilter}, "")
-	namespace := fmt.Sprintf("w%d", worldCounter.Add(1))
+	namespace := nextTestNamespace("w")
 
 	store, err := graphio.NewStore(harness.Client)
 	if err != nil {
@@ -521,6 +532,13 @@ func (l *loop) statusIntent(target string, status vocabulary.Status) []any {
 // the chain will carry.
 func (l *loop) submit(t *testing.T, actionID, text string) (turnID, entityID string) {
 	t.Helper()
+	// AGENT's Nats-Msg-Id is the deterministic persona TaskID, which contains
+	// the role and turn ID but not this fixture's world namespace. These worlds
+	// deliberately share one broker, so reusing a human-readable action label
+	// would make a later world's legitimate task a duplicate of the earlier
+	// world's. Scope the test identity at its source; production dedupe remains
+	// unchanged and each logical turn still republishes the same ID.
+	actionID = actionID + "-" + l.namespace
 	action := &payload.PlayerAction{
 		ActionID:   actionID,
 		PlayerID:   l.playerID,
@@ -708,6 +726,132 @@ func TestStageRunner_TerminatesATriggerThatNamesNoTurn(t *testing.T) {
 	// the poison must not have cost the stage its consumer.
 	_, entityID := world.submit(t, "act-after-poison", "I step through the gate.")
 	world.awaitPhase(t, entityID, vocabulary.PhaseComplete)
+}
+
+// A transient CommitError must stay on the production durable consumer until
+// the same applying-stage delivery converges. Calling Effector.Run twice proves
+// idempotence but not the ack contract: only JetStream's contiguous floor can
+// distinguish "returned an error and nak'd" from "recorded failed and acked".
+func TestStageRunner_RedeliversTransientCommitErrorAndAcksAfterConvergence(t *testing.T) {
+	harness := testinfra.Require(t)
+	harness.EnsureArchivalStream(t, rulepack.StageStream,
+		[]string{rulepack.StageSubjectFilter}, "")
+
+	subject, err := rulepack.SubjectForPhase(vocabulary.PhaseApplying)
+	if err != nil {
+		t.Fatalf("SubjectForPhase: %v", err)
+	}
+	consumerName := rulepack.StageConsumerName(vocabulary.PhaseApplying)
+	harness.Client.StopConsumer(rulepack.StageStream, consumerName)
+	t.Cleanup(func() { harness.Client.StopConsumer(rulepack.StageStream, consumerName) })
+
+	turnEntityID := composeID(t, fmt.Sprintf("retry%d", worldCounter.Add(1)), "turn", "turn-commit-retry")
+	retried := &transientCommitStage{
+		turnEntityID: turnEntityID,
+		first:        make(chan struct{}),
+		second:       make(chan struct{}),
+	}
+	runner, err := stage.NewRunner(
+		harness.Client,
+		harness.Client,
+		[]stage.Stage{retried},
+		stage.WithAckTimings(20*time.Second, 5*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	if err := runner.Start(context.Background()); err != nil {
+		t.Fatalf("start runner: %v", err)
+	}
+
+	trigger, err := json.Marshal(map[string]any{
+		"entity_id": turnEntityID,
+		"subject":   subject,
+		"source":    "commit-retry-test",
+	})
+	if err != nil {
+		t.Fatalf("encode trigger: %v", err)
+	}
+	ack, err := harness.Client.PublishToStreamWithAck(t.Context(), subject, trigger)
+	if err != nil {
+		t.Fatalf("publish trigger: %v", err)
+	}
+
+	select {
+	case <-retried.first:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the applying runner never received the first delivery")
+	}
+
+	js, err := harness.Client.JetStream()
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	consumer, err := js.Consumer(t.Context(), rulepack.StageStream, consumerName)
+	if err != nil {
+		t.Fatalf("read applying consumer: %v", err)
+	}
+	info, err := consumer.Info(t.Context())
+	if err != nil {
+		t.Fatalf("read applying consumer info: %v", err)
+	}
+	if info.AckFloor.Stream >= ack.Sequence {
+		t.Fatalf("CommitError advanced ack floor to %d past sequence %d; the delivery was lost before retry",
+			info.AckFloor.Stream, ack.Sequence)
+	}
+
+	// ConsumeDurable's production work-error path uses NakWithDelay(30s).
+	select {
+	case <-retried.second:
+	case <-time.After(40 * time.Second):
+		t.Fatal("the transient CommitError was not redelivered within the production nak-delay window")
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		info, err = consumer.Info(t.Context())
+		if err != nil {
+			t.Fatalf("read applying consumer info after retry: %v", err)
+		}
+		if info.AckFloor.Stream >= ack.Sequence && info.NumAckPending == 0 {
+			if retried.attempts.Load() != 2 {
+				t.Fatalf("delivery converged after %d attempts, want exactly 2", retried.attempts.Load())
+			}
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("converged delivery sequence %d left ack floor=%d ack_pending=%d redelivered=%d",
+		ack.Sequence, info.AckFloor.Stream, info.NumAckPending, info.NumRedelivered)
+}
+
+type transientCommitStage struct {
+	turnEntityID string
+	attempts     atomic.Int32
+	first        chan struct{}
+	second       chan struct{}
+}
+
+func (*transientCommitStage) Phase() vocabulary.TurnPhase { return vocabulary.PhaseApplying }
+
+func (s *transientCommitStage) Run(_ context.Context, trigger stage.Trigger) error {
+	if trigger.TurnEntityID != s.turnEntityID {
+		return nil
+	}
+	switch s.attempts.Add(1) {
+	case 1:
+		close(s.first)
+		return &effect.CommitError{
+			BatchID:   payload.BatchIDForTurn(trigger.TurnID),
+			Target:    trigger.TurnEntityID,
+			Committed: nil,
+			Err: semerrs.WrapTransient(
+				fmt.Errorf("response lost"), "test", "MergeTriples", "commit target"),
+		}
+	case 2:
+		close(s.second)
+	}
+	return nil
 }
 
 // requireRetired waits for a stage consumer to finish with one specific stream
@@ -989,11 +1133,6 @@ func TestTurnLoop_AFailedPersonaLoopEndsTheTurnRatherThanStalling(t *testing.T) 
 			if err != nil {
 				t.Fatalf("NewLoopFailureWatcher: %v", err)
 			}
-			if err := watcher.Start(context.Background()); err != nil {
-				t.Fatalf("start the loop-failure watcher: %v", err)
-			}
-			t.Cleanup(world.harness.Client.StopAllConsumers)
-
 			failure := &agentic.LoopFailedEvent{
 				LoopID:     loopID,
 				TaskID:     task.TaskID,
@@ -1014,6 +1153,17 @@ func TestTurnLoop_AFailedPersonaLoopEndsTheTurnRatherThanStalling(t *testing.T) 
 			// subject.
 			if err := world.harness.Client.PublishToStream(t.Context(), "agent.failed."+loopID, data); err != nil {
 				t.Fatalf("publish loop failure: %v; the AGENT stream does not capture the loop-failure subject", err)
+			}
+			// Bind only after the failure is queued, exactly as a restarted
+			// engine does. CatchUp is the boot barrier: when it returns, this
+			// pre-existing delivery is durably acknowledged, not merely handed
+			// to an in-process callback.
+			if err := watcher.Start(context.Background()); err != nil {
+				t.Fatalf("start the loop-failure watcher: %v", err)
+			}
+			t.Cleanup(world.harness.Client.StopAllConsumers)
+			if err := watcher.CatchUp(t.Context()); err != nil {
+				t.Fatalf("catch up the queued loop failure: %v", err)
 			}
 
 			state := world.awaitPhase(t, entityID, vocabulary.PhaseFailed)

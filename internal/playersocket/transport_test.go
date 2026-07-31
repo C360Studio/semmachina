@@ -119,6 +119,44 @@ func TestSubmit_AMalformedFrameIsAnsweredAndTheSocketSurvives(t *testing.T) {
 	}
 }
 
+func TestRequest_APresentUnknownTypeIsNotMisreportedAsASubmission(t *testing.T) {
+	h := newHarness(t, nil)
+	ws := h.dial(t, patCredential, testPlayerID)
+
+	for name, test := range map[string]struct {
+		raw  []byte
+		code playersocket.OperationRefusalCode
+	}{
+		"unknown string": {[]byte(`{"protocol":"player/v1","type":"cast_spell"}`), playersocket.OperationUnsupported},
+		"empty string":   {[]byte(`{"protocol":"player/v1","type":""}`), playersocket.OperationMalformed},
+		"number":         {[]byte(`{"protocol":"player/v1","type":42}`), playersocket.OperationMalformed},
+		"null":           {[]byte(`{"protocol":"player/v1","type":null}`), playersocket.OperationMalformed},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := ws.WriteMessage(websocket.TextMessage, test.raw); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			frame := readFrame(t, ws)
+			if frame.Type != playersocket.FrameOperationResponse || frame.Operation == nil {
+				t.Fatalf("typed operation was answered as %+v", frame)
+			}
+			if frame.Operation.Status != playersocket.OperationRefused {
+				t.Fatalf("unknown operation was not refused: %+v", frame.Operation)
+			}
+			if frame.Operation.Refusal == nil || frame.Operation.Refusal.Code != test.code {
+				t.Fatalf("operation refusal = %+v, want code %q", frame.Operation.Refusal, test.code)
+			}
+		})
+	}
+
+	if published := len(h.publisher.actions(t)); published != 0 {
+		t.Fatalf("unknown operations published %d actions", published)
+	}
+	if got := h.submit(t, ws, "key-after-operation", "I use the ordinary submission path."); got.Status != payload.StatusAccepted {
+		t.Fatalf("socket did not survive operation refusal: %+v", got.Refusal)
+	}
+}
+
 // A binary frame is not a submission on this protocol, and it is answered rather
 // than closed for the same reason.
 func TestSubmit_ABinaryFrameIsRefusedAndTheSocketSurvives(t *testing.T) {

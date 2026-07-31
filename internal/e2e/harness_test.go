@@ -422,6 +422,18 @@ func (w *world) dial(t *testing.T) *client {
 	return c
 }
 
+func (w *world) awaitPlayerConnections(t *testing.T, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := w.engine.PlayerConnectionCount(); got == want {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("engine reports %d player connections, want %d", w.engine.PlayerConnectionCount(), want)
+}
+
 func (c *client) read() {
 	defer close(c.frames)
 	for {
@@ -466,6 +478,30 @@ func (c *client) submit(t *testing.T, key, text string) *payload.SubmitResponse 
 	}
 	frame := c.await(t, playersocket.FrameSubmitResponse, 20*time.Second)
 	return frame.Response
+}
+
+// retrieve asks through the authenticated public socket. This is intentionally
+// not an egress.Results helper: reconnect recovery is a player capability only
+// if the reconnected client can speak it on the real wire.
+func (c *client) retrieve(t *testing.T, by playersocket.RetrieveBy, id string) *playersocket.RetrieveResponse {
+	t.Helper()
+	body, err := json.Marshal(&playersocket.RetrieveRequest{
+		Protocol: payload.PlayerProtocolV1,
+		Type:     playersocket.RequestRetrieve,
+		By:       by,
+		ID:       id,
+	})
+	if err != nil {
+		t.Fatalf("encode retrieval: %v", err)
+	}
+	if err := c.conn.WriteMessage(websocket.TextMessage, body); err != nil {
+		t.Fatalf("write retrieval: %v", err)
+	}
+	frame := c.await(t, playersocket.FrameRetrieveResponse, 20*time.Second)
+	if frame.Retrieval == nil {
+		t.Fatal("retrieve_response frame carries no response")
+	}
+	return frame.Retrieval
 }
 
 // await reads until a frame of the wanted type arrives.
@@ -992,20 +1028,6 @@ func (w *world) contentStore(t *testing.T) *content.Store {
 		t.Fatalf("content.NewStore: %v", err)
 	}
 	return store
-}
-
-// results builds the production retrieval surface over the live world.
-//
-// The same constructor the engine's egress path uses, over the same graph and the
-// same object store — so "retrieval reads durable state" is an observation about
-// the production code rather than a claim about a test helper.
-func (w *world) results(t *testing.T) *egress.Results {
-	t.Helper()
-	results, err := egress.NewResults(graphStore(t), w.contentStore(t), w.identity, w.campaignID)
-	if err != nil {
-		t.Fatalf("egress.NewResults: %v", err)
-	}
-	return results
 }
 
 // replayReader builds the campaign archive's replay reader over this world.

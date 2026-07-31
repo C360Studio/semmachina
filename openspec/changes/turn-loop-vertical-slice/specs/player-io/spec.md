@@ -166,6 +166,15 @@ for the same reason per-turn token cost is.
 ### Requirement: Canonical terminal result and retrieval
 A turn's result SHALL be durably stored independent of any connection, and a player SHALL
 be able to retrieve it by `action_id` or `turn_id`, plus their most recent TERMINAL result.
+A WebSocket client SHALL perform those lookups through an explicitly discriminated
+`RetrieveRequest` on its authenticated connection; the adapter SHALL derive the player for
+`latest` from that session and SHALL authorize results found by `action_id` or `turn_id`
+against the turn's ownership scalar before resolving private roll or narration artifacts.
+A retrieval SHALL NOT be inferred from the shape of `SubmitAction`: absence of `type` is the
+compatible bare submission form, while a present unknown, empty, or non-string `type`
+receives a typed operation refusal and never a `SubmitResponse`. Another player's result and an absent
+result SHALL produce the same not-found code and message without returning a delivery, so a
+guessed identifier is not a cross-player state oracle.
 A successful result comprises the narration prose reference plus a resolution summary
 (verdict class, roll values, outcome band); a failed turn's result comprises its recorded
 failure reason, plus whatever narration and resolution the turn had produced before it
@@ -180,8 +189,20 @@ from a turn still running. The ledger already archives failed turns, so the data
 #### Scenario: Result survives disconnect
 - **WHEN** a player disconnects after submitting an action and reconnects after the turn
   completes
-- **THEN** the reconnected player receives the completed turn's narration and resolution
-  summary
+- **THEN** the reconnected player retrieves the completed turn's narration and resolution
+  summary through the authenticated public adapter
+
+#### Scenario: A named result remains player-private
+- **WHEN** an authenticated player requests a `turn_id` or `action_id` whose result belongs
+  to another player
+- **THEN** the adapter returns the same not-found refusal as an absent id, returns none of
+  that result's delivery document, and does not read its roll or narration artifacts
+
+#### Scenario: An unknown typed operation is not a submission
+- **WHEN** a player/v1 document carries a non-empty `type` other than `retrieve_result`, or
+  an empty/non-string `type`
+- **THEN** the adapter returns a typed unsupported/malformed operation response and does
+  not route the document through `SubmitAction`
 
 #### Scenario: A failed turn still yields a player-visible result
 - **WHEN** a player's turn ends in the `failed` phase with a recorded reason
