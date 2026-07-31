@@ -126,9 +126,10 @@ NATS leaf nodes) is post-MVP, pre-adapted by design.
 Ordered; each stage is one or more OpenSpec changes. Later stages stay in the
 vision but are NOT on the active MVP path.
 
-1. **Turn-loop engine spike** (active: `turn-loop-vertical-slice`) — durable turn
-   state, idempotent effects, validated closed-vocabulary mutations, crash tests;
-   loads the starter world from a package-shaped fixture via an importer.
+1. **Turn-loop engine spike** (complete; archived as
+   `2026-07-31-turn-loop-vertical-slice`) — durable turn state, idempotent effects,
+   validated closed-vocabulary mutations, crash tests; loads the starter world
+   from a package-shaped fixture via an importer.
 2. **Template proof + place ontology** — instantiate the same starter world twice;
    swap the narrator/tone pack; swap fiction-heavy vs mechanics-heavy rule packs;
    two materially different experiences on identical engine code. The first
@@ -203,7 +204,8 @@ vision but are NOT on the active MVP path.
    user-authored rules, hosting,
    federation, multi-tenancy, detailed inventory/economy, **multi-channel play**
    (Slack/email/SMS ingress-egress adapters over the same action/result contract —
-   allowed-for by design, built later), and the **world-template marketplace**. Marketplace principles, recorded now so the package shape stays
+   allowed-for by design, built later), and the **world-template marketplace**.
+   Marketplace principles, recorded now so the package shape stays
    compatible: templates are immutable/content-addressed and composable from typed
    packs (world, mechanics, persona, media — components stay first-party);
    community packages are hostile input with capability *requests* resolved as
