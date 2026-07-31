@@ -1,5 +1,9 @@
 version: '3'
 
+# Load provider credentials from the gitignored local file. An exported value
+# wins, so CI and one-off shells do not need to write a file.
+dotenv: ['.env']
+
 # The local half of the gate in .github/workflows/ci.yml.
 #
 # Every check that has any logic lives in scripts/, and both this file and the
@@ -72,3 +76,11 @@ tasks:
     cmds:
       - 'echo "pinned tool versions (from the go.mod tool directive):"'
       - go tool revive --version
+
+  run:gemini:
+    desc: Run SemMachina with the live Gemini 3.6 Flash instance configuration
+    preconditions:
+      - sh: test -n "$GEMINI_API_KEY"
+        msg: "GEMINI_API_KEY is empty — copy .env.example to .env and fill it in, or export it."
+    cmds:
+      - go run ./cmd/semmachina -config configs/instance.gemini36-flash.example.json

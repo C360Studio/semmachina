@@ -234,8 +234,8 @@ CI-equivalent gates subsequently passed: lint (including revive 1.15.0 and gate
 self-checks), native and linux/amd64 builds, strict OpenSpec validation, and an uncached
 race run of 2,050 tests across 24 packages with zero skips, including the mock E2E.
 
-The local live-smoke target is Ollama `qwen3.5:9b`. Installation and a direct
-OpenAI-compatible terminal-tool probe succeeded, but the first full live turn did not:
+The first local live-smoke candidate was Ollama `qwen3.5:9b`. Installation and a direct
+OpenAI-compatible terminal-tool probe succeeded, but its first full live turn did not:
 the accepted action reached adjudication, then Ollama 0.31.2 returned HTTP 500 after
 generating malformed Qwen tool XML (`element <parameter> closed by </function>`). The
 shared 90-second deadline persisted and delivered a `persona-loop-failed` result after
@@ -244,8 +244,27 @@ shared 90-second deadline persisted and delivered a `persona-loop-failed` result
 completing the tool call before the fixed 90-second task timeout, then persisted and
 delivered a second `persona-loop-failed` result after 1m30.068s. The current
 `qwen3.5:9b`/Ollama pairing therefore does not meet this production adjudicator contract's
-latency and schema budget; live inference remains an open gate. Both disposable NATS
-containers were stopped and automatically removed.
+latency and schema budget.
+
+The first Gemini live turn closed the live-inference gate on a fresh disposable broker.
+The endpoint reported `provider=gemini`, `wire_backend=wire`, and
+`model=gemini-3.6-flash`. One paid action was accepted at
+`2026-07-31T19:05:02.293802Z` as turn
+`turn-TQNA3EAVZJUM5HMRXGKQM7JBNNQEFJ3ZILF67CSQLXTLMWW7EUUQ`. Both adjudicator and
+narrator completed at iteration 0; the terminal delivery reached `phase=complete` after
+30.976s with one recipient. The adjudicator returned plausible positioning, moderate
+risk, escalation consequence, and `requires_roll=true`; the deterministic 2d6 roll was
+`[5,2] + 1 = 8`, producing the partial band. The narration reference resolved and coherent
+prose was delivered.
+
+The live configuration keeps credentials out of version control: `.env.example` names
+`GEMINI_API_KEY`, Task loads a gitignored `.env` while allowing an exported value to win,
+and `task run:gemini` checks the key before launching
+`configs/instance.gemini36-flash.example.json`. No secret value is stored in the config.
+After the successful delivery, the engine logged graceful component shutdown and the
+disposable broker was stopped and automatically removed. Task reported an interrupt only
+because the long-running run command was intentionally stopped after the evidence was
+captured. The two earlier Qwen brokers were likewise stopped and automatically removed.
 
 ## Upstream Verification Findings (task group 1, semstreams v1.0.0-beta.158)
 

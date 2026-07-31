@@ -85,3 +85,41 @@ func TestQwen35ExampleInstanceConfig_TargetsOneLocalLiveSmokeModel(t *testing.T)
 		}
 	}
 }
+
+func TestGemini36FlashExampleInstanceConfig_TargetsOneToolCapableWireEndpoint(t *testing.T) {
+	raw, err := os.ReadFile("../../configs/instance.gemini36-flash.example.json")
+	if err != nil {
+		t.Fatalf("read the Gemini 3.6 Flash live configuration: %v", err)
+	}
+	cfg, err := boot.LoadConfig(raw)
+	if err != nil {
+		t.Fatalf("the Gemini 3.6 Flash live configuration does not parse: %v", err)
+	}
+	if len(cfg.Models.Endpoints) != 1 {
+		t.Fatalf("Gemini live endpoints = %d, want one", len(cfg.Models.Endpoints))
+	}
+	endpoint := cfg.Models.Endpoints["gemini-flash"]
+	if endpoint == nil {
+		t.Fatal("Gemini live configuration has no gemini-flash endpoint")
+	}
+	if endpoint.Provider != "gemini" ||
+		endpoint.URL != "https://generativelanguage.googleapis.com/v1beta/openai" ||
+		endpoint.Model != "gemini-3.6-flash" ||
+		endpoint.APIKeyEnv != "GEMINI_API_KEY" ||
+		endpoint.WireBackend != "wire" ||
+		endpoint.MaxTokens != 1_048_576 ||
+		!endpoint.SupportsTools || endpoint.ToolFormat != "openai" {
+		t.Fatalf("Gemini live endpoint = %+v, want the explicit Gemini wire configuration", endpoint)
+	}
+	for _, capability := range []string{"fiction_adjudication", "narration"} {
+		declaration := cfg.Models.Capabilities[capability]
+		if declaration == nil {
+			t.Errorf("Gemini live configuration has no %s capability", capability)
+			continue
+		}
+		if len(declaration.Preferred) != 1 || declaration.Preferred[0] != "gemini-flash" ||
+			!declaration.RequiresTools {
+			t.Errorf("capability %s = %+v, want tool-capable gemini-flash only", capability, declaration)
+		}
+	}
+}

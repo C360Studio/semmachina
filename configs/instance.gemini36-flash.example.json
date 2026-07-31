@@ -1,0 +1,48 @@
+{
+  "nats_url": "nats://127.0.0.1:4222",
+
+  "org": "c360",
+  "world_ns": "gatehouse-gemini36",
+
+  "player": {
+    "local_id": "one",
+    "name": "The Player",
+    "character": "local:rook",
+    "credential": "CHANGE-ME-local-only-bearer-credential"
+  },
+
+  "socket": {
+    "addr": "127.0.0.1:8422",
+    "path": "/play"
+  },
+
+  "model_registry": {
+    "endpoints": {
+      "gemini-flash": {
+        "provider": "gemini",
+        "url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "model": "gemini-3.6-flash",
+        "api_key_env": "GEMINI_API_KEY",
+        "wire_backend": "wire",
+        "supports_tools": true,
+        "tool_format": "openai",
+        "max_tokens": 1048576
+      }
+    },
+    "capabilities": {
+      "fiction_adjudication": {
+        "description": "The engine's schema-bearing adjudication exit, routed to Gemini 3.6 Flash.",
+        "preferred": ["gemini-flash"],
+        "requires_tools": true
+      },
+      "narration": {
+        "description": "The narration exit uses the same Gemini 3.6 Flash endpoint.",
+        "preferred": ["gemini-flash"],
+        "requires_tools": true
+      }
+    },
+    "defaults": {
+      "model": "gemini-flash"
+    }
+  }
+}

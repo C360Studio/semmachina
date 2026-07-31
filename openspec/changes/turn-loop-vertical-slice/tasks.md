@@ -671,15 +671,16 @@ speaks and it is expensive to retrofit.
       including the mock E2E
 - [ ] 10.5 Run `semmachina-reviewer` on the full slice pre-merge; resolve findings;
       update task truth conservatively with evidence
-- [ ] 10.6 Complete the first live-model turn with local Ollama `qwen3.5:9b`. The model is
-      installed and a direct OpenAI-compatible terminal-tool probe passed, but the first
-      full turn failed after reaching adjudication: Ollama 0.31.2 generated malformed Qwen
-      tool XML (`element <parameter> closed by </function>`) and returned HTTP 500. The
-      shared 90-second deadline then persisted and delivered `persona-loop-failed` after
-      1m30.069s. A controlled retry on a fresh broker sent the same 13.8 KB adjudicator
-      request; the model produced about 976 output tokens at about 14.3 tokens/second but
-      did not complete the tool call before the fixed 90-second timeout. The engine
-      persisted and delivered a second `persona-loop-failed` result after 1m30.068s. The
-      current Qwen/Ollama pairing does not meet this contract's latency and schema budget.
-      Both disposable NATS containers were stopped and automatically removed; this item
-      stays open until a full live turn succeeds
+- [x] 10.6 Completed the first live-model turn with Gemini 3.6 Flash on a fresh disposable
+      broker. One paid action was accepted at `2026-07-31T19:05:02.293802Z` as turn
+      `turn-TQNA3EAVZJUM5HMRXGKQM7JBNNQEFJ3ZILF67CSQLXTLMWW7EUUQ`; provider `gemini`,
+      wire backend `wire`, model `gemini-3.6-flash`. Both loops completed at iteration 0,
+      and one recipient received `phase=complete` after 30.976s. Verdict: plausible,
+      moderate risk, escalation, roll required. Deterministic roll: `[5,2] + 1 = 8`,
+      partial band. The narration reference resolved and coherent prose was delivered.
+      Engine shutdown was graceful; Task's interrupt status records the deliberate stop of
+      the long-running command after capture, not a failed turn. The disposable broker was
+      stopped and automatically removed. The prior Qwen evidence remains comparative:
+      direct tool probing passed, but two full adjudication attempts ended in persisted
+      `persona-loop-failed` results (parser HTTP 500, then the 90-second budget), so the
+      current `qwen3.5:9b`/Ollama pairing remains unsuitable for this production contract

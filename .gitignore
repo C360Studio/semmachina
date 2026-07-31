@@ -24,8 +24,9 @@ profile.cov
 go.work
 go.work.sum
 
-# env file
+# Local provider credentials; keep the safe blank template trackable.
 .env
+!.env.example
 
 # Editor/IDE
 # .idea/
