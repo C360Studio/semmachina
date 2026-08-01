@@ -8,9 +8,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/c360studio/semstreams/message"
+
 	"github.com/c360studio/semmachina/internal/content"
+	"github.com/c360studio/semmachina/internal/epistemic"
 	"github.com/c360studio/semmachina/internal/payload"
-	"github.com/c360studio/semmachina/internal/scene"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -72,9 +74,16 @@ func NewBuilder(artifacts ArtifactReader) (*Builder, error) {
 // to end: the values the terminal tool will be handed come from the same read
 // that produced the prompt, so a persona cannot be prompted about one turn and
 // have its exit filed against another.
-func (b *Builder) Adjudicate(ctx context.Context, view *scene.View) (TaskRequest, error) {
+func (b *Builder) Adjudicate(ctx context.Context, view *epistemic.Projection) (TaskRequest, error) {
 	if view == nil {
 		return TaskRequest{}, errors.New("rendering an adjudication prompt requires an assembled view")
+	}
+	if view.Purpose != epistemic.PurposePublicAdjudicator {
+		return TaskRequest{}, fmt.Errorf("adjudication prompt requires %s projection, got %s",
+			epistemic.PurposePublicAdjudicator, view.Purpose)
+	}
+	if err := validateProjectionForPrompt(view); err != nil {
+		return TaskRequest{}, err
 	}
 	resumeAttempt, err := resumeAttemptOf(view)
 	if err != nil {
@@ -109,9 +118,16 @@ func (b *Builder) Adjudicate(ctx context.Context, view *scene.View) (TaskRequest
 // CHANGED, so the outcome section names the committed intents; those come from
 // the verdict's declared band, which is what the applier committed, and from the
 // turn's own record of whether it committed at all.
-func (b *Builder) Narrate(ctx context.Context, view *scene.View) (TaskRequest, error) {
+func (b *Builder) Narrate(ctx context.Context, view *epistemic.Projection) (TaskRequest, error) {
 	if view == nil {
 		return TaskRequest{}, errors.New("rendering a narration prompt requires an assembled view")
+	}
+	if view.Purpose != epistemic.PurposeNarrator {
+		return TaskRequest{}, fmt.Errorf("narration prompt requires %s projection, got %s",
+			epistemic.PurposeNarrator, view.Purpose)
+	}
+	if err := validateProjectionForPrompt(view); err != nil {
+		return TaskRequest{}, err
 	}
 	resumeAttempt, err := resumeAttemptOf(view)
 	if err != nil {
@@ -149,8 +165,20 @@ func (b *Builder) Narrate(ctx context.Context, view *scene.View) (TaskRequest, e
 	}, nil
 }
 
-func resumeAttemptOf(view *scene.View) (int, error) {
-	attempt, err := payload.ResumeAttemptsFromTriples(view.Turn.Triples)
+func validateProjectionForPrompt(projection *epistemic.Projection) error {
+	data, err := projection.Bytes()
+	if err != nil {
+		return fmt.Errorf("serialize epistemic projection before prompt assembly: %w", err)
+	}
+	if len(data) > epistemic.DefaultMaxProjectionBytes {
+		return fmt.Errorf("epistemic prompt projection has %d bytes; limit is %d",
+			len(data), epistemic.DefaultMaxProjectionBytes)
+	}
+	return nil
+}
+
+func resumeAttemptOf(view *epistemic.Projection) (int, error) {
+	attempt, err := payload.ResumeAttemptsFromTriples(triplesOf(view.Turn))
 	if err != nil {
 		return 0, fmt.Errorf("read the persisted resume attempt for turn %s: %w", view.TurnEntityID, err)
 	}
@@ -158,7 +186,7 @@ func resumeAttemptOf(view *scene.View) (int, error) {
 }
 
 // action follows turn.action.ref — the reference the assembler leaves alone.
-func (b *Builder) action(ctx context.Context, view *scene.View) (*payload.PlayerAction, error) {
+func (b *Builder) action(ctx context.Context, view *epistemic.Projection) (*payload.PlayerAction, error) {
 	ref, err := soleRef(view, vocabulary.TurnActionRef)
 	if err != nil {
 		return nil, err
@@ -171,7 +199,7 @@ func (b *Builder) action(ctx context.Context, view *scene.View) (*payload.Player
 }
 
 // verdict follows turn.verdict.ref.
-func (b *Builder) verdict(ctx context.Context, view *scene.View) (*payload.Verdict, error) {
+func (b *Builder) verdict(ctx context.Context, view *epistemic.Projection) (*payload.Verdict, error) {
 	ref, err := soleRef(view, vocabulary.TurnVerdictRef)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -192,7 +220,7 @@ func (b *Builder) verdict(ctx context.Context, view *scene.View) (*payload.Verdi
 // the turn id: the derivation is one-way by intent, and reversing a prefix
 // convention to recover an identifier the engine already has written down is how
 // two spellings of one fact appear.
-func identityOf(view *scene.View, action *payload.PlayerAction) (Identity, error) {
+func identityOf(view *epistemic.Projection, action *payload.PlayerAction) (Identity, error) {
 	identity := Identity{
 		TurnID:       view.TurnID,
 		TurnEntityID: view.TurnEntityID,
@@ -212,7 +240,7 @@ func identityOf(view *scene.View, action *payload.PlayerAction) (Identity, error
 }
 
 // soleRef reads one reference predicate off the assembled turn.
-func soleRef(view *scene.View, predicate vocabulary.Predicate) (content.Ref, error) {
+func soleRef(view *epistemic.Projection, predicate vocabulary.Predicate) (content.Ref, error) {
 	objects := view.Turn.Objects(predicate)
 	switch len(objects) {
 	case 1:
@@ -264,7 +292,7 @@ type outcome struct {
 // honestly, and a narrator handed the wrong band writes prose that disagrees
 // with the world — which is the exact drift this engine exists to make
 // detectable, manufactured by the engine itself.
-func outcomeOf(view *scene.View, verdict *payload.Verdict) (outcome, error) {
+func outcomeOf(view *epistemic.Projection, verdict *payload.Verdict) (outcome, error) {
 	result := outcome{Verdict: verdict}
 
 	bands, err := atMostOne(view, vocabulary.TurnRollBand)
@@ -346,7 +374,7 @@ func outcomeOf(view *scene.View, verdict *payload.Verdict) (outcome, error) {
 // the predicate as ABSENT is worse still, because absence is a meaningful answer
 // here and the reader would be stating the opposite of the truth. Neither is
 // recoverable at this layer, so both are refused.
-func atMostOne(view *scene.View, predicate vocabulary.Predicate) ([]any, error) {
+func atMostOne(view *epistemic.Projection, predicate vocabulary.Predicate) ([]any, error) {
 	objects := view.Turn.Objects(predicate)
 	if len(objects) > 1 {
 		return nil, fmt.Errorf(
@@ -364,7 +392,7 @@ func atMostOne(view *scene.View, predicate vocabulary.Predicate) ([]any, error) 
 // anything else is refused by type. A truncating conversion would be the wrong
 // kindness here: a roll total that arrived as 8.5 is a corrupted record, not an
 // 8.
-func singleInt(view *scene.View, predicate vocabulary.Predicate) (int, error) {
+func singleInt(view *epistemic.Projection, predicate vocabulary.Predicate) (int, error) {
 	objects := view.Turn.Objects(predicate)
 	if len(objects) != 1 {
 		return 0, fmt.Errorf("turn %s holds %d values for %s, want exactly one",
@@ -443,16 +471,10 @@ func describeIntent(intent payload.EffectIntent) string {
 
 // writeWorld renders the assembled view: who is acting, where, who else is
 // there, and what is one hop away.
-func writeWorld(out *strings.Builder, view *scene.View) {
+func writeWorld(out *strings.Builder, view *epistemic.Projection) {
 	out.WriteString("# Who is acting\n\n")
 	fmt.Fprintf(out, "player: %s\n", view.Actor.PlayerID)
-	if view.Actor.Verified() {
-		fmt.Fprintf(out, "playing: %s\n", view.Actor.CharacterID)
-	} else {
-		fmt.Fprintf(out,
-			"playing: UNKNOWN (%s) — the campaign does not record which character this player controls\n",
-			view.Actor.Doubt)
-	}
+	fmt.Fprintf(out, "playing: %s\n", view.Actor.CharacterID)
 
 	out.WriteString("\n# Where\n\n")
 	writeEntity(out, view.Scene)
@@ -463,20 +485,9 @@ func writeWorld(out *strings.Builder, view *scene.View) {
 	out.WriteString("\n# One step away\n\n")
 	writeEntities(out, view.Neighbours, "Nothing is carried, known, or connected outside this room.")
 
-	// Exclusions are SHOWN rather than swallowed. A persona that is told the
-	// room is incomplete can write around the gap; one that is silently handed
-	// three of seven people narrates a room that is not there — which is the
-	// same hazard the assembler refuses to truncate for, carried one layer on.
-	if len(view.Excluded) > 0 {
-		out.WriteString("\n# Not available\n\n")
-		out.WriteString("These are referenced by the world and could not be shown; do not describe them.\n")
-		for _, excluded := range view.Excluded {
-			fmt.Fprintf(out, "- %s (%s)\n", excluded.ID, excluded.Reason)
-		}
-	}
 }
 
-func writeEntities(out *strings.Builder, entities []scene.Entity, empty string) {
+func writeEntities(out *strings.Builder, entities []epistemic.Entity, empty string) {
 	if len(entities) == 0 {
 		out.WriteString(empty)
 		out.WriteString("\n")
@@ -493,17 +504,27 @@ func writeEntities(out *strings.Builder, entities []scene.Entity, empty string) 
 // whatever the store returned, and a prompt whose byte content depends on
 // storage layout makes two identical worlds produce two different prompts — and
 // makes a token-free replay's output depend on something no fixture controls.
-func writeEntity(out *strings.Builder, entity scene.Entity) {
+func writeEntity(out *strings.Builder, entity epistemic.Entity) {
 	fmt.Fprintf(out, "- %s\n", entity.ID)
-	facts := make([]string, 0, len(entity.Triples))
-	for _, triple := range entity.Triples {
-		facts = append(facts, fmt.Sprintf("    %s: %v", triple.Predicate, triple.Object))
+	facts := make([]string, 0, len(entity.Facts))
+	for _, fact := range entity.Facts {
+		facts = append(facts, fmt.Sprintf("    %s: %v", fact.Predicate, fact.Object))
 	}
 	slices.Sort(facts)
 	for _, fact := range facts {
 		out.WriteString(fact)
 		out.WriteString("\n")
 	}
+}
+
+func triplesOf(entity epistemic.Entity) []message.Triple {
+	triples := make([]message.Triple, 0, len(entity.Facts))
+	for _, fact := range entity.Facts {
+		triples = append(triples, message.Triple{
+			Subject: entity.ID, Predicate: fact.Predicate.String(), Object: fact.Object,
+		})
+	}
+	return triples
 }
 
 // quoteAction renders the player's own words, marked as quotation.

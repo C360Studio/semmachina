@@ -9,8 +9,8 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
 
+	"github.com/c360studio/semmachina/internal/epistemic"
 	"github.com/c360studio/semmachina/internal/persona"
-	"github.com/c360studio/semmachina/internal/scene"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -40,15 +40,16 @@ type ResumeGuard interface {
 	Check(ctx context.Context, spec persona.Spec, turnID, turnEntityID string) (persona.Resumption, error)
 }
 
-// ContextAssembler builds the scene-scoped view a persona is prompted with.
-type ContextAssembler interface {
-	Assemble(ctx context.Context, turnID, turnEntityID string) (*scene.View, error)
+// ContextProjector builds the purpose-authorized value projection a persona is
+// prompted with.
+type ContextProjector interface {
+	Project(ctx context.Context, audience epistemic.AuthenticatedAudience) (*epistemic.Projection, error)
 }
 
-// Prompter renders an assembled view into one persona's spawn request.
+// Prompter renders an authorized projection into one persona's spawn request.
 type Prompter interface {
-	Adjudicate(ctx context.Context, view *scene.View) (persona.TaskRequest, error)
-	Narrate(ctx context.Context, view *scene.View) (persona.TaskRequest, error)
+	Adjudicate(ctx context.Context, projection *epistemic.Projection) (persona.TaskRequest, error)
+	Narrate(ctx context.Context, projection *epistemic.Projection) (persona.TaskRequest, error)
 }
 
 // TaskPublisher hands a composed task to the agentic loop.
@@ -59,7 +60,7 @@ type TaskPublisher interface {
 // The claims above, enforced by the compiler rather than by doc comments.
 var (
 	_ ResumeGuard      = (*persona.Guard)(nil)
-	_ ContextAssembler = (*scene.Assembler)(nil)
+	_ ContextProjector = (*epistemic.Projector)(nil)
 	_ Prompter         = (*persona.Builder)(nil)
 )
 
@@ -81,7 +82,7 @@ type Spawner struct {
 	phase     vocabulary.TurnPhase
 	recorder  PhaseRecorder
 	guard     ResumeGuard
-	assembler ContextAssembler
+	projector ContextProjector
 	prompter  Prompter
 	tasks     TaskPublisher
 	logger    *slog.Logger
@@ -104,7 +105,7 @@ func NewSpawner(
 	spec persona.Spec,
 	recorder PhaseRecorder,
 	guard ResumeGuard,
-	assembler ContextAssembler,
+	projector ContextProjector,
 	prompter Prompter,
 	tasks TaskPublisher,
 	opts ...SpawnerOption,
@@ -124,8 +125,8 @@ func NewSpawner(
 		return nil, fmt.Errorf(
 			"the %s stage requires a resume guard; without one every redelivered trigger buys a second billed "+
 				"model call for a judgment the engine already has", spec.Role)
-	case assembler == nil:
-		return nil, fmt.Errorf("the %s stage requires a context assembler", spec.Role)
+	case projector == nil:
+		return nil, fmt.Errorf("the %s stage requires an epistemic context projector", spec.Role)
 	case prompter == nil:
 		return nil, fmt.Errorf("the %s stage requires a prompt builder", spec.Role)
 	case tasks == nil:
@@ -134,7 +135,7 @@ func NewSpawner(
 
 	spawner := &Spawner{
 		spec: spec, phase: phase, recorder: recorder, guard: guard,
-		assembler: assembler, prompter: prompter, tasks: tasks, logger: slog.Default(),
+		projector: projector, prompter: prompter, tasks: tasks, logger: slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(spawner)
@@ -192,11 +193,15 @@ func (s *Spawner) Run(ctx context.Context, trigger Trigger) error {
 		return nil
 	}
 
-	view, err := s.assembler.Assemble(ctx, trigger.TurnID, trigger.TurnEntityID)
+	audience, err := audienceFor(s.spec.Role, trigger)
 	if err != nil {
-		return fmt.Errorf("assemble the scene for turn %s: %w", trigger.TurnEntityID, err)
+		return err
 	}
-	request, err := s.request(ctx, view)
+	projection, err := s.projector.Project(ctx, audience)
+	if err != nil {
+		return fmt.Errorf("project %s context for turn %s: %w", s.spec.Role, trigger.TurnEntityID, err)
+	}
+	request, err := s.request(ctx, projection)
 	if err != nil {
 		return err
 	}
@@ -208,14 +213,25 @@ func (s *Spawner) Run(ctx context.Context, trigger Trigger) error {
 }
 
 // request renders the prompt this persona is spawned with.
-func (s *Spawner) request(ctx context.Context, view *scene.View) (persona.TaskRequest, error) {
+func (s *Spawner) request(ctx context.Context, projection *epistemic.Projection) (persona.TaskRequest, error) {
 	switch s.spec.Role {
 	case persona.RoleAdjudicator:
-		return s.prompter.Adjudicate(ctx, view)
+		return s.prompter.Adjudicate(ctx, projection)
 	case persona.RoleNarrator:
-		return s.prompter.Narrate(ctx, view)
+		return s.prompter.Narrate(ctx, projection)
 	default:
 		return persona.TaskRequest{}, fmt.Errorf("persona %q has no prompt", s.spec.Role)
+	}
+}
+
+func audienceFor(role persona.Role, trigger Trigger) (epistemic.AuthenticatedAudience, error) {
+	switch role {
+	case persona.RoleAdjudicator:
+		return epistemic.PublicAdjudicatorAudience(trigger.TurnID, trigger.TurnEntityID), nil
+	case persona.RoleNarrator:
+		return epistemic.NarratorAudience(trigger.TurnID, trigger.TurnEntityID), nil
+	default:
+		return epistemic.AuthenticatedAudience{}, fmt.Errorf("persona %q has no epistemic audience", role)
 	}
 }
 

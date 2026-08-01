@@ -130,6 +130,8 @@ var worldFactSubjectKinds = map[Predicate][]EntityKind{
 	KnowledgeActorHolder:            {EntityKindKnowledge},
 	KnowledgeEvidenceRef:            {EntityKindKnowledge},
 	RevelationEvidenceRef:           {EntityKindRevelation},
+	RevelationActorHolder:           {EntityKindRevelation},
+	RevelationTurnID:                {EntityKindRevelation},
 	CompanionCandidatePolicy:        {EntityKindCharacter},
 	CompanionBondPlayer:             {EntityKindCompanionBond},
 	CompanionBondCharacter:          {EntityKindCompanionBond},
@@ -177,6 +179,7 @@ var referenceObjectKinds = map[Predicate][]EntityKind{
 	KnowledgeActorHolder:    {EntityKindCharacter},
 	KnowledgeEvidenceRef:    {EntityKindEvidence},
 	RevelationEvidenceRef:   {EntityKindEvidence},
+	RevelationActorHolder:   {EntityKindCharacter},
 	CompanionBondPlayer:     {EntityKindPlayer},
 	CompanionBondCharacter:  {EntityKindCharacter},
 }

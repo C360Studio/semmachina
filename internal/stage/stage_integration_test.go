@@ -25,6 +25,7 @@ import (
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/dice"
 	"github.com/c360studio/semmachina/internal/effect"
+	"github.com/c360studio/semmachina/internal/epistemic"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/persona"
@@ -238,6 +239,14 @@ func (l *loop) startStages(t *testing.T, artifacts *content.Store) {
 	if err != nil {
 		t.Fatalf("NewAssembler: %v", err)
 	}
+	scope, err := epistemic.NewScope("", nil)
+	if err != nil {
+		t.Fatalf("NewScope: %v", err)
+	}
+	projector, err := epistemic.NewProjector(assembler, l.graph, scope)
+	if err != nil {
+		t.Fatalf("NewProjector: %v", err)
+	}
 	guard, err := persona.NewGuard(l.graph)
 	if err != nil {
 		t.Fatalf("NewGuard: %v", err)
@@ -248,12 +257,12 @@ func (l *loop) startStages(t *testing.T, artifacts *content.Store) {
 	}
 
 	adjudicator, err := stage.NewSpawner(
-		persona.Adjudicator(), l.recorder, guard, assembler, builder, l.harness.Client)
+		persona.Adjudicator(), l.recorder, guard, projector, builder, l.harness.Client)
 	if err != nil {
 		t.Fatalf("NewSpawner(adjudicator): %v", err)
 	}
 	narrator, err := stage.NewSpawner(
-		persona.Narrator(), l.recorder, guard, assembler, builder, l.harness.Client)
+		persona.Narrator(), l.recorder, guard, projector, builder, l.harness.Client)
 	if err != nil {
 		t.Fatalf("NewSpawner(narrator): %v", err)
 	}

@@ -29,6 +29,7 @@ import (
 	"github.com/c360studio/semmachina/internal/dice"
 	"github.com/c360studio/semmachina/internal/effect"
 	"github.com/c360studio/semmachina/internal/egress"
+	"github.com/c360studio/semmachina/internal/epistemic"
 	"github.com/c360studio/semmachina/internal/gateway"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/ledger"
@@ -868,6 +869,14 @@ func (e *Engine) startStages(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	scope, err := e.epistemicScope()
+	if err != nil {
+		return err
+	}
+	projector, err := epistemic.NewProjector(assembler, e.graph, scope)
+	if err != nil {
+		return err
+	}
 	guard, err := persona.NewGuard(e.graph)
 	if err != nil {
 		return err
@@ -878,13 +887,13 @@ func (e *Engine) startStages(ctx context.Context) error {
 	}
 
 	adjudicator, err := stage.NewSpawner(
-		persona.Adjudicator(), e.recorder, guard, assembler, builder, e.client,
+		persona.Adjudicator(), e.recorder, guard, projector, builder, e.client,
 		stage.WithSpawnerLogger(e.log()))
 	if err != nil {
 		return err
 	}
 	narrator, err := stage.NewSpawner(
-		persona.Narrator(), e.recorder, guard, assembler, builder, e.client,
+		persona.Narrator(), e.recorder, guard, projector, builder, e.client,
 		stage.WithSpawnerLogger(e.log()))
 	if err != nil {
 		return err
@@ -927,6 +936,41 @@ func (e *Engine) startStages(ctx context.Context) error {
 		return err
 	}
 	return runner.Start(ctx)
+}
+
+func (e *Engine) epistemicScope() (epistemic.Scope, error) {
+	if e.plan == nil || e.pkg == nil {
+		return epistemic.Scope{}, errors.New("build epistemic scope: resolved world plan is unavailable")
+	}
+	if e.pkg.Mystery == nil {
+		return epistemic.NewScope("", nil)
+	}
+
+	byLocalID := make(map[string]world.PlannedEntity, len(e.plan.Entities))
+	for _, entity := range e.plan.Entities {
+		byLocalID[entity.Template.LocalID] = entity
+	}
+	caseEntity, ok := byLocalID[e.pkg.Mystery.ID]
+	if !ok || caseEntity.Kind != vocabulary.EntityKindCase {
+		return epistemic.Scope{}, fmt.Errorf("build epistemic scope: resolved plan has no case %q",
+			e.pkg.Mystery.ID)
+	}
+
+	beliefsByActorID := make(map[string][]string)
+	for _, belief := range e.pkg.Mystery.Beliefs {
+		record, recordOK := byLocalID[belief.Record]
+		actor, actorOK := byLocalID[belief.Actor]
+		if !recordOK || record.Kind != vocabulary.EntityKindBelief {
+			return epistemic.Scope{}, fmt.Errorf("build epistemic scope: resolved plan has no belief %q",
+				belief.Record)
+		}
+		if !actorOK || actor.Kind != vocabulary.EntityKindCharacter {
+			return epistemic.Scope{}, fmt.Errorf("build epistemic scope: resolved plan has no belief actor %q",
+				belief.Actor)
+		}
+		beliefsByActorID[actor.ID] = append(beliefsByActorID[actor.ID], record.ID)
+	}
+	return epistemic.NewScope(caseEntity.ID, beliefsByActorID)
 }
 
 // startLoopFailures binds the durable watcher and waits until every failure

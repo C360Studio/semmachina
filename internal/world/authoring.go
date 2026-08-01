@@ -94,6 +94,8 @@ var engineOwnedFacts = []vocabulary.Predicate{
 	vocabulary.PlayerCharacterCurrent,
 	// Revelations are committed turn receipts, never package seeds.
 	vocabulary.RevelationEvidenceRef,
+	vocabulary.RevelationActorHolder,
+	vocabulary.RevelationTurnID,
 	// A bond names an instance-configured player, so the template can only mark
 	// a character as eligible; the durable bond itself is runtime state.
 	vocabulary.CompanionBondPlayer,

@@ -341,6 +341,8 @@ func TestAuthorWritablePredicates_AreWorldFactsMinusEngineOwnedState(t *testing.
 		vocabulary.WorldEntityKind:                 true,
 		vocabulary.PlayerCharacterCurrent:          true,
 		vocabulary.RevelationEvidenceRef:           true,
+		vocabulary.RevelationActorHolder:           true,
+		vocabulary.RevelationTurnID:                true,
 		vocabulary.CompanionBondPlayer:             true,
 		vocabulary.CompanionBondCharacter:          true,
 		vocabulary.CompanionBondPolicy:             true,

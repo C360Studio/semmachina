@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,9 +17,9 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semmachina/internal/content"
+	"github.com/c360studio/semmachina/internal/epistemic"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/persona"
-	"github.com/c360studio/semmachina/internal/scene"
 	"github.com/c360studio/semmachina/internal/stage"
 	"github.com/c360studio/semmachina/internal/testinfra"
 	"github.com/c360studio/semmachina/internal/turn"
@@ -75,19 +76,31 @@ func (f *fakeGuard) Check(
 	return f.resumption, f.err
 }
 
-type fakeAssembler struct {
-	journal *journal
-	calls   int
-	view    *scene.View
+type fakeProjector struct {
+	journal    *journal
+	calls      int
+	projection *epistemic.Projection
+	audiences  []epistemic.Purpose
+	err        error
 }
 
-func (f *fakeAssembler) Assemble(_ context.Context, turnID, turnEntityID string) (*scene.View, error) {
-	f.journal.note("assemble")
+func (f *fakeProjector) Project(
+	_ context.Context,
+	audience epistemic.AuthenticatedAudience,
+) (*epistemic.Projection, error) {
+	f.journal.note("project:" + string(audience.Purpose()))
 	f.calls++
-	if f.view != nil {
-		return f.view, nil
+	f.audiences = append(f.audiences, audience.Purpose())
+	if f.err != nil {
+		return nil, f.err
 	}
-	return &scene.View{TurnID: turnID, TurnEntityID: turnEntityID, SceneID: testSceneID}, nil
+	if f.projection != nil {
+		return f.projection, nil
+	}
+	turnID, turnEntityID := audience.TurnIdentity()
+	return &epistemic.Projection{
+		Purpose: audience.Purpose(), TurnID: turnID, TurnEntityID: turnEntityID, SceneID: testSceneID,
+	}, nil
 }
 
 type fakePrompter struct {
@@ -95,7 +108,7 @@ type fakePrompter struct {
 	actionID string
 }
 
-func (f *fakePrompter) identity(view *scene.View) persona.Identity {
+func (f *fakePrompter) identity(view *epistemic.Projection) persona.Identity {
 	identity := identityFor(view)
 	if f.actionID != "" {
 		identity.ActionID = f.actionID
@@ -103,30 +116,44 @@ func (f *fakePrompter) identity(view *scene.View) persona.Identity {
 	return identity
 }
 
-func (f *fakePrompter) Adjudicate(_ context.Context, view *scene.View) (persona.TaskRequest, error) {
+func (f *fakePrompter) Adjudicate(
+	_ context.Context, view *epistemic.Projection,
+) (persona.TaskRequest, error) {
 	f.journal.note("prompt:adjudicate")
-	attempt, err := payload.ResumeAttemptsFromTriples(view.Turn.Triples)
+	attempt, err := payload.ResumeAttemptsFromTriples(projectedTriples(view.Turn))
 	return persona.TaskRequest{
 		Identity: f.identity(view), ResumeAttempt: attempt, Prompt: "judge this",
 	}, err
 }
 
-func (f *fakePrompter) Narrate(_ context.Context, view *scene.View) (persona.TaskRequest, error) {
+func (f *fakePrompter) Narrate(
+	_ context.Context, view *epistemic.Projection,
+) (persona.TaskRequest, error) {
 	f.journal.note("prompt:narrate")
-	attempt, err := payload.ResumeAttemptsFromTriples(view.Turn.Triples)
+	attempt, err := payload.ResumeAttemptsFromTriples(projectedTriples(view.Turn))
 	return persona.TaskRequest{
 		Identity: f.identity(view), ResumeAttempt: attempt,
 		Band: vocabulary.BandPartial, Prompt: "voice this",
 	}, err
 }
 
-func identityFor(view *scene.View) persona.Identity {
+func identityFor(view *epistemic.Projection) persona.Identity {
 	return persona.Identity{
 		TurnID:       view.TurnID,
 		TurnEntityID: view.TurnEntityID,
 		ActionID:     testActionID,
 		SceneID:      view.SceneID,
 	}
+}
+
+func projectedTriples(entity epistemic.Entity) []message.Triple {
+	triples := make([]message.Triple, 0, len(entity.Facts))
+	for _, fact := range entity.Facts {
+		triples = append(triples, message.Triple{
+			Subject: entity.ID, Predicate: fact.Predicate.String(), Object: fact.Object,
+		})
+	}
+	return triples
 }
 
 type fakePublisher struct {
@@ -170,7 +197,7 @@ type spawnFixture struct {
 	journal   *journal
 	recorder  *fakeRecorder
 	guard     *fakeGuard
-	assembler *fakeAssembler
+	projector *fakeProjector
 	publisher *fakePublisher
 	spawner   *stage.Spawner
 }
@@ -182,11 +209,11 @@ func newSpawnFixture(t *testing.T, spec persona.Spec) *spawnFixture {
 		journal:   j,
 		recorder:  &fakeRecorder{journal: j, transition: turn.Transition{Outcome: turn.OutcomeAdvanced}},
 		guard:     &fakeGuard{journal: j, resumption: persona.Resumption{Decision: persona.DecisionRun}},
-		assembler: &fakeAssembler{journal: j},
+		projector: &fakeProjector{journal: j},
 		publisher: &fakePublisher{journal: j},
 	}
 	spawner, err := stage.NewSpawner(
-		spec, fixture.recorder, fixture.guard, fixture.assembler, &fakePrompter{journal: j}, fixture.publisher)
+		spec, fixture.recorder, fixture.guard, fixture.projector, &fakePrompter{journal: j}, fixture.publisher)
 	if err != nil {
 		t.Fatalf("NewSpawner: %v", err)
 	}
@@ -203,10 +230,46 @@ func TestSpawner_ClaimsThePhaseBeforeConsultingTheResumeGuard(t *testing.T) {
 	if err := fixture.spawner.Run(t.Context(), testTrigger()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	want := []string{"advance:adjudicating", "guard:adjudicator", "assemble", "prompt:adjudicate",
+	want := []string{"advance:adjudicating", "guard:adjudicator", "project:public-adjudicator", "prompt:adjudicate",
 		"publish:agent.task.adjudicator"}
 	if strings.Join(fixture.journal.calls, ",") != strings.Join(want, ",") {
 		t.Fatalf("call order = %v, want %v", fixture.journal.calls, want)
+	}
+}
+
+func TestSpawner_MapsEachRoleToItsClosedEpistemicPurpose(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		spec    persona.Spec
+		purpose epistemic.Purpose
+	}{
+		"adjudicator": {spec: persona.Adjudicator(), purpose: epistemic.PurposePublicAdjudicator},
+		"narrator":    {spec: persona.Narrator(), purpose: epistemic.PurposeNarrator},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := newSpawnFixture(t, testCase.spec)
+			if err := fixture.spawner.Run(t.Context(), testTrigger()); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if !slices.Equal(fixture.projector.audiences, []epistemic.Purpose{testCase.purpose}) {
+				t.Fatalf("projection purposes = %v, want %s", fixture.projector.audiences, testCase.purpose)
+			}
+		})
+	}
+}
+
+func TestSpawner_ProjectionFailureDoesNotBuildOrPublishATask(t *testing.T) {
+	fixture := newSpawnFixture(t, persona.Adjudicator())
+	fixture.projector.err = errors.New("secret boundary unavailable")
+
+	err := fixture.spawner.Run(t.Context(), testTrigger())
+	if err == nil || !strings.Contains(err.Error(), "secret boundary unavailable") {
+		t.Fatalf("Run error = %v, want projector failure", err)
+	}
+	if len(fixture.publisher.payloads) != 0 {
+		t.Fatalf("projector failure published %d task(s)", len(fixture.publisher.payloads))
+	}
+	if slices.Contains(fixture.journal.calls, "prompt:adjudicate") {
+		t.Fatalf("projector failure reached prompt builder: %v", fixture.journal.calls)
 	}
 }
 
@@ -229,8 +292,8 @@ func TestSpawner_SkipDoesNotSpendAndDoesNotAdvancePastTheStage(t *testing.T) {
 		t.Errorf("a stage whose artifact already exists published %v; 7.2's saving evaporates",
 			fixture.publisher.subjects)
 	}
-	if fixture.assembler.calls != 0 {
-		t.Errorf("a skipped stage assembled a scene %d time(s)", fixture.assembler.calls)
+	if fixture.projector.calls != 0 {
+		t.Errorf("a skipped stage projected context %d time(s)", fixture.projector.calls)
 	}
 	if fixture.recorder.calls != 1 {
 		t.Errorf("the recorder was called %d times; a skip must not attempt a second transition, which the "+
@@ -262,10 +325,10 @@ func TestSpawner_ResumedStageStillRunsWhenNoArtifactExists(t *testing.T) {
 
 func TestSpawner_UsesThePersistedResumeAttemptAsTaskGeneration(t *testing.T) {
 	fixture := newSpawnFixture(t, persona.Adjudicator())
-	fixture.assembler.view = &scene.View{
+	fixture.projector.projection = &epistemic.Projection{
 		TurnID: testTurnID, TurnEntityID: testTurnEntityID, SceneID: testSceneID,
-		Turn: scene.Entity{ID: testTurnEntityID, Triples: []message.Triple{{
-			Subject: testTurnEntityID, Predicate: vocabulary.TurnResumeAttempts.String(), Object: float64(1),
+		Turn: epistemic.Entity{ID: testTurnEntityID, Facts: []epistemic.Fact{{
+			Predicate: vocabulary.TurnResumeAttempts, Object: float64(1),
 		}}},
 	}
 
@@ -390,7 +453,7 @@ func TestSpawner_AckLostAfterStoreAndRedeliveryProducesOneTask(t *testing.T) {
 		persona.Adjudicator(),
 		&fakeRecorder{journal: journal, transition: turn.Transition{Outcome: turn.OutcomeAdvanced}},
 		&fakeGuard{journal: journal, resumption: persona.Resumption{Decision: persona.DecisionRun}},
-		&fakeAssembler{journal: journal},
+		&fakeProjector{journal: journal},
 		&fakePrompter{journal: journal, actionID: uniqueActionID},
 		publisher,
 	)
@@ -476,7 +539,7 @@ func TestNewSpawner_RefusesAPersonaWithNoStage(t *testing.T) {
 		spec,
 		&fakeRecorder{journal: j},
 		&fakeGuard{journal: j},
-		&fakeAssembler{journal: j},
+		&fakeProjector{journal: j},
 		&fakePrompter{journal: j},
 		&fakePublisher{journal: j},
 	)
@@ -491,7 +554,7 @@ func TestNewSpawner_RefusesAMissingResumeGuard(t *testing.T) {
 		persona.Adjudicator(),
 		&fakeRecorder{journal: j},
 		nil,
-		&fakeAssembler{journal: j},
+		&fakeProjector{journal: j},
 		&fakePrompter{journal: j},
 		&fakePublisher{journal: j},
 	)

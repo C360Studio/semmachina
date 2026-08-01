@@ -27,16 +27,19 @@
 
 ## 3. Epistemic Projection Safety
 
-- [ ] 3.1 Add table-driven failing tests with unique entity IDs and unique text values for
+- [x] 3.1 Add table-driven failing tests with unique entity IDs and unique text values for
   culprit, unrevealed-clue, and revealed-clue canaries across casekeeper, player,
   companion, public adjudicator, narrator, denouement, verifier, and operator purposes
-- [ ] 3.2 Implement the centralized closed-purpose `EpistemicProjector` with bounded reads
+- [x] 3.2 Implement the centralized closed-purpose `EpistemicProjector` with bounded reads
   and complete omission of unauthorized entities and identifiers
-- [ ] 3.3 Route adjudicator and narrator prompt assembly exclusively through the projector,
+- [x] 3.3 Route adjudicator and narrator prompt assembly exclusively through the projector,
   pin public-adjudicator acting-actor knowledge and exclusions, and remove the
   audience-agnostic scene view as a direct persona input
 - [ ] 3.4 Assert canaries at projector, serialized prompt, mock-model request, and player
   egress boundaries before connecting new personas
+  - Projector and serialized-prompt canary boundaries are complete. Actual mock-model
+    `Call.Body` and raw player-egress byte assertions remain and must close before new
+    personas or the full Bellweather E2E are connected.
 
 ## 4. Case Decisions and Interpretation Stage
 

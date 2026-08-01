@@ -1,6 +1,7 @@
 package persona_test
 
 import (
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -9,9 +10,9 @@ import (
 	"github.com/c360studio/semstreams/message"
 
 	"github.com/c360studio/semmachina/internal/content"
+	"github.com/c360studio/semmachina/internal/epistemic"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/persona"
-	"github.com/c360studio/semmachina/internal/scene"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -20,7 +21,7 @@ const testActionText = "Rook levers the winch housing with the crowbar, watching
 // promptFixture is one assembled turn: the view a persona is shown and the
 // artifacts its references resolve to.
 type promptFixture struct {
-	view      *scene.View
+	view      *epistemic.Projection
 	artifacts *fakeArtifacts
 	builder   *persona.Builder
 }
@@ -40,12 +41,12 @@ func newPromptFixture(t *testing.T, turnTriples ...message.Triple) *promptFixtur
 		Channel:    payload.ChannelBinding{Adapter: vocabulary.AdapterWebSocket, ReplyTo: "conn-1"},
 	}
 
-	turn := scene.Entity{ID: testTurnEntityID, Triples: append([]message.Triple{
+	turn := projectedEntity(testTurnEntityID, append([]message.Triple{
 		fact(vocabulary.TurnPhaseCurrent, string(vocabulary.PhaseAdjudicating)),
 		fact(vocabulary.TurnActionRef, actionRef.String()),
 		fact(vocabulary.TurnActionPlayer, testPlayerID),
 		fact(vocabulary.TurnActionScene, testSceneID),
-	}, turnTriples...)}
+	}, turnTriples...)...)
 
 	builder, err := persona.NewBuilder(artifacts)
 	if err != nil {
@@ -54,18 +55,18 @@ func newPromptFixture(t *testing.T, turnTriples ...message.Triple) *promptFixtur
 	return &promptFixture{
 		artifacts: artifacts,
 		builder:   builder,
-		view: &scene.View{
+		view: &epistemic.Projection{
+			Purpose:      epistemic.PurposePublicAdjudicator,
 			TurnID:       testTurnID,
 			TurnEntityID: testTurnEntityID,
 			SceneID:      testSceneID,
-			AssembledAt:  testTime,
 			Turn:         turn,
 			Scene: entityWith(testSceneID,
 				triple(testSceneID, vocabulary.WorldEntityKind, string(vocabulary.EntityKindScene)),
 				triple(testSceneID, vocabulary.WorldEntityName, "The Gatehouse at Dusk"),
 				triple(testSceneID, vocabulary.WorldEntityDescription, "Cold iron and a squealing winch."),
 			),
-			Members: []scene.Entity{
+			Members: []epistemic.Entity{
 				entityWith(testCharacterID,
 					triple(testCharacterID, vocabulary.WorldEntityKind, string(vocabulary.EntityKindCharacter)),
 					triple(testCharacterID, vocabulary.WorldEntityName, "Rook"),
@@ -77,7 +78,7 @@ func newPromptFixture(t *testing.T, turnTriples ...message.Triple) *promptFixtur
 					triple(testSentryID, vocabulary.WorldEntityName, "Hollis"),
 				),
 			},
-			Neighbours: []scene.Entity{
+			Neighbours: []epistemic.Entity{
 				entityWith(testCrowbarID,
 					triple(testCrowbarID, vocabulary.WorldEntityKind, string(vocabulary.EntityKindItem)),
 					triple(testCrowbarID, vocabulary.WorldEntityName, "a bent crowbar"),
@@ -87,13 +88,23 @@ func newPromptFixture(t *testing.T, turnTriples ...message.Triple) *promptFixtur
 					triple(testPlayerID, vocabulary.PlayerCharacterCurrent, testCharacterID),
 				),
 			},
-			Actor: scene.Actor{PlayerID: testPlayerID, CharacterID: testCharacterID},
+			Actor: epistemic.Actor{PlayerID: testPlayerID, CharacterID: testCharacterID},
 		},
 	}
 }
 
-func entityWith(id string, triples ...message.Triple) scene.Entity {
-	return scene.Entity{ID: id, Triples: triples}
+func entityWith(id string, triples ...message.Triple) epistemic.Entity {
+	return projectedEntity(id, triples...)
+}
+
+func projectedEntity(id string, triples ...message.Triple) epistemic.Entity {
+	entity := epistemic.Entity{ID: id, Facts: make([]epistemic.Fact, 0, len(triples))}
+	for _, triple := range triples {
+		entity.Facts = append(entity.Facts, epistemic.Fact{
+			Predicate: vocabulary.Predicate(triple.Predicate), Object: triple.Object,
+		})
+	}
+	return entity
 }
 
 func triple(subject string, predicate vocabulary.Predicate, object any) message.Triple {
@@ -109,11 +120,14 @@ func triple(subject string, predicate vocabulary.Predicate, object any) message.
 // storeVerdict puts a verdict where the turn's reference will find it.
 func (f *promptFixture) storeVerdict(t *testing.T, verdict *payload.Verdict) content.Ref {
 	t.Helper()
+	f.view.Purpose = epistemic.PurposeNarrator
 	ref, err := f.artifacts.PutVerdict(t.Context(), testTurnEntityID, verdict)
 	if err != nil {
 		t.Fatalf("PutVerdict: %v", err)
 	}
-	f.view.Turn.Triples = append(f.view.Turn.Triples, fact(vocabulary.TurnVerdictRef, ref.String()))
+	f.view.Turn.Facts = append(f.view.Turn.Facts, epistemic.Fact{
+		Predicate: vocabulary.TurnVerdictRef, Object: ref.String(),
+	})
 	return ref
 }
 
@@ -237,8 +251,8 @@ func TestPromptBuilder_RefusesInvalidResumeAttemptsForBothRoles(t *testing.T) {
 
 func TestAdjudicatePrompt_RefusesATurnWithNoActionToJudge(t *testing.T) {
 	fixture := newPromptFixture(t)
-	fixture.view.Turn.Triples = slices.DeleteFunc(fixture.view.Turn.Triples, func(t message.Triple) bool {
-		return t.Predicate == vocabulary.TurnActionRef.String()
+	fixture.view.Turn.Facts = slices.DeleteFunc(fixture.view.Turn.Facts, func(f epistemic.Fact) bool {
+		return f.Predicate == vocabulary.TurnActionRef
 	})
 
 	if _, err := fixture.builder.Adjudicate(t.Context(), fixture.view); err == nil {
@@ -277,24 +291,6 @@ func TestAdjudicatePrompt_ShowsTheEntitiesTheVerdictWillHaveToTarget(t *testing.
 	}
 }
 
-// Nothing about the turn's later stages may leak backwards into the judgment.
-func TestAdjudicatePrompt_ShowsNoOutcomeBecauseNoneExistsYet(t *testing.T) {
-	fixture := newPromptFixture(t,
-		fact(vocabulary.TurnRollBand, string(vocabulary.BandFull)),
-		fact(vocabulary.TurnRollTotal, 11),
-	)
-	request, err := fixture.builder.Adjudicate(t.Context(), fixture.view)
-	if err != nil {
-		t.Fatalf("Adjudicate: %v", err)
-	}
-	for _, leaked := range []string{string(vocabulary.BandFull), vocabulary.TurnRollTotal.String()} {
-		if strings.Contains(request.Prompt, leaked) {
-			t.Fatalf("the adjudicator's prompt contains %q; a judgment made knowing the roll is not a "+
-				"judgment:\n%s", leaked, request.Prompt)
-		}
-	}
-}
-
 // A prompt whose bytes depend on storage layout makes two identical worlds
 // produce two different prompts — and makes a token-free replay's output depend
 // on something no fixture controls.
@@ -307,9 +303,9 @@ func TestPrompt_IsDeterministicAndIndependentOfGraphOrder(t *testing.T) {
 
 	second := newPromptFixture(t)
 	for i := range second.view.Members {
-		slices.Reverse(second.view.Members[i].Triples)
+		slices.Reverse(second.view.Members[i].Facts)
 	}
-	slices.Reverse(second.view.Scene.Triples)
+	slices.Reverse(second.view.Scene.Facts)
 	secondRequest, err := second.builder.Adjudicate(t.Context(), second.view)
 	if err != nil {
 		t.Fatalf("Adjudicate: %v", err)
@@ -321,33 +317,97 @@ func TestPrompt_IsDeterministicAndIndependentOfGraphOrder(t *testing.T) {
 	}
 }
 
-// A persona told the room is incomplete can write around the gap; one silently
-// handed three of seven people narrates a room that is not there.
-func TestPrompt_NamesWhatTheAssemblerCouldNotShow(t *testing.T) {
+func TestSerializedPromptContainsOnlyTheAuthorizedProjectionCanary(t *testing.T) {
 	fixture := newPromptFixture(t)
-	fixture.view.Excluded = []scene.Exclusion{
-		{ID: "c360.semmachina.world1.starter.character.wren", Reason: scene.ExcludedStub},
-	}
+	const (
+		revealedID   = "c360.semmachina.world1.starter.evidence.revealed-canary"
+		revealedText = "REVEALED-PROMPT-CANARY"
+		hiddenID     = "c360.semmachina.world1.starter.evidence.unrevealed-canary"
+		hiddenText   = "UNREVEALED-PROMPT-CANARY"
+	)
+	fixture.view.Neighbours = append(fixture.view.Neighbours, epistemic.Entity{
+		ID: revealedID,
+		Facts: []epistemic.Fact{
+			{Predicate: vocabulary.WorldEntityKind, Object: string(vocabulary.EntityKindEvidence)},
+			{Predicate: vocabulary.WorldEntityName, Object: revealedText},
+		},
+	})
+
 	request, err := fixture.builder.Adjudicate(t.Context(), fixture.view)
 	if err != nil {
 		t.Fatalf("Adjudicate: %v", err)
 	}
-	if !strings.Contains(request.Prompt, "character.wren") ||
-		!strings.Contains(request.Prompt, string(scene.ExcludedStub)) {
-		t.Fatalf("the prompt does not report what was left out:\n%s", request.Prompt)
+	for _, want := range []string{revealedID, revealedText} {
+		if !strings.Contains(request.Prompt, want) {
+			t.Fatalf("serialized prompt lacks authorized canary %q:\n%s", want, request.Prompt)
+		}
+	}
+	for _, forbidden := range []string{hiddenID, hiddenText, "# Not available"} {
+		if strings.Contains(request.Prompt, forbidden) {
+			t.Fatalf("serialized prompt contains omitted/legacy value %q:\n%s", forbidden, request.Prompt)
+		}
 	}
 }
 
-func TestPrompt_SaysSoWhenTheCampaignCannotNameTheActingCharacter(t *testing.T) {
-	fixture := newPromptFixture(t)
-	fixture.view.Actor = scene.Actor{PlayerID: testPlayerID, Doubt: scene.ActorBindingAbsent}
+func TestSerializedNarrationPromptPreservesRevealedCanaryAndOmitsSecrets(t *testing.T) {
+	fixture := newPromptFixture(t,
+		fact(vocabulary.TurnRollBand, string(vocabulary.BandPartial)),
+		fact(vocabulary.TurnRollTotal, 8),
+		fact(vocabulary.TurnEffectsBatch, payload.BatchIDForTurn(testTurnID)),
+	)
+	fixture.storeVerdict(t, rollingVerdict())
+	const (
+		revealedID   = "c360.semmachina.world1.starter.evidence.revealed-narration"
+		revealedText = "REVEALED-NARRATION-CANARY"
+		culpritID    = "c360.semmachina.world1.starter.character.culprit-canary"
+		culpritText  = "CULPRIT-NARRATION-CANARY"
+		hiddenID     = "c360.semmachina.world1.starter.evidence.unrevealed-narration"
+		hiddenText   = "UNREVEALED-NARRATION-CANARY"
+	)
+	fixture.view.Neighbours = append(fixture.view.Neighbours, epistemic.Entity{
+		ID: revealedID,
+		Facts: []epistemic.Fact{
+			{Predicate: vocabulary.WorldEntityKind, Object: string(vocabulary.EntityKindEvidence)},
+			{Predicate: vocabulary.WorldEntityName, Object: revealedText},
+		},
+	})
 
-	request, err := fixture.builder.Adjudicate(t.Context(), fixture.view)
+	request, err := fixture.builder.Narrate(t.Context(), fixture.view)
 	if err != nil {
-		t.Fatalf("Adjudicate: %v", err)
+		t.Fatalf("Narrate: %v", err)
 	}
-	if !strings.Contains(request.Prompt, string(scene.ActorBindingAbsent)) {
-		t.Fatalf("the prompt does not report that the actor is unknown:\n%s", request.Prompt)
+	for _, want := range []string{revealedID, revealedText} {
+		if !strings.Contains(request.Prompt, want) {
+			t.Fatalf("narration prompt lacks revealed anti-vacuity canary %q:\n%s", want, request.Prompt)
+		}
+	}
+	for _, forbidden := range []string{culpritID, culpritText, hiddenID, hiddenText} {
+		if strings.Contains(request.Prompt, forbidden) {
+			t.Fatalf("narration prompt leaks pre-denouement secret %q:\n%s", forbidden, request.Prompt)
+		}
+	}
+}
+
+func TestPromptBuilderRejectsWrongPurposeBeforeRendering(t *testing.T) {
+	fixture := newPromptFixture(t)
+	fixture.view.Purpose = epistemic.PurposeCasekeeper
+	if _, err := fixture.builder.Adjudicate(t.Context(), fixture.view); err == nil {
+		t.Fatal("Adjudicate accepted a casekeeper projection")
+	}
+	fixture.view.Purpose = epistemic.PurposeVerifier
+	if _, err := fixture.builder.Narrate(t.Context(), fixture.view); err == nil {
+		t.Fatal("Narrate accepted a verifier projection")
+	}
+}
+
+func TestPromptBuilderRejectsAnOversizedSerializedProjection(t *testing.T) {
+	fixture := newPromptFixture(t)
+	fixture.view.Scene.Facts = append(fixture.view.Scene.Facts, epistemic.Fact{
+		Predicate: vocabulary.WorldEntityDescription,
+		Object:    strings.Repeat("x", epistemic.DefaultMaxProjectionBytes+1),
+	})
+	if _, err := fixture.builder.Adjudicate(t.Context(), fixture.view); err == nil {
+		t.Fatal("prompt builder accepted a projection beyond its serialized-byte ceiling")
 	}
 }
 
@@ -585,14 +645,28 @@ func TestNewBuilder_RequiresAnArtifactReader(t *testing.T) {
 	}
 }
 
+func TestPromptBuilderHasNoRawSceneViewInput(t *testing.T) {
+	for _, methodName := range []string{"Adjudicate", "Narrate"} {
+		method, ok := reflect.TypeOf((*persona.Builder)(nil)).MethodByName(methodName)
+		if !ok {
+			t.Fatalf("Builder.%s is missing", methodName)
+		}
+		projectionType := reflect.TypeOf((*epistemic.Projection)(nil))
+		if method.Type.NumIn() != 3 || method.Type.In(2) != projectionType {
+			t.Fatalf("Builder.%s context input = %v, want only *epistemic.Projection",
+				methodName, method.Type.In(2))
+		}
+	}
+}
+
 // renderTurn is the assembled turn's own facts, for the anti-vacuity check on
 // the reference-following test.
-func renderTurn(turn scene.Entity) string {
+func renderTurn(turn epistemic.Entity) string {
 	var out strings.Builder
-	for _, t := range turn.Triples {
-		out.WriteString(t.Predicate)
+	for _, fact := range turn.Facts {
+		out.WriteString(fact.Predicate.String())
 		out.WriteString(": ")
-		out.WriteString(strings.TrimSpace(timeless(t.Object)))
+		out.WriteString(strings.TrimSpace(timeless(fact.Object)))
 		out.WriteString("\n")
 	}
 	return out.String()

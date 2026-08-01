@@ -329,6 +329,8 @@ const (
 	KnowledgeActorHolder  Predicate = "knowledge.actor.holder"
 	KnowledgeEvidenceRef  Predicate = "knowledge.evidence.target"
 	RevelationEvidenceRef Predicate = "revelation.evidence.target"
+	RevelationActorHolder Predicate = "revelation.actor.holder"
+	RevelationTurnID      Predicate = "revelation.turn.id"
 
 	CompanionCandidatePolicy Predicate = "companion.candidate.policy"
 	CompanionBondPlayer      Predicate = "companion.bond.player"
@@ -403,6 +405,8 @@ var allPredicates = []Predicate{
 	KnowledgeActorHolder,
 	KnowledgeEvidenceRef,
 	RevelationEvidenceRef,
+	RevelationActorHolder,
+	RevelationTurnID,
 	CompanionCandidatePolicy,
 	CompanionBondPlayer,
 	CompanionBondCharacter,

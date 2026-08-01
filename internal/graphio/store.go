@@ -78,6 +78,10 @@ const (
 	// lookups are what that index exists for. Scanning the world and filtering
 	// would be a hand-rolled index over data the substrate already indexes (M6).
 	SubjectIndexQueryIncoming = "graph.index.query.incoming"
+	// SubjectIndexQueryPredicate is graph-index's predicate membership query.
+	// Supplying Value asks the index to hydrate candidates internally and filter
+	// exact string objects; callers still supply a hard result limit.
+	SubjectIndexQueryPredicate = "graph.index.query.predicate"
 )
 
 // DefaultTimeout bounds one request/reply round trip.
@@ -421,6 +425,51 @@ func (s *Store) IncomingRelationships(ctx context.Context, entityID string) ([]g
 		return nil, fmt.Errorf("decode incoming edges of %s: %w", entityID, err)
 	}
 	return response.Data.Relationships, nil
+}
+
+// EntitiesByPredicateValue returns entity IDs carrying an exact string object
+// for predicate through graph-index's NATS-direct query surface.
+//
+// The current upstream value filter first reads predicate-index membership and
+// then scans those candidate ENTITY_STATES records until limit matches. The
+// public call is bounded and stops early, but it is not a native value index;
+// callers must keep limits small and must not mistake this for world-size-flat
+// retrieval. This local reader does not add a substrate workaround or cache.
+func (s *Store) EntitiesByPredicateValue(
+	ctx context.Context,
+	predicate, value string,
+	limit int,
+) ([]string, error) {
+	if predicate == "" {
+		return nil, errors.New("predicate-value query requires a predicate")
+	}
+	if value == "" {
+		return nil, errors.New("predicate-value query requires a value")
+	}
+	if limit <= 0 {
+		return nil, errors.New("predicate-value query requires a positive limit")
+	}
+	request, err := json.Marshal(struct {
+		Predicate string  `json:"predicate"`
+		Value     *string `json:"value"`
+		Limit     int     `json:"limit"`
+	}{Predicate: predicate, Value: &value, Limit: limit})
+	if err != nil {
+		return nil, fmt.Errorf("encode predicate-value query for %s: %w", predicate, err)
+	}
+	reply, err := s.requester.RequestClassified(ctx, SubjectIndexQueryPredicate, request, s.timeout)
+	if err != nil {
+		return nil, fmt.Errorf("predicate-value query for %s: %w", predicate, err)
+	}
+	var response graph.PredicateQueryResponse
+	if err := json.Unmarshal(reply, &response); err != nil {
+		return nil, fmt.Errorf("decode predicate-value query for %s: %w", predicate, err)
+	}
+	if len(response.Data.Entities) > limit {
+		return nil, fmt.Errorf("predicate-value query for %s returned %d entities; hard limit is %d",
+			predicate, len(response.Data.Entities), limit)
+	}
+	return response.Data.Entities, nil
 }
 
 // MergeOption adjusts one merge request.
