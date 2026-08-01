@@ -55,6 +55,12 @@ type PlayerConfig struct {
 	Credential string `json:"credential"`
 }
 
+// CompanionConfig selects one package-authored companion candidate for the player.
+type CompanionConfig struct {
+	Character string                     `json:"character"`
+	Policy    vocabulary.CompanionPolicy `json:"policy"`
+}
+
 // Config is one world instance's whole deployment configuration.
 //
 // The JSON-tagged half is what an operator writes. The untagged half is what a
@@ -74,6 +80,8 @@ type Config struct {
 
 	// Player is the instance's player binding and credential.
 	Player PlayerConfig `json:"player"`
+	// Companion is optional; nil means this player has no active companion bond.
+	Companion *CompanionConfig `json:"companion,omitempty"`
 
 	// SceneLocalID names the scene actions are taken in, as a template-local id.
 	//
@@ -229,7 +237,7 @@ func (c Config) Validate() error {
 	}
 	// The binding the world package needs, checked here so the failure names the
 	// instance configuration rather than surfacing from inside the resolver.
-	binding := world.InstanceConfig{Org: c.Org, WorldNS: c.WorldNS, Player: c.playerBinding()}
+	binding := c.instanceConfig()
 	if err := binding.Validate(); err != nil {
 		return err
 	}
@@ -247,4 +255,15 @@ func (c Config) playerBinding() world.PlayerBinding {
 		Name:      c.Player.Name,
 		Character: c.Player.Character,
 	}
+}
+
+func (c Config) instanceConfig() world.InstanceConfig {
+	instance := world.InstanceConfig{Org: c.Org, WorldNS: c.WorldNS, Player: c.playerBinding()}
+	if c.Companion != nil {
+		instance.Companion = &world.CompanionBinding{
+			Character: c.Companion.Character,
+			Policy:    c.Companion.Policy,
+		}
+	}
+	return instance
 }

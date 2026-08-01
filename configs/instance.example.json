@@ -41,6 +41,11 @@
         "preferred": ["mid"],
         "requires_tools": true
       },
+      "companion_decision": {
+        "description": "Package-independent structural companion decisions from actor-scoped knowledge.",
+        "preferred": ["mid"],
+        "requires_tools": true
+      },
       "fiction_adjudication": {
         "description": "The engine's only schema-bearing exit. ADR-026 records upstream living the alternative, so this is the MID slot and demoting it is an experiment, never the starting configuration.",
         "preferred": ["mid"],

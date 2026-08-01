@@ -24,6 +24,7 @@ type roundTripCase struct {
 func roundTripCases() []roundTripCase {
 	return []roundTripCase{
 		{name: "player_action", payload: validPlayerAction()},
+		{name: "companion_decision", payload: validCompanionDecision()},
 		{name: "case_decision", payload: validAccusationDecision()},
 		{name: "accusation_result", payload: validAccusationResult()},
 		{name: "verdict", payload: validVerdict()},

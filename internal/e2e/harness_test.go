@@ -278,6 +278,7 @@ func mockModels(baseURL string) *model.Registry {
 		},
 		Capabilities: map[string]*model.CapabilityConfig{
 			persona.CapabilityCasekeeping:  {Preferred: []string{"mock-adjudicator"}},
+			persona.CapabilityCompanion:    {Preferred: []string{"mock-adjudicator"}},
 			persona.CapabilityAdjudication: {Preferred: []string{"mock-adjudicator"}},
 			persona.CapabilityNarration:    {Preferred: []string{"mock-narrator"}},
 		},

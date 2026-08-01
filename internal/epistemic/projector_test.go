@@ -10,10 +10,13 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 
+	"github.com/c360studio/semmachina/internal/companion"
 	"github.com/c360studio/semmachina/internal/epistemic"
 	"github.com/c360studio/semmachina/internal/graphio"
+	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/scene"
 	"github.com/c360studio/semmachina/internal/vocabulary"
+	"github.com/c360studio/semmachina/internal/world"
 )
 
 const (
@@ -88,6 +91,14 @@ func (f *fakeProjectionGraph) GetEntities(
 	return result, nil
 }
 
+func (f *fakeProjectionGraph) GetEntity(_ context.Context, id string) (*graph.EntityState, error) {
+	state, ok := f.states[id]
+	if !ok {
+		return nil, graphio.ErrEntityNotFound
+	}
+	return state.Clone(), nil
+}
+
 func fixture() (*fakeScenes, *fakeProjectionGraph) {
 	view := &scene.View{
 		TurnID: turnID, TurnEntityID: turnEntity, SceneID: sceneID,
@@ -149,10 +160,20 @@ func fixture() (*fakeScenes, *fakeProjectionGraph) {
 			fact(vocabulary.RevelationTurnID, turnID),
 			fact(vocabulary.RevelationEvidenceRef, otherEvidence),
 		),
-		"bond-other": state("bond-other",
+		companionBondID(): state(companionBondID(),
 			fact(vocabulary.WorldEntityKind, string(vocabulary.EntityKindCompanionBond)),
 			fact(vocabulary.CompanionBondPlayer, playerID),
 			fact(vocabulary.CompanionBondCharacter, otherID),
+			fact(vocabulary.CompanionBondPolicy, string(vocabulary.CompanionPolicyReactive)),
+			fact(vocabulary.CompanionBondHintLevel, string(vocabulary.HintLevelNudge)),
+		),
+		playerID: state(playerID,
+			fact(vocabulary.WorldEntityKind, string(vocabulary.EntityKindPlayer)),
+			fact(vocabulary.PlayerCharacterCurrent, actorID),
+		),
+		otherID: state(otherID,
+			fact(vocabulary.WorldEntityKind, string(vocabulary.EntityKindCharacter)),
+			fact(vocabulary.CompanionCandidatePolicy, string(vocabulary.CompanionPolicyReactive)),
 		),
 		caseID: state(caseID,
 			fact(vocabulary.WorldEntityKind, string(vocabulary.EntityKindCase)),
@@ -199,7 +220,9 @@ func fixture() (*fakeScenes, *fakeProjectionGraph) {
 		vocabulary.RevelationTurnID.String() + "=" + turnID: {
 			"revelation-other", "revelation-own",
 		},
-		vocabulary.CompanionBondCharacter.String() + "=" + otherID:                      {"bond-other"},
+		vocabulary.CompanionBondPlayer.String() + "=" + playerID:                        {companionBondID()},
+		vocabulary.CompanionBondCharacter.String() + "=" + otherID:                      {companionBondID()},
+		vocabulary.PlayerCharacterCurrent.String() + "=" + actorID:                      {playerID},
 		vocabulary.WorldEntityKind.String() + "=" + string(vocabulary.EntityKindCase):   {caseID},
 		vocabulary.WorldEntityKind.String() + "=" + string(vocabulary.EntityKindBelief): {beliefID},
 	}
@@ -253,9 +276,14 @@ func TestClosedPurposeCanaryMatrix(t *testing.T) {
 					t.Fatalf("fixture does not contain canary %q; absence checks would be vacuous", canary)
 				}
 			}
+			authority, err := companion.NewAuthority(graphReader)
+			if err != nil {
+				t.Fatal(err)
+			}
 			projector, err := epistemic.NewProjector(
 				scenes, graphReader, scopeForFixture(t),
 				epistemic.WithDenouementAuthorizer(allowDenouement{allowed: true}),
+				epistemic.WithCompanionBondValidator(authority),
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -397,21 +425,21 @@ func TestAuthorizationRecordsFailClosedOnAmbiguityAndWrongKinds(t *testing.T) {
 		"bond duplicate player": {
 			audience: companionAudience(),
 			mutate: func(states map[string]graph.EntityState) {
-				states["bond-other"] = withFact(states["bond-other"],
+				states[companionBondID()] = withFact(states[companionBondID()],
 					fact(vocabulary.CompanionBondPlayer, "other-player"))
 			},
 		},
 		"bond duplicate character": {
 			audience: companionAudience(),
 			mutate: func(states map[string]graph.EntityState) {
-				states["bond-other"] = withFact(states["bond-other"],
+				states[companionBondID()] = withFact(states[companionBondID()],
 					fact(vocabulary.CompanionBondCharacter, actorID))
 			},
 		},
 		"bond wrong record kind": {
 			audience: companionAudience(),
 			mutate: func(states map[string]graph.EntityState) {
-				states["bond-other"] = replaceFacts(states["bond-other"], vocabulary.WorldEntityKind,
+				states[companionBondID()] = replaceFacts(states[companionBondID()], vocabulary.WorldEntityKind,
 					fact(vocabulary.WorldEntityKind, string(vocabulary.EntityKindCharacter)))
 			},
 		},
@@ -541,12 +569,50 @@ func TestCompanionGetsOwnKnowledgeOnlyAfterBondVerification(t *testing.T) {
 		t.Fatalf("unrevealed clue leaked to companion: %s", body)
 	}
 
-	delete(graphReader.states, "bond-other")
+	delete(graphReader.states, companionBondID())
 	if _, err := mustProjector(t, scenes, graphReader).Project(
 		t.Context(), companionAudience(),
 	); err == nil {
 		t.Fatal("unbonded companion received a projection")
 	}
+}
+
+func TestCompanionProjectionRejectsForgedAndAmbiguousBondsThroughSharedAuthority(t *testing.T) {
+	t.Run("forged deterministic id", func(t *testing.T) {
+		scenes, graphReader := fixture()
+		forgedID := "acme.semmachina.keep.starter.companion-bond.forged"
+		forged := graphReader.states[companionBondID()]
+		forged.ID = forgedID
+		for index := range forged.Triples {
+			forged.Triples[index].Subject = forgedID
+		}
+		graphReader.states[forgedID] = forged
+		delete(graphReader.states, companionBondID())
+		graphReader.queries[vocabulary.CompanionBondPlayer.String()+"="+playerID] = []string{forgedID}
+		graphReader.queries[vocabulary.CompanionBondCharacter.String()+"="+otherID] = []string{forgedID}
+		audience := epistemic.CompanionAudience(turnID, turnEntity, sceneID, otherID, forgedID)
+		if _, err := mustProjector(t, scenes, graphReader).Project(t.Context(), audience); err == nil {
+			t.Fatal("projection accepted a forged deterministic companion bond id")
+		}
+	})
+
+	t.Run("ambiguous player bonds", func(t *testing.T) {
+		scenes, graphReader := fixture()
+		otherBondID := "acme.semmachina.keep.starter.companion-bond.other"
+		duplicate := graphReader.states[companionBondID()]
+		duplicate.ID = otherBondID
+		for index := range duplicate.Triples {
+			duplicate.Triples[index].Subject = otherBondID
+		}
+		graphReader.states[otherBondID] = duplicate
+		graphReader.queries[vocabulary.CompanionBondPlayer.String()+"="+playerID] =
+			[]string{companionBondID(), otherBondID}
+		if _, err := mustProjector(t, scenes, graphReader).Project(
+			t.Context(), companionAudience(),
+		); err == nil {
+			t.Fatal("projection accepted ambiguous companion bonds")
+		}
+	})
 }
 
 func TestPlayerAudienceCannotSubstituteAnotherTurnForTheGraphPinnedActor(t *testing.T) {
@@ -891,7 +957,12 @@ func mustProjector(
 	t *testing.T, scenes *fakeScenes, graphReader *fakeProjectionGraph,
 ) *epistemic.Projector {
 	t.Helper()
-	projector, err := epistemic.NewProjector(scenes, graphReader, scopeForFixture(t))
+	authority, err := companion.NewAuthority(graphReader)
+	if err != nil {
+		t.Fatalf("NewAuthority: %v", err)
+	}
+	projector, err := epistemic.NewProjector(scenes, graphReader, scopeForFixture(t),
+		epistemic.WithCompanionBondValidator(authority))
 	if err != nil {
 		t.Fatalf("NewProjector: %v", err)
 	}
@@ -924,7 +995,15 @@ func casekeeperAudience() epistemic.AuthenticatedAudience {
 }
 
 func companionAudience() epistemic.AuthenticatedAudience {
-	return epistemic.CompanionAudience(turnID, turnEntity, caseID, otherID, "bond-other")
+	return epistemic.CompanionAudience(turnID, turnEntity, caseID, otherID, companionBondID())
+}
+
+func companionBondID() string {
+	id, err := world.CompanionBondID("acme", "keep", "starter", playerID, otherID)
+	if err != nil {
+		panic(err)
+	}
+	return id
 }
 
 func verifierAudience() epistemic.AuthenticatedAudience {
@@ -995,7 +1074,7 @@ func state(id string, facts ...message.Triple) graph.EntityState {
 	for index := range facts {
 		facts[index].Subject = id
 	}
-	return graph.EntityState{ID: id, Triples: facts}
+	return graph.EntityState{ID: id, MessageType: (&payload.WorldEntity{}).Schema(), Triples: facts}
 }
 
 func withFact(state graph.EntityState, added message.Triple) graph.EntityState {
@@ -1017,7 +1096,8 @@ func replaceFacts(
 }
 
 func fact(predicate vocabulary.Predicate, object any) message.Triple {
-	return message.Triple{Predicate: predicate.String(), Object: object}
+	return message.Triple{Predicate: predicate.String(), Object: object,
+		Source: payload.WorldImportSource, Context: "starter@1.0.0"}
 }
 
 type allowDenouement struct{ allowed bool }

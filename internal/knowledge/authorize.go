@@ -114,7 +114,14 @@ type ShareAuthorizer interface {
 	Authorized(context.Context, string, string, string) (bool, error)
 }
 
-// DenyShares is the production policy until Group 7 provides durable bond authorization.
+// WitnessAuthorizer derives an independently authorized companion witness from
+// the durable bond and structural co-presence for an observation/investigation.
+type WitnessAuthorizer interface {
+	Witness(context.Context, string, []string) (string, bool, error)
+}
+
+// DenyShares is the explicit closed policy for compositions that intentionally
+// do not install a relationship-backed share authorizer.
 type DenyShares struct{}
 
 // Authorized refuses every share until durable companion bonds exist in Group 7.
@@ -141,6 +148,14 @@ type Plan struct{ Entries []Entry }
 
 // Authorize derives a complete commit plan without writing anything.
 func Authorize(ctx context.Context, input Preflight, shares ShareAuthorizer) (Plan, error) {
+	return AuthorizeWithWitnesses(ctx, input, shares, nil)
+}
+
+// AuthorizeWithWitnesses derives the full player plus optional companion batch
+// before the granter is allowed to begin persistence.
+func AuthorizeWithWitnesses(
+	ctx context.Context, input Preflight, shares ShareAuthorizer, witnesses WitnessAuthorizer,
+) (Plan, error) {
 	decision := input.Decision
 	if decision == nil {
 		return Plan{}, reject(ReasonUnsupportedKind, "missing case decision")
@@ -173,7 +188,22 @@ func Authorize(ctx context.Context, input Preflight, shares ShareAuthorizer) (Pl
 				return Plan{}, reject(ReasonInvalidTarget, "decision targets do not authorize evidence %s", evidenceID)
 			}
 		}
-		return actorEntries(input.ActingActorID, decision.RevealRefs), nil
+		plan := actorEntries(input.ActingActorID, decision.RevealRefs)
+		if witnesses == nil || len(decision.RevealRefs) == 0 {
+			return plan, nil
+		}
+		witnessID, allowed, err := witnesses.Witness(ctx, input.ActingActorID, decision.TargetRefs)
+		if err != nil {
+			return Plan{}, fmt.Errorf("authorize companion witness: %w", err)
+		}
+		if !allowed {
+			return plan, nil
+		}
+		if witnessID == "" || witnessID == input.ActingActorID {
+			return Plan{}, reject(ReasonWitnessUnauthorized, "authorized witness identity is invalid")
+		}
+		plan.Entries = append(plan.Entries, actorEntries(witnessID, decision.RevealRefs).Entries...)
+		return plan, nil
 
 	case payload.CaseDecisionQuestion:
 		if len(decision.TargetRefs) != 1 || !input.CaseCharacters[decision.TargetRefs[0]] {

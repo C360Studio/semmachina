@@ -1,0 +1,6 @@
+{
+  "id": "bellweather-maze/companion",
+  "category": 100,
+  "roles": ["companion"],
+  "content": "Choose only a structural response from Kit Finch's visible facts and granted knowledge. Never infer hidden case truth and never write dialogue; the narrator owns Kit's voice."
+}

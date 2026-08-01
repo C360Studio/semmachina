@@ -347,10 +347,10 @@ func injected(t *testing.T, spec persona.Spec, band vocabulary.OutcomeBand) map[
 
 // ------------------------------------------------------------------- specs
 
-func TestSpecs_AreTheThreePlacesAModelIsAllowedToSpeak(t *testing.T) {
+func TestSpecs_AreTheFourPlacesAModelIsAllowedToSpeak(t *testing.T) {
 	specs := persona.Specs()
-	if len(specs) != 3 {
-		t.Fatalf("the engine declares %d personas, want casekeeper, adjudicator, and narrator", len(specs))
+	if len(specs) != 4 {
+		t.Fatalf("the engine declares %d personas, want casekeeper, companion, adjudicator, and narrator", len(specs))
 	}
 	for _, spec := range specs {
 		if err := spec.Validate(); err != nil {
@@ -362,6 +362,59 @@ func TestSpecs_AreTheThreePlacesAModelIsAllowedToSpeak(t *testing.T) {
 	}
 	if _, err := persona.SpecFor("chronicler"); err == nil {
 		t.Fatal("SpecFor accepted a role this engine does not run")
+	}
+}
+
+func TestCompanionSpec_ExposesOnlyStructuralModelControlledFields(t *testing.T) {
+	spec := persona.Companion()
+	if spec.Role != persona.RoleCompanion || spec.Capability != persona.CapabilityCompanion ||
+		spec.Artifact != vocabulary.TurnCompanionDecisionRef || !spec.NeedsCompanion {
+		t.Fatalf("companion spec does not carry the reusable runtime contract: %+v", spec)
+	}
+	parameters := spec.Tool.Parameters
+	if spec.Tool.Name != persona.CompanionDecisionToolName || !spec.Tool.Strict ||
+		parameters["additionalProperties"] != false {
+		t.Fatalf("companion tool is not a strict structural exit: %+v", spec.Tool)
+	}
+	properties, ok := parameters["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("companion tool properties have type %T", parameters["properties"])
+	}
+	want := []string{"evidence_refs", "hint_level", "kind", "target_ref"}
+	got := make([]string, 0, len(properties))
+	for name := range properties {
+		got = append(got, name)
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Fatalf("model-controlled companion fields = %v, want only %v", got, want)
+	}
+	for _, forbidden := range []string{
+		"decision_id", "turn_id", "context_ref", "player_id", "companion_id", "dialogue", "rationale", "prose",
+	} {
+		if _, exists := properties[forbidden]; exists {
+			t.Fatalf("companion schema exposes engine/prose field %q to the model", forbidden)
+		}
+	}
+}
+
+func TestCompanionTask_RuntimeInjectsGenericIdentity(t *testing.T) {
+	identity := testIdentity()
+	identity.ContextRef = "c360.semmachina.world1.starter.quest.open-gate"
+	identity.PlayerID = testPlayerID
+	identity.CompanionID = "c360.semmachina.world1.starter.character.wren"
+	identity.BondID = "c360.semmachina.world1.starter.companion-bond.bond-1"
+	task, err := persona.Companion().Task(persona.TaskRequest{Identity: identity, Prompt: "structural context"})
+	if err != nil {
+		t.Fatalf("Companion.Task: %v", err)
+	}
+	decoded, err := persona.CompanionIdentityFrom(task.Metadata)
+	if err != nil {
+		t.Fatalf("CompanionIdentityFrom: %v", err)
+	}
+	if decoded.ContextRef != identity.ContextRef || decoded.PlayerID != identity.PlayerID ||
+		decoded.CompanionID != identity.CompanionID || decoded.BondID != identity.BondID {
+		t.Fatalf("runtime companion identity = %+v, want %+v", decoded, identity)
 	}
 }
 
@@ -939,6 +992,7 @@ func TestCheckRegistry_RefusesAnEndpointThatCannotCallTools(t *testing.T) {
 		},
 		Capabilities: map[string]*model.CapabilityConfig{
 			persona.CapabilityCasekeeping:  {Preferred: []string{"local"}},
+			persona.CapabilityCompanion:    {Preferred: []string{"local"}},
 			persona.CapabilityAdjudication: {Preferred: []string{"local"}},
 			persona.CapabilityNarration:    {Preferred: []string{"local"}},
 		},
@@ -957,6 +1011,7 @@ func TestCheckRegistry_RefusesAnEndpointThatCannotCallTools(t *testing.T) {
 		},
 		Capabilities: map[string]*model.CapabilityConfig{
 			persona.CapabilityCasekeeping:  {Preferred: []string{"local"}, RequiresTools: true},
+			persona.CapabilityCompanion:    {Preferred: []string{"local"}, RequiresTools: true},
 			persona.CapabilityAdjudication: {Preferred: []string{"local"}, RequiresTools: true},
 			persona.CapabilityNarration:    {Preferred: []string{"local"}, RequiresTools: true},
 		},

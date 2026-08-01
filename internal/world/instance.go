@@ -1,6 +1,9 @@
 package world
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -27,6 +30,15 @@ type PlayerBinding struct {
 	Character string
 }
 
+// CompanionBinding selects one package-authored candidate for this world instance.
+// A nil binding means the player has no active companion.
+type CompanionBinding struct {
+	// Character is a local reference to a character carrying CompanionCandidatePolicy.
+	Character string
+	// Policy is the active admission policy and may only tighten the candidate policy.
+	Policy vocabulary.CompanionPolicy
+}
+
 // InstanceConfig is everything a campaign supplies that the template does not.
 type InstanceConfig struct {
 	// Org is the federation organization position.
@@ -36,6 +48,8 @@ type InstanceConfig struct {
 	WorldNS string
 	// Player is the campaign's player binding.
 	Player PlayerBinding
+	// Companion is the optional active player-companion relationship.
+	Companion *CompanionBinding
 }
 
 // Validate checks the positions this config contributes to every composed ID.
@@ -59,6 +73,15 @@ func (c InstanceConfig) Validate() error {
 	if _, found := strings.CutPrefix(c.Player.Character, LocalRefPrefix); !found {
 		return fmt.Errorf("instance player character must be a %q reference into the template, got %q",
 			LocalRefPrefix, c.Player.Character)
+	}
+	if c.Companion != nil {
+		if _, found := strings.CutPrefix(c.Companion.Character, LocalRefPrefix); !found {
+			return fmt.Errorf("instance companion character must be a %q reference into the template, got %q",
+				LocalRefPrefix, c.Companion.Character)
+		}
+		if _, err := vocabulary.ParseCompanionPolicy(string(c.Companion.Policy)); err != nil {
+			return fmt.Errorf("instance companion policy: %w", err)
+		}
 	}
 	return nil
 }
@@ -104,8 +127,8 @@ type Plan struct {
 	// Template identifies the package the plan was resolved from.
 	TemplateID      string
 	TemplateVersion string
-	// Entities are the entities to materialize, in template file order with
-	// the instance-configured player entity last.
+	// Entities are the entities to materialize, in template file order followed
+	// by the instance-configured player and optional companion bond.
 	Entities []PlannedEntity
 	// seal binds the import plan to the exact result Package.Resolve validated.
 	// It is deliberately unexported: callers may inspect a plan, but cannot
@@ -179,6 +202,13 @@ func (p *Package) Resolve(inst InstanceConfig) (*Plan, error) {
 		return nil, err
 	}
 	planned = append(planned, player)
+	if inst.Companion != nil {
+		bond, err := planCompanionBond(p, inst, player, mapped, kinds, templateRef)
+		if err != nil {
+			return nil, err
+		}
+		planned = append(planned, bond)
+	}
 
 	plan := &Plan{
 		Org:             inst.Org,
@@ -191,6 +221,87 @@ func (p *Package) Resolve(inst InstanceConfig) (*Plan, error) {
 		return nil, err
 	}
 	return plan, nil
+}
+
+// CompanionBondID returns the deterministic bond identity for one world relationship.
+func CompanionBondID(org, worldNS, template, playerID, companionID string) (string, error) {
+	localID := companionBondLocalID(worldNS, playerID, companionID)
+	return vocabulary.ComposeEntityID(org, worldNS, template,
+		string(vocabulary.EntityKindCompanionBond), localID)
+}
+
+func companionBondLocalID(worldNS, playerID, companionID string) string {
+	digest := sha256.New()
+	for _, member := range []string{"companion-bond/v1", worldNS, playerID, companionID} {
+		var length [4]byte
+		binary.BigEndian.PutUint32(length[:], uint32(len(member)))
+		_, _ = digest.Write(length[:])
+		_, _ = digest.Write([]byte(member))
+	}
+	return hex.EncodeToString(digest.Sum(nil))
+}
+
+func planCompanionBond(
+	pkg *Package,
+	inst InstanceConfig,
+	player PlannedEntity,
+	mapped map[string]string,
+	kinds map[string]vocabulary.EntityKind,
+	templateRef func(string) payload.TemplateRef,
+) (PlannedEntity, error) {
+	local, _ := strings.CutPrefix(inst.Companion.Character, LocalRefPrefix)
+	companionID, declared := mapped[local]
+	if !declared {
+		return PlannedEntity{}, fmt.Errorf("instance companion character %q names no entity in template %q",
+			inst.Companion.Character, pkg.Manifest.ID)
+	}
+	if kinds[local] != vocabulary.EntityKindCharacter {
+		return PlannedEntity{}, fmt.Errorf("instance companion character %q is a %q, want character",
+			inst.Companion.Character, kinds[local])
+	}
+	controlled, _ := player.Facts[1].Object.(string)
+	if companionID == controlled {
+		return PlannedEntity{}, errors.New("instance companion cannot be the player's controlled character")
+	}
+
+	var policies []vocabulary.CompanionPolicy
+	for _, entity := range pkg.Entities {
+		if entity.LocalID != local {
+			continue
+		}
+		for _, fact := range entity.Facts {
+			if fact.Predicate == vocabulary.CompanionCandidatePolicy {
+				policy, err := vocabulary.ParseCompanionPolicy(fmt.Sprint(fact.Literal))
+				if err != nil {
+					return PlannedEntity{}, err
+				}
+				policies = append(policies, policy)
+			}
+		}
+	}
+	if len(policies) != 1 {
+		return PlannedEntity{}, fmt.Errorf("companion character %q must carry exactly one candidate policy, got %d",
+			inst.Companion.Character, len(policies))
+	}
+	if policies[0] == vocabulary.CompanionPolicyReactive &&
+		inst.Companion.Policy == vocabulary.CompanionPolicyBoundedInitiative {
+		return PlannedEntity{}, fmt.Errorf("active companion policy %q is wider than candidate policy %q",
+			inst.Companion.Policy, policies[0])
+	}
+	bondID, err := CompanionBondID(inst.Org, inst.WorldNS, pkg.Manifest.ID, player.ID, companionID)
+	if err != nil {
+		return PlannedEntity{}, err
+	}
+	return PlannedEntity{
+		ID: bondID, Kind: vocabulary.EntityKindCompanionBond,
+		Template: templateRef(companionBondLocalID(inst.WorldNS, player.ID, companionID)),
+		Facts: []payload.WorldFact{
+			{Predicate: vocabulary.CompanionBondPlayer, Object: player.ID, Reference: true},
+			{Predicate: vocabulary.CompanionBondCharacter, Object: companionID, Reference: true},
+			{Predicate: vocabulary.CompanionBondPolicy, Object: string(inst.Companion.Policy)},
+			{Predicate: vocabulary.CompanionBondHintLevel, Object: string(vocabulary.HintLevelNudge)},
+		},
+	}, nil
 }
 
 // resolveFact rewrites one authored fact into instance identity.

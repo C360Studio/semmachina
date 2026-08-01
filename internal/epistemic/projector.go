@@ -48,6 +48,13 @@ type DenouementAuthorizer interface {
 	Authorized(context.Context, string, string, string) (bool, error)
 }
 
+// CompanionBondValidator is the single relationship authority consumed by a
+// companion projection. It is injected to keep epistemic independent of the
+// concrete graph-backed companion package.
+type CompanionBondValidator interface {
+	ValidateCompanionBond(context.Context, string, string, string) error
+}
+
 // Option configures Projector.
 type Option func(*Projector)
 
@@ -76,6 +83,11 @@ func WithDenouementAuthorizer(authorizer DenouementAuthorizer) Option {
 	return func(p *Projector) { p.denouement = authorizer }
 }
 
+// WithCompanionBondValidator installs the authoritative durable-bond validator.
+func WithCompanionBondValidator(validator CompanionBondValidator) Option {
+	return func(p *Projector) { p.companionBonds = validator }
+}
+
 // Projector is the centralized authorization and omission boundary.
 type Projector struct {
 	scenes                SceneAssembler
@@ -86,6 +98,7 @@ type Projector struct {
 	maxProjectionTriples  int
 	maxProjectionBytes    int
 	denouement            DenouementAuthorizer
+	companionBonds        CompanionBondValidator
 }
 
 // NewProjector builds one projector over bounded NATS-direct readers.
@@ -175,7 +188,18 @@ func (p *Projector) Project(
 			return nil, err
 		}
 	case PurposeCompanion:
-		if err := p.verifyCompanionBond(ctx, audience.bondID, actorID, view.Actor.PlayerID); err != nil {
+		if p.companionBonds == nil {
+			return nil, errors.New("companion projection requires the authoritative bond validator")
+		}
+		if err := p.companionBonds.ValidateCompanionBond(
+			ctx, audience.bondID, view.Actor.PlayerID, actorID,
+		); err != nil {
+			return nil, err
+		}
+		projection.ContextRef = audience.contextRef
+		projection.CompanionID = audience.companionID
+		projection.BondID = audience.bondID
+		if err := p.addCompanionBond(ctx, projection, audience.bondID); err != nil {
 			return nil, err
 		}
 		if err := p.addKnowledge(ctx, projection, actorID); err != nil {
@@ -257,6 +281,7 @@ func projectionEntityIDs(projection *Projection) map[string]bool {
 func (p *Projector) validateAudience(audience AuthenticatedAudience) error {
 	caseBound := audience.purpose == PurposeCasekeeper || audience.purpose == PurposeCompanion ||
 		audience.purpose == PurposeVerifier || audience.purpose == PurposeDenouement
+	caseBound = caseBound && audience.purpose != PurposeCompanion
 	if caseBound && (strings.TrimSpace(audience.caseID) == "" || audience.caseID != p.scope.caseID) {
 		return errors.New("epistemic audience case does not match the projector's resolved world scope")
 	}
@@ -280,8 +305,8 @@ func (p *Projector) validateAudience(audience AuthenticatedAudience) error {
 		seenTargets[targetActorID] = true
 	}
 	if audience.purpose == PurposeCompanion && (strings.TrimSpace(audience.companionID) == "" ||
-		strings.TrimSpace(audience.bondID) == "") {
-		return errors.New("companion audience requires exact companion and bond IDs")
+		strings.TrimSpace(audience.bondID) == "" || strings.TrimSpace(audience.contextRef) == "") {
+		return errors.New("companion audience requires exact generic context, companion, and bond IDs")
 	}
 	if audience.purpose == PurposeDenouement && strings.TrimSpace(audience.authorizerRef) == "" {
 		return errors.New("denouement audience requires an exact authorization reference")

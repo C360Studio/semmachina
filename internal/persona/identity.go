@@ -51,7 +51,11 @@ const (
 	// MetadataKeyCaseID carries the active mystery case for the casekeeper.
 	MetadataKeyCaseID = "semmachina.case.id"
 	// MetadataKeyActorID carries the acting character whose action is interpreted.
-	MetadataKeyActorID = "semmachina.actor.id"
+	MetadataKeyActorID     = "semmachina.actor.id"
+	MetadataKeyContextRef  = "semmachina.companion.context_ref"
+	MetadataKeyPlayerID    = "semmachina.companion.player_id"
+	MetadataKeyCompanionID = "semmachina.companion.character_id"
+	MetadataKeyBondID      = "semmachina.companion.bond_id"
 	// MetadataKeyBand carries the outcome band a narration voices. It is the
 	// dice's answer or the verdict's declined-the-dice `auto`, and it is engine
 	// knowledge for exactly the same reason the identifiers are: a narrator asked
@@ -76,8 +80,12 @@ type Identity struct {
 	// SceneID is the scene entity the turn is happening in.
 	SceneID string
 	// CaseID and ActorID are present together only for the private casekeeper.
-	CaseID  string
-	ActorID string
+	CaseID      string
+	ActorID     string
+	ContextRef  string
+	PlayerID    string
+	CompanionID string
+	BondID      string
 }
 
 // Validate holds an identity to the same contracts the payloads do, so a
@@ -109,7 +117,28 @@ func (i Identity) Validate() error {
 			return err
 		}
 	}
+	if i.hasAnyCompanionIdentity() {
+		if !i.hasCompanionIdentity() {
+			return fmt.Errorf("context_ref, player_id, companion_id, and bond_id must be supplied together")
+		}
+		for _, field := range []struct{ name, value string }{
+			{"context_ref", i.ContextRef}, {"player_id", i.PlayerID},
+			{"companion_id", i.CompanionID}, {"bond_id", i.BondID},
+		} {
+			if err := requireEntityID(field.name, field.value); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
+}
+
+func (i Identity) hasAnyCompanionIdentity() bool {
+	return i.ContextRef != "" || i.PlayerID != "" || i.CompanionID != "" || i.BondID != ""
+}
+
+func (i Identity) hasCompanionIdentity() bool {
+	return i.ContextRef != "" && i.PlayerID != "" && i.CompanionID != "" && i.BondID != ""
 }
 
 // metadata renders the identity as the map a task carries.
@@ -124,7 +153,37 @@ func (i Identity) metadata() map[string]any {
 		metadata[MetadataKeyCaseID] = i.CaseID
 		metadata[MetadataKeyActorID] = i.ActorID
 	}
+	if i.hasCompanionIdentity() {
+		metadata[MetadataKeyContextRef] = i.ContextRef
+		metadata[MetadataKeyPlayerID] = i.PlayerID
+		metadata[MetadataKeyCompanionID] = i.CompanionID
+		metadata[MetadataKeyBondID] = i.BondID
+	}
 	return metadata
+}
+
+// CompanionIdentityFrom reads the runtime-injected generic companion coordinates.
+func CompanionIdentityFrom(metadata map[string]any) (Identity, error) {
+	identity, err := IdentityFrom(metadata)
+	if err != nil {
+		return Identity{}, err
+	}
+	if identity.ContextRef, err = metadataString(metadata, MetadataKeyContextRef); err != nil {
+		return Identity{}, err
+	}
+	if identity.PlayerID, err = metadataString(metadata, MetadataKeyPlayerID); err != nil {
+		return Identity{}, err
+	}
+	if identity.CompanionID, err = metadataString(metadata, MetadataKeyCompanionID); err != nil {
+		return Identity{}, err
+	}
+	if identity.BondID, err = metadataString(metadata, MetadataKeyBondID); err != nil {
+		return Identity{}, err
+	}
+	if err := identity.Validate(); err != nil {
+		return Identity{}, err
+	}
+	return identity, nil
 }
 
 // CaseIdentityFrom reads the ordinary turn identity plus the casekeeper-only

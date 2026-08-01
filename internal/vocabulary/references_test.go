@@ -42,16 +42,17 @@ func TestStorageRefPredicates_AreTheRefSuffixedOnes(t *testing.T) {
 // derivation test alone would pass if someone deleted a predicate.
 func TestStorageRefPredicates_CoverEveryTurnArtifact(t *testing.T) {
 	want := map[vocabulary.Predicate]string{
-		vocabulary.TurnActionRef:          "action",
-		vocabulary.TurnCaseDecisionRef:    "case-decision",
-		vocabulary.TurnAccusationRef:      "accusation",
-		vocabulary.TurnKnowledgeRef:       "knowledge",
-		vocabulary.TurnVerdictRef:         "verdict",
-		vocabulary.TurnRollRef:            "roll",
-		vocabulary.TurnEffectsRef:         "effects",
-		vocabulary.TurnNarrationRef:       "narration",
-		vocabulary.TurnFailureRef:         "failure",
-		vocabulary.RevelationTestimonyRef: "testimony",
+		vocabulary.TurnActionRef:            "action",
+		vocabulary.TurnCaseDecisionRef:      "case-decision",
+		vocabulary.TurnCompanionDecisionRef: "companion-decision",
+		vocabulary.TurnAccusationRef:        "accusation",
+		vocabulary.TurnKnowledgeRef:         "knowledge",
+		vocabulary.TurnVerdictRef:           "verdict",
+		vocabulary.TurnRollRef:              "roll",
+		vocabulary.TurnEffectsRef:           "effects",
+		vocabulary.TurnNarrationRef:         "narration",
+		vocabulary.TurnFailureRef:           "failure",
+		vocabulary.RevelationTestimonyRef:   "testimony",
 	}
 
 	got := vocabulary.StorageRefPredicates()

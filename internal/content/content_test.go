@@ -1,9 +1,11 @@
 package content_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -49,7 +51,9 @@ func testAction(t *testing.T, actionID string) *payload.PlayerAction {
 // ways this package exists to survive.
 type memoryBackend struct {
 	instance string
+	mu       sync.Mutex
 	objects  map[string][]byte
+	claims   map[string][]byte
 	puts     map[string]int
 }
 
@@ -57,13 +61,34 @@ func newMemoryBackend(instance string) *memoryBackend {
 	return &memoryBackend{
 		instance: instance,
 		objects:  make(map[string][]byte),
+		claims:   make(map[string][]byte),
 		puts:     make(map[string]int),
 	}
+}
+
+func (b *memoryBackend) ClaimExact(_ context.Context, key string, candidate []byte) ([]byte, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	winner, exists := b.claims[key]
+	if !exists {
+		winner = bytes.Clone(candidate)
+		b.claims[key] = winner
+	}
+	resident, exists := b.objects[key]
+	if !exists {
+		b.objects[key] = bytes.Clone(winner)
+		b.puts[key]++
+	} else if !bytes.Equal(resident, winner) {
+		return nil, content.ErrArtifactCorrupt
+	}
+	return bytes.Clone(winner), nil
 }
 
 func (b *memoryBackend) InstanceName() string { return b.instance }
 
 func (b *memoryBackend) Put(_ context.Context, key string, data []byte) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	stored := make([]byte, len(data))
 	copy(stored, data)
 	b.objects[key] = stored
@@ -72,6 +97,8 @@ func (b *memoryBackend) Put(_ context.Context, key string, data []byte) error {
 }
 
 func (b *memoryBackend) Get(_ context.Context, key string) ([]byte, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	data, ok := b.objects[key]
 	if !ok {
 		return nil, storage.ErrObjectNotFound

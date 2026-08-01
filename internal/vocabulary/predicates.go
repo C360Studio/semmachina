@@ -38,6 +38,8 @@ const (
 	TurnCaseDecisionRef Predicate = "turn.case-decision.ref"
 	// TurnCaseDecisionKind is the sole rule-visible casekeeper scalar.
 	TurnCaseDecisionKind Predicate = "turn.case-decision.kind"
+	// TurnCompanionDecisionRef references the prose-free companion decision artifact.
+	TurnCompanionDecisionRef Predicate = "turn.companion-decision.ref"
 	// TurnKnowledgeRef witnesses the deterministic knowledge batch committed for the turn.
 	TurnKnowledgeRef Predicate = "turn.knowledge.ref"
 	// TurnAccusationRef references the complete universal accusation record.
@@ -362,6 +364,7 @@ var allPredicates = []Predicate{
 	TurnActionScene,
 	TurnCaseDecisionRef,
 	TurnCaseDecisionKind,
+	TurnCompanionDecisionRef,
 	TurnKnowledgeRef,
 	TurnAccusationRef,
 	TurnVerdictPlausibility,

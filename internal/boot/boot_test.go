@@ -62,6 +62,7 @@ func testModels() *model.Registry {
 		},
 		Capabilities: map[string]*model.CapabilityConfig{
 			persona.CapabilityCasekeeping:  {Preferred: []string{"stub"}},
+			persona.CapabilityCompanion:    {Preferred: []string{"stub"}},
 			persona.CapabilityAdjudication: {Preferred: []string{"stub"}},
 			persona.CapabilityNarration:    {Preferred: []string{"stub"}},
 		},
@@ -142,7 +143,8 @@ func TestNew_RefusesARegistryThatCannotDecodeAPlayerAction(t *testing.T) {
 // model — so "it started" proves nothing about which model the adjudicator is on.
 func TestNew_RefusesAModelRegistryMissingAPersonaCapability(t *testing.T) {
 	for _, capability := range []string{
-		persona.CapabilityCasekeeping, persona.CapabilityAdjudication, persona.CapabilityNarration,
+		persona.CapabilityCasekeeping, persona.CapabilityCompanion,
+		persona.CapabilityAdjudication, persona.CapabilityNarration,
 	} {
 		t.Run(capability, func(t *testing.T) {
 			cfg := testConfig(t)

@@ -82,37 +82,21 @@ func (p *Projector) addRevelations(
 	return p.addEvidence(ctx, projection, evidenceIDs, evidencePredicates)
 }
 
-func (p *Projector) verifyCompanionBond(
-	ctx context.Context, bondID, characterID, playerID string,
-) error {
+func (p *Projector) addCompanionBond(ctx context.Context, projection *Projection, bondID string) error {
 	bonds, err := p.hydrate(ctx, []string{bondID})
 	if err != nil {
-		return fmt.Errorf("hydrate companion bonds: %w", err)
+		return fmt.Errorf("hydrate companion bond projection: %w", err)
 	}
 	if len(bonds) != 1 {
-		return fmt.Errorf("companion bond %s is missing or a referential stub", bondID)
+		return fmt.Errorf("companion bond %s is missing from projection", bondID)
 	}
-	for _, bond := range bonds {
-		if err := requireEntityKind(bond, vocabulary.EntityKindCompanionBond); err != nil {
-			return fmt.Errorf("companion bond authorization record: %w", err)
-		}
-		bondCharacter, err := exactString(bond, vocabulary.CompanionBondCharacter)
-		if err != nil {
-			return fmt.Errorf("companion bond authorization record: %w", err)
-		}
-		if bondCharacter != characterID {
-			return fmt.Errorf("companion bond %s character %s does not match queried character %s",
-				bond.ID, bondCharacter, characterID)
-		}
-		bondPlayer, err := exactString(bond, vocabulary.CompanionBondPlayer)
-		if err != nil {
-			return fmt.Errorf("companion bond authorization record: %w", err)
-		}
-		if bondPlayer == playerID {
-			return nil
-		}
+	allowed := map[vocabulary.Predicate]bool{
+		vocabulary.WorldEntityKind: true, vocabulary.CompanionBondPlayer: true,
+		vocabulary.CompanionBondCharacter: true, vocabulary.CompanionBondPolicy: true,
+		vocabulary.CompanionBondHintLevel: true,
 	}
-	return fmt.Errorf("companion %s has no verified bond to player %s", characterID, playerID)
+	projection.Neighbours = append(projection.Neighbours, projectState(bonds[0], allowed))
+	return nil
 }
 
 func (p *Projector) addCasekeeperState(

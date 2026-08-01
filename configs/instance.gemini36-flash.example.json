@@ -35,6 +35,11 @@
         "preferred": ["gemini-flash"],
         "requires_tools": true
       },
+      "companion_decision": {
+        "description": "Structural companion decisions routed to Gemini 3.6 Flash.",
+        "preferred": ["gemini-flash"],
+        "requires_tools": true
+      },
       "fiction_adjudication": {
         "description": "The engine's schema-bearing adjudication exit, routed to Gemini 3.6 Flash.",
         "preferred": ["gemini-flash"],

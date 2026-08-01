@@ -39,11 +39,7 @@ func (e *Engine) loadWorld() error {
 	if err != nil {
 		return fmt.Errorf("load the world package: %w", err)
 	}
-	plan, err := pkg.Resolve(world.InstanceConfig{
-		Org:     e.cfg.Org,
-		WorldNS: e.cfg.WorldNS,
-		Player:  e.cfg.playerBinding(),
-	})
+	plan, err := pkg.Resolve(e.cfg.instanceConfig())
 	if err != nil {
 		return fmt.Errorf("resolve the world package into this instance: %w", err)
 	}

@@ -1,0 +1,6 @@
+{
+  "id": "starter/companion",
+  "category": 100,
+  "roles": ["companion"],
+  "content": "Respond only from the companion's visible facts and granted knowledge. Choose a structural response; the narrator owns every spoken word."
+}

@@ -12,8 +12,8 @@ import (
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
-// Role names one persona. The set is closed: the engine has exactly two places
-// where a language model is allowed to speak, and a third would be a new
+// Role names one persona. The set is closed: the engine has four places
+// where a language model is allowed to act, and a fifth would be a new
 // capability with its own spec, not a string somebody passed in.
 type Role string
 
@@ -25,6 +25,8 @@ const (
 	RoleNarrator Role = "narrator"
 	// RoleCasekeeper privately interprets mystery actions into CaseDecision.
 	RoleCasekeeper Role = "casekeeper"
+	// RoleCompanion makes a structural intervention from actor-scoped knowledge.
+	RoleCompanion Role = "companion"
 )
 
 // ModelSlot is the size class a persona expects to run on.
@@ -66,11 +68,13 @@ const (
 	CapabilityNarration = "narration"
 	// CapabilityCasekeeping resolves the private case interpreter.
 	CapabilityCasekeeping = "casekeeping"
+	// CapabilityCompanion resolves the generic companion decision role.
+	CapabilityCompanion = "companion_decision"
 )
 
 // Iteration budgets and per-call timeouts.
 //
-// The budgets are small on purpose, and the asymmetry is the design. Neither
+// The budgets are small on purpose, and the asymmetry is the design. No
 // persona has a tool that fetches anything: the whole world it needs is
 // assembled by the context assembler and handed over in the prompt, so a
 // well-behaved persona exits on its FIRST iteration. Every iteration after that
@@ -88,6 +92,7 @@ const (
 	NarratorMaxIterations = 2
 	// CasekeeperMaxIterations permits one exit and two correction rounds.
 	CasekeeperMaxIterations = 3
+	CompanionMaxIterations  = 3
 
 	// AdjudicatorTimeout bounds one adjudication's model calls.
 	AdjudicatorTimeout = 90 * time.Second
@@ -96,6 +101,7 @@ const (
 	NarratorTimeout = 120 * time.Second
 	// CasekeeperTimeout bounds private structured interpretation.
 	CasekeeperTimeout = 90 * time.Second
+	CompanionTimeout  = 90 * time.Second
 )
 
 // Spec is one persona's whole configuration: which model class it expects, how
@@ -134,6 +140,8 @@ type Spec struct {
 	NeedsBand bool
 	// NeedsCase requires casekeeper-only case and acting-actor metadata.
 	NeedsCase bool
+	// NeedsCompanion requires generic context plus player, companion, and bond metadata.
+	NeedsCompanion bool
 }
 
 // Adjudicator returns the fiction adjudicator's spec.
@@ -172,9 +180,19 @@ func Casekeeper() Spec {
 	}
 }
 
+// Companion returns the reusable, package-independent companion spec.
+func Companion() Spec {
+	return Spec{
+		Role: RoleCompanion, Slot: SlotMid, Capability: CapabilityCompanion,
+		MaxIterations: CompanionMaxIterations, Timeout: CompanionTimeout,
+		Artifact: vocabulary.TurnCompanionDecisionRef, Tool: companionDecisionToolDefinition(),
+		NeedsCompanion: true,
+	}
+}
+
 // specs is the authoritative list. A persona missing from it is invisible to
 // boot-time registry checks and to tool registration.
-var specs = []Spec{Casekeeper(), Adjudicator(), Narrator()}
+var specs = []Spec{Casekeeper(), Companion(), Adjudicator(), Narrator()}
 
 // Specs returns every persona this engine runs.
 func Specs() []Spec { return slices.Clone(specs) }
@@ -352,6 +370,13 @@ func (s Spec) Task(request TaskRequest) (agentic.TaskMessage, error) {
 		}
 	} else if request.Identity.CaseID != "" || request.Identity.ActorID != "" {
 		return agentic.TaskMessage{}, fmt.Errorf("persona %q must not receive private case identity", s.Role)
+	}
+	if s.NeedsCompanion {
+		if !request.Identity.hasCompanionIdentity() {
+			return agentic.TaskMessage{}, fmt.Errorf("persona %q requires injected companion identity", s.Role)
+		}
+	} else if request.Identity.hasAnyCompanionIdentity() {
+		return agentic.TaskMessage{}, fmt.Errorf("persona %q must not receive companion identity", s.Role)
 	}
 	switch {
 	case s.NeedsBand:

@@ -61,7 +61,15 @@ func NewGranter(graphStore GraphStore, artifacts ArtifactStore) (*Granter, error
 func (g *Granter) Grant(
 	ctx context.Context, turnEntityID string, input Preflight, shares ShareAuthorizer,
 ) (content.Ref, error) {
-	plan, err := Authorize(ctx, input, shares)
+	return g.GrantWithWitnesses(ctx, turnEntityID, input, shares, nil)
+}
+
+// GrantWithWitnesses authorizes the complete dual-recipient plan before writes.
+func (g *Granter) GrantWithWitnesses(
+	ctx context.Context, turnEntityID string, input Preflight,
+	shares ShareAuthorizer, witnesses WitnessAuthorizer,
+) (content.Ref, error) {
+	plan, err := AuthorizeWithWitnesses(ctx, input, shares, witnesses)
 	if err != nil {
 		return content.Ref{}, err
 	}

@@ -26,6 +26,7 @@ import (
 	"github.com/c360studio/semmachina/internal/accusation"
 	"github.com/c360studio/semmachina/internal/campaign"
 	"github.com/c360studio/semmachina/internal/caseflow"
+	"github.com/c360studio/semmachina/internal/companion"
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/dice"
 	"github.com/c360studio/semmachina/internal/effect"
@@ -688,6 +689,30 @@ func (e *Engine) startAgenticLoop(ctx context.Context) error {
 	if err := persona.RegisterTools(registry, e.content, e.graph); err != nil {
 		return err
 	}
+	authority, err := companion.NewAuthority(e.graph)
+	if err != nil {
+		return err
+	}
+	scope, err := e.epistemicScope()
+	if err != nil {
+		return err
+	}
+	assembler, err := scene.NewAssembler(e.graph)
+	if err != nil {
+		return err
+	}
+	projector, err := epistemic.NewProjector(
+		assembler, e.graph, scope, epistemic.WithCompanionBondValidator(authority))
+	if err != nil {
+		return err
+	}
+	companionExecutor, err := companion.NewExecutor(e.content, e.graph, authority, projector)
+	if err != nil {
+		return err
+	}
+	if err := registry.RegisterExecutor(companionExecutor); err != nil {
+		return fmt.Errorf("register the %s tool: %w", persona.CompanionDecisionToolName, err)
+	}
 	e.tools = registry
 
 	// The tool executor, bound before anything can publish a call for it.
@@ -825,7 +850,11 @@ func (e *Engine) startKnowledge(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	consumer, err := knowledge.NewConsumer(e.client, loader, granter, e.recorder, knowledge.DenyShares{})
+	authority, err := companion.NewAuthority(e.graph)
+	if err != nil {
+		return err
+	}
+	consumer, err := knowledge.NewConsumer(e.client, loader, granter, e.recorder, authority, authority)
 	if err != nil {
 		return err
 	}

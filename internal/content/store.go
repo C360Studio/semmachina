@@ -1,6 +1,7 @@
 package content
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/storage"
 	"github.com/c360studio/semstreams/storage/objectstore"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/vocabulary"
@@ -34,6 +36,10 @@ const (
 	// push every reference past the triple-object budget, and the first symptom
 	// would be turns failing at accept.
 	MaxInstanceNameBytes = 32
+	// MaxCompanionDecisionBytes bounds the full canonical value stored in the
+	// immutable claim. The payload's bounded IDs and eight-reference ceiling fit
+	// below this cap with room for JSON field names.
+	MaxCompanionDecisionBytes = 8 << 10
 )
 
 // ErrArtifactNotFound reports a reference that resolved to no object.
@@ -52,6 +58,9 @@ var ErrArtifactReference = errors.New("invalid stored artifact reference")
 // ErrArtifactCorrupt reports bytes that cannot decode or validate as the
 // artifact named by their slot. Retrying cannot change resident bytes.
 var ErrArtifactCorrupt = errors.New("stored artifact is corrupt")
+
+// ErrArtifactConflict reports deterministic identity already occupied by different bytes.
+var ErrArtifactConflict = errors.New("stored artifact identity conflict")
 
 // Backend is the storage surface this package needs.
 //
@@ -76,6 +85,75 @@ type Backend interface {
 
 // The claim above, enforced by the compiler rather than by a doc comment.
 var _ Backend = (*objectstore.Store)(nil)
+
+// ExactResidentBackend atomically establishes one canonical value for a key.
+// It returns the winning value, repairing its ordinary object copy before
+// return. Store compares the caller's candidate with that winner.
+type ExactResidentBackend interface {
+	ClaimExact(context.Context, string, []byte) ([]byte, error)
+}
+
+// ObjectBackend adds exact-resident claims to the ordinary content ObjectStore.
+type ObjectBackend struct {
+	store    *objectstore.Store
+	claims   jetstream.KeyValue
+	instance string
+}
+
+// InstanceName returns the storage instance carried by references from this backend.
+func (b *ObjectBackend) InstanceName() string { return b.instance }
+
+// Put replaces an ordinary, non-exact artifact at key.
+func (b *ObjectBackend) Put(ctx context.Context, key string, data []byte) error {
+	return b.store.Put(ctx, key, data)
+}
+
+// Get reads one artifact from the underlying ObjectStore.
+func (b *ObjectBackend) Get(ctx context.Context, key string) ([]byte, error) {
+	return b.store.Get(ctx, key)
+}
+
+// List exposes the existing integration diagnostic surface without making it
+// part of the production Backend contract.
+func (b *ObjectBackend) List(ctx context.Context, prefix string) ([]string, error) {
+	return b.store.List(ctx, prefix)
+}
+
+// Close releases the underlying ObjectStore resources.
+func (b *ObjectBackend) Close() error { return b.store.Close() }
+
+// ClaimExact uses KV Create as the linearization point. An existing claim is
+// authoritative: its full bytes repair a missing object copy, and an object
+// inconsistent with it fails closed without either value being overwritten.
+func (b *ObjectBackend) ClaimExact(ctx context.Context, key string, candidate []byte) ([]byte, error) {
+	if len(candidate) > MaxCompanionDecisionBytes {
+		return nil, fmt.Errorf("immutable companion decision is %d bytes; limit is %d",
+			len(candidate), MaxCompanionDecisionBytes)
+	}
+	var winner []byte
+	if _, err := b.claims.Create(ctx, key, candidate); err == nil {
+		winner = bytes.Clone(candidate)
+	} else if !errors.Is(err, jetstream.ErrKeyExists) {
+		return nil, fmt.Errorf("create exact-resident claim %q: %w", key, err)
+	} else {
+		entry, err := b.claims.Get(ctx, key)
+		if err != nil {
+			return nil, fmt.Errorf("read exact-resident claim %q: %w", key, err)
+		}
+		winner = bytes.Clone(entry.Value())
+	}
+	resident, err := b.store.Get(ctx, key)
+	if errors.Is(err, storage.ErrObjectNotFound) {
+		if err := b.store.Put(ctx, key, winner); err != nil {
+			return nil, fmt.Errorf("repair exact-resident object %q: %w", key, err)
+		}
+	} else if err != nil {
+		return nil, fmt.Errorf("read exact-resident object %q: %w", key, err)
+	} else if !bytes.Equal(resident, winner) {
+		return nil, fmt.Errorf("%w: object %q differs from its immutable claim", ErrArtifactCorrupt, key)
+	}
+	return winner, nil
+}
 
 // ObjectStoreOption configures the engine's ObjectStore backend.
 type ObjectStoreOption func(*objectstore.Config)
@@ -102,7 +180,7 @@ func NewObjectStore(
 	ctx context.Context,
 	client *natsclient.Client,
 	opts ...ObjectStoreOption,
-) (*objectstore.Store, error) {
+) (*ObjectBackend, error) {
 	if client == nil {
 		return nil, errors.New("content object store requires a NATS client")
 	}
@@ -117,7 +195,62 @@ func NewObjectStore(
 	if err != nil {
 		return nil, fmt.Errorf("open content object store %q: %w", cfg.BucketName, err)
 	}
-	return store, nil
+	claims, err := openExactClaims(ctx, client, cfg.BucketName)
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	return &ObjectBackend{store: store, claims: claims, instance: cfg.InstanceName}, nil
+}
+
+func openExactClaims(ctx context.Context, client *natsclient.Client, contentBucket string) (jetstream.KeyValue, error) {
+	js, err := client.JetStream()
+	if err != nil {
+		return nil, err
+	}
+	objects, err := js.ObjectStore(ctx, contentBucket)
+	if err != nil {
+		return nil, fmt.Errorf("inspect content ObjectStore %q: %w", contentBucket, err)
+	}
+	objectStatus, err := objects.Status(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("inspect content ObjectStore status %q: %w", contentBucket, err)
+	}
+	if objectStatus.Storage() != jetstream.FileStorage {
+		return nil, fmt.Errorf("content ObjectStore %q is not file-backed", contentBucket)
+	}
+	name := contentBucket + "_IMMUTABLE"
+	claims, err := js.KeyValue(ctx, name)
+	if errors.Is(err, jetstream.ErrBucketNotFound) {
+		claims, err = js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+			Bucket: name, Description: "Exact-resident companion decision claims",
+			MaxValueSize: MaxCompanionDecisionBytes, History: 1, TTL: 0,
+			Storage: jetstream.FileStorage, Replicas: objectStatus.Replicas(),
+		})
+		if errors.Is(err, jetstream.ErrBucketExists) {
+			claims, err = js.KeyValue(ctx, name)
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open exact-resident claim bucket %q: %w", name, err)
+	}
+	status, err := claims.Status(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("inspect exact-resident claim bucket %q: %w", name, err)
+	}
+	stream, err := js.Stream(ctx, "KV_"+name)
+	if err != nil {
+		return nil, fmt.Errorf("inspect exact-resident claim stream %q: %w", name, err)
+	}
+	info := stream.CachedInfo()
+	if status.History() != 1 || status.TTL() != 0 || info.Config.Storage != jetstream.FileStorage ||
+		info.Config.Replicas != objectStatus.Replicas() || info.Config.MaxMsgSize != MaxCompanionDecisionBytes {
+		return nil, fmt.Errorf("exact-resident claim bucket %q has incompatible configuration: "+
+			"history=%d ttl=%s storage=%s replicas=%d max_value=%d; want 1, 0, %s, %d, %d",
+			name, status.History(), status.TTL(), info.Config.Storage, info.Config.Replicas,
+			info.Config.MaxMsgSize, jetstream.FileStorage, objectStatus.Replicas(), MaxCompanionDecisionBytes)
+	}
+	return claims, nil
 }
 
 // validateInstanceName holds the bound the reference budget depends on.
@@ -274,6 +407,57 @@ func (s *Store) GetCaseDecisionRecord(ctx context.Context, ref Ref) (*payload.Ca
 		return nil, err
 	}
 	return record, nil
+}
+
+// PutCompanionDecision stores the structural companion exit with exact-resident
+// idempotency. A retry of equal bytes succeeds; the same deterministic identity
+// carrying different semantics is an integrity conflict and is never overwritten.
+func (s *Store) PutCompanionDecision(
+	ctx context.Context, turnEntityID string, decision *payload.CompanionDecision,
+) (Ref, error) {
+	if decision == nil {
+		return Ref{}, errors.New("storing a companion decision requires a decision")
+	}
+	if err := payload.RequireTurnEntityID(decision.TurnID, turnEntityID); err != nil {
+		return Ref{}, err
+	}
+	if err := decision.Validate(); err != nil {
+		return Ref{}, fmt.Errorf("refusing to store an invalid companion decision: %w", err)
+	}
+	key, err := KeyFor(vocabulary.TurnCompanionDecisionRef, SubjectTurn, decision.TurnID)
+	if err != nil {
+		return Ref{}, err
+	}
+	ref := Ref{Instance: s.backend.InstanceName(), Key: key}
+	if err := ref.Validate(); err != nil {
+		return Ref{}, err
+	}
+	data, err := json.Marshal(decision)
+	if err != nil {
+		return Ref{}, fmt.Errorf("encode companion decision: %w", err)
+	}
+	exact, ok := s.backend.(ExactResidentBackend)
+	if !ok {
+		return Ref{}, errors.New("content backend does not support exact-resident companion decisions")
+	}
+	winner, err := exact.ClaimExact(ctx, key, data)
+	if err != nil {
+		return Ref{}, fmt.Errorf("establish companion decision at %s: %w", ref, err)
+	}
+	if !bytes.Equal(winner, data) {
+		return Ref{}, fmt.Errorf("%w: companion decision %s already carries different semantics",
+			ErrArtifactConflict, decision.DecisionID)
+	}
+	return ref, nil
+}
+
+// GetCompanionDecision reads a structural companion exit.
+func (s *Store) GetCompanionDecision(ctx context.Context, ref Ref) (*payload.CompanionDecision, error) {
+	decision := &payload.CompanionDecision{}
+	if err := s.get(ctx, vocabulary.TurnCompanionDecisionRef, ref, decision); err != nil {
+		return nil, err
+	}
+	return decision, nil
 }
 
 // PutAccusationRecord stores the universal barrier artifact before its

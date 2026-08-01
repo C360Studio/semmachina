@@ -168,6 +168,48 @@ func caseIDOf(view *epistemic.Projection) (string, error) {
 	return ids[0], nil
 }
 
+// Companion renders a generic-context task from the companion-only projection.
+func (b *Builder) Companion(ctx context.Context, view *epistemic.Projection) (TaskRequest, error) {
+	if view == nil {
+		return TaskRequest{}, errors.New("rendering a companion prompt requires an assembled view")
+	}
+	if view.Purpose != epistemic.PurposeCompanion {
+		return TaskRequest{}, fmt.Errorf("companion prompt requires %s projection, got %s",
+			epistemic.PurposeCompanion, view.Purpose)
+	}
+	if err := validateProjectionForPrompt(view); err != nil {
+		return TaskRequest{}, err
+	}
+	resumeAttempt, err := resumeAttemptOf(view)
+	if err != nil {
+		return TaskRequest{}, err
+	}
+	action, err := b.action(ctx, view)
+	if err != nil {
+		return TaskRequest{}, err
+	}
+	identity, err := identityOf(view, action)
+	if err != nil {
+		return TaskRequest{}, err
+	}
+	identity.ContextRef = view.ContextRef
+	identity.PlayerID = view.Actor.PlayerID
+	identity.CompanionID = view.CompanionID
+	identity.BondID = view.BondID
+	if err := identity.Validate(); err != nil {
+		return TaskRequest{}, err
+	}
+
+	var out strings.Builder
+	writeWorld(&out, view)
+	out.WriteString("\n# The player's action\n\n")
+	out.WriteString(quoteAction(action.Text))
+	out.WriteString("\n\nChoose only a structural companion response and exit through ")
+	out.WriteString(CompanionDecisionToolName)
+	out.WriteString(". The narrator owns all dialogue and rationale.\n")
+	return TaskRequest{Identity: identity, ResumeAttempt: resumeAttempt, Prompt: out.String()}, nil
+}
+
 // Narrate renders the narrator's spawn request from an assembled view.
 //
 // The view is assembled at NARRATION time, so the world it describes is the

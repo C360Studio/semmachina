@@ -288,6 +288,9 @@ func TestBellweatherFixture_LoadsThroughTheOrdinaryPackagePath(t *testing.T) {
 		Player: world.PlayerBinding{
 			LocalID: "player1", Name: "Investigator", Character: "local:rowan-vale",
 		},
+		Companion: &world.CompanionBinding{
+			Character: "local:kit-finch", Policy: vocabulary.CompanionPolicyBoundedInitiative,
+		},
 	})
 	if err != nil {
 		t.Fatalf("Resolve(Bellweather): %v", err)
@@ -303,6 +306,28 @@ func TestBellweatherFixture_LoadsThroughTheOrdinaryPackagePath(t *testing.T) {
 	if len(publisher.messages) != len(plan.Entities) {
 		t.Fatalf("Bellweather import published %d of %d entities", len(publisher.messages), len(plan.Entities))
 	}
+	var bonds []world.PlannedEntity
+	for _, entity := range plan.Entities {
+		if entity.Kind == vocabulary.EntityKindCompanionBond {
+			bonds = append(bonds, entity)
+		}
+	}
+	if len(bonds) != 1 {
+		t.Fatalf("Bellweather resolved %d companion bonds, want Kit's single active bond", len(bonds))
+	}
+	wantKit := "c360.semmachina.bellweather-test.bellweather-maze.character.kit-finch"
+	if !plannedEntityHasFact(bonds[0], vocabulary.CompanionBondCharacter, wantKit) {
+		t.Fatalf("Bellweather companion bond does not select Kit: %+v", bonds[0].Facts)
+	}
+}
+
+func plannedEntityHasFact(entity world.PlannedEntity, predicate vocabulary.Predicate, object any) bool {
+	for _, fact := range entity.Facts {
+		if fact.Predicate == predicate && fact.Object == object {
+			return true
+		}
+	}
+	return false
 }
 
 func entityByLocalID(t *testing.T, entities []world.TemplateEntity, localID string) world.TemplateEntity {

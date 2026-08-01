@@ -56,6 +56,7 @@ type AuthenticatedAudience struct {
 	turnID         string
 	turnEntityID   string
 	caseID         string
+	contextRef     string
 	targetActorIDs []string
 	companionID    string
 	bondID         string
@@ -91,12 +92,17 @@ func PlayerAudience(turnID, turnEntityID string) AuthenticatedAudience {
 // CompanionAudience authorizes one exact companion through one exact scoped
 // bond while retaining the graph-pinned player turn.
 func CompanionAudience(
-	turnID, turnEntityID, caseID, companionID, bondID string,
+	turnID, turnEntityID, contextRef, companionID, bondID string,
 ) AuthenticatedAudience {
 	return AuthenticatedAudience{
 		purpose: PurposeCompanion, turnID: turnID, turnEntityID: turnEntityID,
-		caseID: caseID, companionID: companionID, bondID: bondID,
+		contextRef: contextRef, companionID: companionID, bondID: bondID,
 	}
+}
+
+// CompanionIdentity returns the generic context and verified relationship coordinates.
+func (a AuthenticatedAudience) CompanionIdentity() (contextRef, companionID, bondID string) {
+	return a.contextRef, a.companionID, a.bondID
 }
 
 // PublicAdjudicatorAudience derives the acting actor from graph state.
@@ -177,6 +183,9 @@ type Projection struct {
 	TurnID       string   `json:"turn_id,omitempty"`
 	TurnEntityID string   `json:"turn_entity_id,omitempty"`
 	SceneID      string   `json:"scene_id,omitempty"`
+	ContextRef   string   `json:"context_ref,omitempty"`
+	CompanionID  string   `json:"companion_id,omitempty"`
+	BondID       string   `json:"bond_id,omitempty"`
 	Actor        Actor    `json:"actor"`
 	Turn         Entity   `json:"turn"`
 	Scene        Entity   `json:"scene"`

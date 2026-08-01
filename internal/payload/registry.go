@@ -39,6 +39,11 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 			Factory:     func() any { return &CaseDecision{} },
 		},
 		{
+			Domain: Domain, Category: CategoryCompanionDecision, Version: SchemaVersion,
+			Description: "Prose-free structural companion decision",
+			Factory:     func() any { return &CompanionDecision{} },
+		},
+		{
 			Domain: Domain, Category: CategoryAccusationResult, Version: SchemaVersion,
 			Description: "Deterministic non-revealing accusation verification result",
 			Factory:     func() any { return &AccusationResult{} },

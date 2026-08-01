@@ -46,24 +46,35 @@ type Committer interface {
 	GrantNotApplicable(context.Context, string, string) (content.Ref, error)
 }
 
+type witnessCommitter interface {
+	GrantWithWitnesses(context.Context, string, Preflight, ShareAuthorizer, WitnessAuthorizer) (content.Ref, error)
+}
+
 // Consumer binds KnowledgeGranter's separate durable on TURN_STAGES.
 type Consumer struct {
-	consumer DurableConsumer
-	loader   PreflightLoader
-	granter  Committer
-	failer   TurnFailer
-	shares   ShareAuthorizer
+	consumer  DurableConsumer
+	loader    PreflightLoader
+	granter   Committer
+	failer    TurnFailer
+	shares    ShareAuthorizer
+	witnesses WitnessAuthorizer
 }
 
 // NewConsumer composes durable delivery, complete preflight, idempotent commit,
 // and permanent turn failure.
 func NewConsumer(
-	consumer DurableConsumer, loader PreflightLoader, granter Committer, failer TurnFailer, shares ShareAuthorizer,
+	consumer DurableConsumer, loader PreflightLoader, granter Committer, failer TurnFailer,
+	shares ShareAuthorizer, witnesses ...WitnessAuthorizer,
 ) (*Consumer, error) {
 	if consumer == nil || loader == nil || granter == nil || failer == nil {
 		return nil, errors.New("knowledge consumer requires durable, loader, granter, and turn failer")
 	}
-	return &Consumer{consumer: consumer, loader: loader, granter: granter, failer: failer, shares: shares}, nil
+	var witness WitnessAuthorizer
+	if len(witnesses) > 0 {
+		witness = witnesses[0]
+	}
+	return &Consumer{consumer: consumer, loader: loader, granter: granter, failer: failer,
+		shares: shares, witnesses: witness}, nil
 }
 
 // Start binds the separate knowledge durable before rule replay can publish work.
@@ -94,7 +105,16 @@ func (c *Consumer) Handle(ctx context.Context, data []byte) error {
 		_, err = c.granter.GrantNotApplicable(ctx, loaded.TurnID, trigger.TurnEntityID)
 		return err
 	}
-	_, err = c.granter.Grant(ctx, trigger.TurnEntityID, loaded.Preflight, c.shares)
+	if c.witnesses != nil {
+		granter, ok := c.granter.(witnessCommitter)
+		if !ok {
+			return errors.New("knowledge committer does not support configured witness authorization")
+		}
+		_, err = granter.GrantWithWitnesses(
+			ctx, trigger.TurnEntityID, loaded.Preflight, c.shares, c.witnesses)
+	} else {
+		_, err = c.granter.Grant(ctx, trigger.TurnEntityID, loaded.Preflight, c.shares)
+	}
 	if err == nil {
 		return nil
 	}

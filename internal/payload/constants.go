@@ -24,6 +24,8 @@ const (
 	// CategoryCaseDecision is the casekeeper's structured interpretation of a
 	// mystery action.
 	CategoryCaseDecision = "case_decision"
+	// CategoryCompanionDecision is the companion persona's prose-free structural exit.
+	CategoryCompanionDecision = "companion_decision"
 	// CategoryAccusationResult is the deterministic non-revealing verification result.
 	CategoryAccusationResult = "accusation_result"
 	// CategoryRollResult is the dice component's resolution record.

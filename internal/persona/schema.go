@@ -50,7 +50,40 @@ const (
 	NarrationToolName = "submit_narration"
 	// CaseDecisionToolName is the casekeeper's single exit.
 	CaseDecisionToolName = "submit_case_decision"
+	// CompanionDecisionToolName is the companion persona's structural exit.
+	CompanionDecisionToolName = "submit_companion_decision"
 )
+
+func companionDecisionToolDefinition() agentic.ToolDefinition {
+	kinds := payload.CompanionDecisionKinds()
+	kindValues := make([]string, len(kinds))
+	for index, kind := range kinds {
+		kindValues[index] = string(kind)
+	}
+	hints := []string{""}
+	for _, hint := range vocabulary.HintLevels() {
+		hints = append(hints, string(hint))
+	}
+	return agentic.ToolDefinition{
+		Name: CompanionDecisionToolName,
+		Description: "Exit once with the companion's structural decision. Dialogue and rationale belong to " +
+			"the narrator and are not accepted here.",
+		Strict: true,
+		Parameters: map[string]any{
+			"type": "object", "additionalProperties": false,
+			"required": []string{"kind", "hint_level", "evidence_refs", "target_ref"},
+			"properties": map[string]any{
+				"kind": map[string]any{"type": "string", "enum": kindValues},
+				"hint_level": map[string]any{"type": "string", "enum": hints,
+					"description": "One closed hint level for hint; otherwise an empty string."},
+				"evidence_refs": map[string]any{"type": "array", "items": map[string]any{"type": "string"},
+					"description": "Zero to eight evidence references already known by this companion."},
+				"target_ref": map[string]any{"type": "string",
+					"description": "Optional structural target entity ID; use an empty string for none."},
+			},
+		},
+	}
+}
 
 func caseDecisionToolDefinition() agentic.ToolDefinition {
 	kinds := payload.CaseDecisionKinds()

@@ -60,11 +60,12 @@
   wrong actors, wrong questioned targets, and attributed false testimony
 - [x] 5.2 Implement `KnowledgeGranter` with actor-scoped grants and committed turn
   revelation receipts
-- [ ] 5.3 Add witnessed-discovery and explicit-share flows proving player and companion
+- [x] 5.3 Add witnessed-discovery and explicit-share flows proving player and companion
   knowledge remain independent
-  - Deterministic share/witness authorization seams exist, but production witnessed dual
-    grants and explicit sharing require Group 7's durable active companion bond plus
-    `WitnessAuthorizer` and `ShareAuthorizer`; 5.3 cannot close yet.
+  - Production composes the durable graph-backed companion authority as both
+    `ShareAuthorizer` and `WitnessAuthorizer`. Witnessed discovery plans separate player
+    and companion grants before persistence; explicit sharing still proves the source
+    actor knows each cited item and authorizes the bonded recipient independently.
 - [x] 5.4 Keep testimony and narration prose in ObjectStore and graph/rule paths limited to
   structural references
 
@@ -86,17 +87,29 @@
 
 ## 7. Companion Decisions and Bond
 
-- [ ] 7.1 Add failing schema, validation, closed-vocabulary, generic-context,
+- [x] 7.1 Add failing schema, validation, closed-vocabulary, generic-context,
   deterministic-ID, eight-evidence, duplicate-reference, JSON, and production-decoder
   round-trip tests for `CompanionDecision`
-- [ ] 7.2 Implement `CompanionDecision` with `Schema()`, strict `Validate()`, alias-only
+- [x] 7.2 Implement `CompanionDecision` with `Schema()`, strict `Validate()`, alias-only
   JSON methods, explicit payload registration, and all production/test bootstrap wiring
-- [ ] 7.3 Implement the durable player-companion bond and package-independent companion
+  - The registered payload is prose-free and generic-context. The terminal executor
+    injects authoritative identity, stores the decision through an immutable exact-resident
+    claim, and writes the graph reference only after the resident artifact is verified.
+- [x] 7.3 Implement the durable player-companion bond and package-independent companion
   role using generic `context_ref` and only the companion actor's epistemic projection
-- [ ] 7.4 Add runtime authorization that refuses any evidence reference outside the
+  - Instance resolution imports the deterministic bond as world state. The generic
+    companion persona, strict tool, actor-scoped projector, executor, and boot/model
+    capability configuration are package-independent.
+- [x] 7.4 Add runtime authorization that refuses any evidence reference outside the
   companion's knowledge even when the payload is schema-valid
-- [ ] 7.5 Prove a second arbitrary player-character bond works outside Bellweather and
+  - The executor revalidates the imported bond and rejects evidence absent from the
+    companion projection before any ObjectStore or graph write.
+- [x] 7.5 Prove a second arbitrary player-character bond works outside Bellweather and
   outside any mystery case without an engine branch
+  - The Starter-world Rook/Wren integration proof exercises ordinary instance import,
+    generic scene `context_ref`, companion projection, prompt/tool assembly, exact-resident
+    decision commit, and turn reference without mystery state. Independent backend review
+    approved Group 7 after the authorization and resident-claim fixes.
 
 ## 8. Hint Ladder and Bounded Initiative
 

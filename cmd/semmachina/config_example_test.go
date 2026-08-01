@@ -10,6 +10,7 @@ import (
 	"github.com/c360studio/semmachina/fixtures"
 	"github.com/c360studio/semmachina/internal/boot"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/persona"
 )
 
 // The shipped example configuration must actually boot this binary's engine.
@@ -63,6 +64,28 @@ func TestExampleInstanceConfig_BuildsAnEngine(t *testing.T) {
 	}
 }
 
+func TestShippedInstanceConfigsPassStartupPersonaRegistryGate(t *testing.T) {
+	for _, path := range []string{
+		"../../configs/instance.example.json",
+		"../../configs/instance.qwen35-9b.example.json",
+		"../../configs/instance.gemini36-flash.example.json",
+	} {
+		t.Run(path, func(t *testing.T) {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := boot.LoadConfig(raw)
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			if err := persona.CheckRegistryAll(cfg.Models); err != nil {
+				t.Fatalf("startup persona registry gate: %v", err)
+			}
+		})
+	}
+}
+
 func TestQwen35ExampleInstanceConfig_TargetsOneLocalLiveSmokeModel(t *testing.T) {
 	raw, err := os.ReadFile("../../configs/instance.qwen35-9b.example.json")
 	if err != nil {
@@ -111,7 +134,7 @@ func TestGemini36FlashExampleInstanceConfig_TargetsOneToolCapableWireEndpoint(t 
 		!endpoint.SupportsTools || endpoint.ToolFormat != "openai" {
 		t.Fatalf("Gemini live endpoint = %+v, want the explicit Gemini wire configuration", endpoint)
 	}
-	for _, capability := range []string{"casekeeping", "fiction_adjudication", "narration"} {
+	for _, capability := range []string{"casekeeping", "companion_decision", "fiction_adjudication", "narration"} {
 		declaration := cfg.Models.Capabilities[capability]
 		if declaration == nil {
 			t.Errorf("Gemini live configuration has no %s capability", capability)

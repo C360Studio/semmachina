@@ -22,6 +22,16 @@ type fakeShareAuthorizer struct {
 	err     error
 }
 
+type fakeWitnessAuthorizer struct {
+	witness string
+	allowed bool
+	err     error
+}
+
+func (f fakeWitnessAuthorizer) Witness(context.Context, string, []string) (string, bool, error) {
+	return f.witness, f.allowed, f.err
+}
+
 func (f fakeShareAuthorizer) Authorized(context.Context, string, string, string) (bool, error) {
 	return f.allowed, f.err
 }
@@ -56,6 +66,22 @@ func TestAuthorize_EligibleInvestigationGrantsOnlyTheActingActor(t *testing.T) {
 	if len(plan.Entries) != 1 || plan.Entries[0].RecipientID != testActor ||
 		plan.Entries[0].EvidenceID != testEvidence || plan.Entries[0].Testimony != nil {
 		t.Fatalf("grant plan = %#v", plan)
+	}
+}
+
+func TestAuthorize_WitnessedDiscoveryPlansIndependentPlayerAndCompanionGrants(t *testing.T) {
+	plan, err := AuthorizeWithWitnesses(t.Context(), validPreflight(), fakeShareAuthorizer{},
+		fakeWitnessAuthorizer{witness: testSuspect, allowed: true})
+	if err != nil {
+		t.Fatalf("AuthorizeWithWitnesses: %v", err)
+	}
+	if len(plan.Entries) != 2 || plan.Entries[0].RecipientID != testActor ||
+		plan.Entries[1].RecipientID != testSuspect || plan.Entries[1].EvidenceID != testEvidence {
+		t.Fatalf("witness plan = %#v", plan)
+	}
+	if _, err := AuthorizeWithWitnesses(t.Context(), validPreflight(), fakeShareAuthorizer{},
+		fakeWitnessAuthorizer{err: errors.New("graph unavailable")}); err == nil {
+		t.Fatal("transient witness authorization error was converted into a player-only grant")
 	}
 }
 
