@@ -262,30 +262,6 @@ func TestBoot_CaseLifecycleAttachesAfterImportAndPreservesPhaseOnRestart(t *test
 // Scope, Projector, Builder.Interpret, or Casekeeper().Task leaked or omitted a
 // fact before the production model client serialized the request.
 func TestBoot_BellweatherCasekeeperProjectionReachesTheActualModelCallBody(t *testing.T) {
-	fixture, err := mockmodel.ParseFixture([]byte(`{
-	  "roles": [{"name":"casekeeper","match":{"tools":["submit_case_decision"]}}],
-	  "scenarios": [{
-	    "name":"bellweather-private-wire",
-	    "scripts":[{"role":"casekeeper","steps":[{
-	      "kind":"tool_call",
-	      "usage":{"prompt_tokens":10,"completion_tokens":5},
-	      "tool_calls":[{"name":"submit_case_decision","arguments":{
-	        "kind":"investigate","target_refs":[],"reveal_refs":[],
-	        "culprit_ref":"","method_ref":"","motive_ref":""
-	      }}]
-	    }]}]
-	  }]
-	}`))
-	if err != nil {
-		t.Fatalf("parse casekeeper fixture: %v", err)
-	}
-	handler, err := mockmodel.New(fixture, "bellweather-private-wire")
-	if err != nil {
-		t.Fatalf("start casekeeper fixture: %v", err)
-	}
-	server := httptest.NewServer(handler)
-	t.Cleanup(server.Close)
-
 	worldFS, err := fs.Sub(fixtures.Worlds(), "worlds/bellweather-maze")
 	if err != nil {
 		t.Fatalf("Bellweather fixture: %v", err)
@@ -294,11 +270,18 @@ func TestBoot_BellweatherCasekeeperProjectionReachesTheActualModelCallBody(t *te
 	cfg.World = worldFS
 	cfg.SceneLocalID = "fete-green"
 	cfg.Player.Character = "local:rowan-vale"
+	prefix := fmt.Sprintf("%s.semmachina.%s.bellweather-maze", cfg.Org, cfg.WorldNS)
+	fixture := bellweatherPrivateWireFixture(t, prefix)
+	handler, err := mockmodel.New(fixture, "bellweather-private-wire")
+	if err != nil {
+		t.Fatalf("start casekeeper fixture: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
 	cfg.Models = testModels()
 	cfg.Models.Endpoints["stub"] = mockmodel.EndpointConfig(server.URL, "one-local-model")
 	engine := startEngine(t, cfg)
 
-	prefix := fmt.Sprintf("%s.semmachina.%s.bellweather-maze", cfg.Org, cfg.WorldNS)
 	foreignID := prefix + ".evidence.foreign-wire-canary"
 	const foreignText = "FOREIGN-UNAUTHORIZED-WIRE-CANARY"
 	seedForeignPrivateCanary(t, foreignID, foreignText)
@@ -344,6 +327,112 @@ func TestBoot_BellweatherCasekeeperProjectionReachesTheActualModelCallBody(t *te
 		if bytes.Contains(call.Body, []byte(forbidden)) {
 			t.Fatalf("production casekeeper Call.Body leaked unauthorized canary %q: %s", forbidden, call.Body)
 		}
+	}
+	awaitBellweatherTurnSettled(t, cfg, response.TurnID)
+}
+
+func bellweatherPrivateWireFixture(t *testing.T, prefix string) *mockmodel.Fixture {
+	t.Helper()
+	raw := fmt.Sprintf(`{
+	  "roles": [
+	    {"name":"casekeeper","match":{"tools":["submit_case_decision"]}},
+	    {"name":"adjudicator","match":{"tools":["submit_verdict"]}},
+	    {"name":"narrator","match":{"tools":["submit_narration"]}}
+	  ],
+	  "scenarios": [{
+	    "name":"bellweather-private-wire",
+	    "scripts":[
+	      {"role":"casekeeper","steps":[{
+	        "kind":"tool_call",
+	        "usage":{"prompt_tokens":10,"completion_tokens":5},
+	        "tool_calls":[{"name":"submit_case_decision","arguments":{
+	          "kind":"investigate","target_refs":[],"reveal_refs":[],
+	          "culprit_ref":"","method_ref":"","motive_ref":""
+	        }}]
+	      }]},
+	      {"role":"adjudicator","steps":[{
+	        "kind":"tool_call",
+	        "usage":{"prompt_tokens":10,"completion_tokens":5},
+	        "tool_calls":[{"name":"submit_verdict","arguments":{
+	          "scalars":{"plausibility":"certain","risk":"none","consequence":"none","requires_roll":false},
+	          "modifiers":[],
+	          "bands":{"auto":[{"type":"set_status","target":"%s.character.rowan-vale","status":"healthy"}]},
+	          "rationale":"The clue is visible and no uncertainty remains."
+	        }}]
+	      }]},
+	      {"role":"narrator","steps":[{
+	        "kind":"tool_call",
+	        "usage":{"prompt_tokens":10,"completion_tokens":5},
+	        "tool_calls":[{"name":"submit_narration","arguments":{
+	          "prose":"The bright wire end catches the afternoon light."
+	        }}]
+	      }]}
+	    ]
+	  }]
+	}`, prefix)
+	fixture, err := mockmodel.ParseFixture([]byte(raw))
+	if err != nil {
+		t.Fatalf("parse complete Bellweather wire fixture: %v", err)
+	}
+	return fixture
+}
+
+func awaitBellweatherTurnSettled(t *testing.T, cfg boot.Config, turnID string) {
+	t.Helper()
+	identity := turn.Identity{Org: cfg.Org, WorldNS: cfg.WorldNS, Template: "bellweather-maze"}
+	entityID, err := identity.EntityID(turnID)
+	if err != nil {
+		t.Fatalf("compose Bellweather turn entity ID: %v", err)
+	}
+	store := graphStore(t)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		state, readErr := store.GetEntity(t.Context(), entityID)
+		if readErr == nil && !state.IsStub() {
+			phase := vocabulary.TurnPhase(fmt.Sprint(
+				testinfra.FirstObject(state, vocabulary.TurnPhaseCurrent.String()),
+			))
+			switch phase {
+			case vocabulary.PhaseComplete:
+				awaitStageConsumersSettled(t, deadline)
+				return
+			case vocabulary.PhaseFailed:
+				t.Fatalf("Bellweather wire-proof turn failed: %v", state)
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Bellweather wire-proof turn %s did not reach complete: %v", entityID, readErr)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func awaitStageConsumersSettled(t *testing.T, deadline time.Time) {
+	t.Helper()
+	js := jetStream(t)
+	for {
+		settled := true
+		for _, phase := range rulepack.StagePhases() {
+			consumer, err := js.Consumer(t.Context(), rulepack.StageStream, rulepack.StageConsumerName(phase))
+			if err != nil {
+				t.Fatalf("read %s stage consumer while settling Bellweather turn: %v", phase, err)
+			}
+			info, err := consumer.Info(t.Context())
+			if err != nil {
+				t.Fatalf("inspect %s stage consumer while settling Bellweather turn: %v", phase, err)
+			}
+			if info.NumPending != 0 || info.NumAckPending != 0 {
+				settled = false
+				break
+			}
+		}
+		if settled {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Bellweather wire-proof turn reached complete but stage consumers did not settle")
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
