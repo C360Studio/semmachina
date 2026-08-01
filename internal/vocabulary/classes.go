@@ -238,6 +238,8 @@ type TurnPhase string
 const (
 	// PhaseAccepted means the action is durably recorded as one turn.
 	PhaseAccepted TurnPhase = "accepted"
+	// PhaseInterpreting is the casekeeper or deterministic applicability stage.
+	PhaseInterpreting TurnPhase = "interpreting"
 	// PhaseAdjudicating means the adjudicator persona is running.
 	PhaseAdjudicating TurnPhase = "adjudicating"
 	// PhaseResolving means the dice component is running.
@@ -254,7 +256,7 @@ const (
 )
 
 var turnPhaseEnum = newEnum(KindTurnPhase,
-	PhaseAccepted, PhaseAdjudicating, PhaseResolving, PhaseApplying,
+	PhaseAccepted, PhaseInterpreting, PhaseAdjudicating, PhaseResolving, PhaseApplying,
 	PhaseNarrating, PhaseComplete, PhaseFailed)
 
 // TurnPhases returns the closed turn-phase set.

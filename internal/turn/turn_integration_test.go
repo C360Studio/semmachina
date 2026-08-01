@@ -156,6 +156,9 @@ func (w *liveTurns) accept(t *testing.T, actionID string) turn.Acceptance {
 
 func (w *liveTurns) advance(t *testing.T, a turn.Acceptance, phases ...vocabulary.TurnPhase) {
 	t.Helper()
+	if len(phases) > 0 && phases[0] == vocabulary.PhaseAdjudicating {
+		phases = append([]vocabulary.TurnPhase{vocabulary.PhaseInterpreting}, phases...)
+	}
 	for _, phase := range phases {
 		transition, err := w.recorder.Advance(t.Context(), a.TurnID, a.TurnEntityID, phase)
 		if err != nil {

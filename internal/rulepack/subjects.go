@@ -48,6 +48,7 @@ const SubjectResolved = StageSubjectPrefix + "resolved"
 // trigger to enter it would be a stage asking another component to record its
 // own refusal.
 var stagePhases = []vocabulary.TurnPhase{
+	vocabulary.PhaseInterpreting,
 	vocabulary.PhaseAdjudicating,
 	vocabulary.PhaseResolving,
 	vocabulary.PhaseApplying,

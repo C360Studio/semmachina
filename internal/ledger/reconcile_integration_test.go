@@ -153,6 +153,7 @@ func TestReconcile_LeavesATurnStillInFlightAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("accept: %v", err)
 	}
+	world.advance(t, acceptance.TurnID, acceptance.TurnEntityID, vocabulary.PhaseInterpreting)
 	world.advance(t, acceptance.TurnID, acceptance.TurnEntityID, vocabulary.PhaseAdjudicating)
 
 	report, err := world.writer.Reconcile(t.Context())

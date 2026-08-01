@@ -349,6 +349,44 @@ func TestSerializedPromptContainsOnlyTheAuthorizedProjectionCanary(t *testing.T)
 	}
 }
 
+func TestSerializedCasekeeperPromptCarriesPrivateCanariesAndInjectedIdentity(t *testing.T) {
+	fixture := newPromptFixture(t)
+	fixture.view.Purpose = epistemic.PurposeCasekeeper
+	const (
+		caseID      = "c360.semmachina.world1.starter.case.bellweather"
+		culpritID   = "c360.semmachina.world1.starter.character.culprit-canary"
+		culpritText = "CULPRIT-CASEKEEPER-CANARY"
+		hiddenID    = "c360.semmachina.world1.starter.evidence.hidden-canary"
+		hiddenText  = "HIDDEN-CASEKEEPER-CANARY"
+	)
+	fixture.view.Neighbours = append(fixture.view.Neighbours,
+		entityWith(caseID,
+			triple(caseID, vocabulary.WorldEntityKind, string(vocabulary.EntityKindCase)),
+			triple(caseID, vocabulary.CaseSolutionCulprit, culpritID),
+		),
+		entityWith(culpritID,
+			triple(culpritID, vocabulary.WorldEntityKind, string(vocabulary.EntityKindCharacter)),
+			triple(culpritID, vocabulary.WorldEntityName, culpritText),
+		),
+		entityWith(hiddenID,
+			triple(hiddenID, vocabulary.WorldEntityKind, string(vocabulary.EntityKindEvidence)),
+			triple(hiddenID, vocabulary.WorldEntityName, hiddenText),
+		),
+	)
+	request, err := fixture.builder.Interpret(t.Context(), fixture.view)
+	if err != nil {
+		t.Fatalf("Interpret: %v", err)
+	}
+	for _, want := range []string{caseID, culpritID, culpritText, hiddenID, hiddenText, testActionText} {
+		if !strings.Contains(request.Prompt, want) {
+			t.Fatalf("casekeeper prompt lacks authorized private canary %q:\n%s", want, request.Prompt)
+		}
+	}
+	if request.Identity.CaseID != caseID || request.Identity.ActorID != testCharacterID {
+		t.Fatalf("casekeeper identity = %+v", request.Identity)
+	}
+}
+
 func TestSerializedNarrationPromptPreservesRevealedCanaryAndOmitsSecrets(t *testing.T) {
 	fixture := newPromptFixture(t,
 		fact(vocabulary.TurnRollBand, string(vocabulary.BandPartial)),

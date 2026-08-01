@@ -241,6 +241,7 @@ const twoRoleJSON = `{
 // one local model.
 const toolMatchedJSON = `{
   "roles": [
+    {"name": "casekeeper", "match": {"tools": ["submit_case_decision"]}},
     {"name": "adjudicator", "match": {"tools": ["submit_verdict"]}},
     {"name": "narrator", "match": {"tools": ["submit_narration"]}}
   ],
@@ -248,6 +249,14 @@ const toolMatchedJSON = `{
     {
       "name": "one-each",
       "scripts": [
+        {
+          "role": "casekeeper",
+          "steps": [{
+            "kind": "tool_call",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            "tool_calls": [{"name": "submit_case_decision", "arguments": {"from": "casekeeper"}}]
+          }]
+        },
         {
           "role": "adjudicator",
           "steps": [{

@@ -34,6 +34,11 @@ const (
 	// TurnActionScene references the scene the turn occurred in.
 	TurnActionScene Predicate = "turn.action.scene"
 
+	// TurnCaseDecisionRef references the private interpretation record.
+	TurnCaseDecisionRef Predicate = "turn.case-decision.ref"
+	// TurnCaseDecisionKind is the sole rule-visible casekeeper scalar.
+	TurnCaseDecisionKind Predicate = "turn.case-decision.kind"
+
 	// TurnVerdictPlausibility is the rule-matched plausibility scalar.
 	TurnVerdictPlausibility Predicate = "turn.verdict.plausibility"
 	// TurnVerdictRisk is the rule-matched risk scalar.
@@ -346,6 +351,8 @@ var allPredicates = []Predicate{
 	TurnActionRef,
 	TurnActionPlayer,
 	TurnActionScene,
+	TurnCaseDecisionRef,
+	TurnCaseDecisionKind,
 	TurnVerdictPlausibility,
 	TurnVerdictRisk,
 	TurnVerdictConsequence,
@@ -427,6 +434,16 @@ var verdictScalarPredicates = []Predicate{
 	TurnVerdictConsequence,
 	TurnVerdictRequiresRoll,
 }
+
+var caseDecisionScalarPredicates = []Predicate{TurnCaseDecisionKind}
+
+// CaseDecisionScalarPredicates returns the only scalar a real interpretation
+// may expose to rules.
+func CaseDecisionScalarPredicates() []Predicate { return slices.Clone(caseDecisionScalarPredicates) }
+
+// CaseDecisionNoOpScalarPredicates states that non-applicability has no
+// rule-visible scalar; the durable reference itself witnesses completion.
+func CaseDecisionNoOpScalarPredicates() []Predicate { return nil }
 
 // VerdictScalarPredicates returns the predicates a verdict is allowed to
 // write as triples. Anything not in this list must travel by reference.

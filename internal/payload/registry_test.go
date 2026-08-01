@@ -24,6 +24,7 @@ type roundTripCase struct {
 func roundTripCases() []roundTripCase {
 	return []roundTripCase{
 		{name: "player_action", payload: validPlayerAction()},
+		{name: "case_decision", payload: validAccusationDecision()},
 		{name: "verdict", payload: validVerdict()},
 		{name: "roll_result", payload: validRollResult()},
 		{name: "effect_batch", payload: validEffectBatch()},
@@ -168,6 +169,7 @@ func TestEntityOnlyCategories_AreDeliberatelyUnregistered(t *testing.T) {
 		payload.CategoryTurnState,
 		payload.CategoryTurnNarration,
 		payload.CategoryTurnResume,
+		payload.CategoryCaseDecisionRecord,
 		payload.CategoryPlayerTurn,
 		payload.CategoryPlayerResolvedTurn,
 	} {

@@ -328,6 +328,7 @@ func (w *archiveWorld) resolvedTurn(t *testing.T, actionID string, verdict map[s
 	trigger := w.trigger(t, turnID, entityID)
 
 	// Adjudication: the real terminal tool, a scripted exit.
+	w.advance(t, turnID, entityID, vocabulary.PhaseInterpreting)
 	w.advance(t, turnID, entityID, vocabulary.PhaseAdjudicating)
 	w.execute(t, w.verdictTool, agentic.ToolCall{
 		ID: "call-" + actionID, Name: persona.VerdictToolName,

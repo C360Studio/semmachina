@@ -34,6 +34,11 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 			Factory:     func() any { return &Verdict{} },
 		},
 		{
+			Domain: Domain, Category: CategoryCaseDecision, Version: SchemaVersion,
+			Description: "Casekeeper interpretation of a mystery action",
+			Factory:     func() any { return &CaseDecision{} },
+		},
+		{
 			Domain: Domain, Category: CategoryRollResult, Version: SchemaVersion,
 			Description: "Seeded deterministic resolution result",
 			Factory:     func() any { return &RollResult{} },

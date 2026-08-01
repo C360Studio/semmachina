@@ -892,6 +892,13 @@ func (e *Engine) startStages(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	casekeeper, err := stage.NewSpawner(
+		persona.Casekeeper(), e.recorder, guard, projector, builder, e.client,
+		stage.WithSpawnerLogger(e.log()),
+		stage.WithCaseInterpretation(scope, e.content, e.graph))
+	if err != nil {
+		return err
+	}
 	narrator, err := stage.NewSpawner(
 		persona.Narrator(), e.recorder, guard, projector, builder, e.client,
 		stage.WithSpawnerLogger(e.log()))
@@ -930,7 +937,7 @@ func (e *Engine) startStages(ctx context.Context) error {
 	}
 
 	runner, err := stage.NewRunner(e.client, e.client,
-		[]stage.Stage{adjudicator, diceStage, effector, narrator, completer},
+		[]stage.Stage{casekeeper, adjudicator, diceStage, effector, narrator, completer},
 		stage.WithLogger(e.log()))
 	if err != nil {
 		return err

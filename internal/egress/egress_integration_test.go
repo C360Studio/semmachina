@@ -392,6 +392,7 @@ func (w *egressWorld) resolvedTurn(
 	}
 	trigger := stage.Trigger{TurnEntityID: entityID, TurnID: turnID, Subject: subject}
 
+	w.advance(t, turnID, entityID, vocabulary.PhaseInterpreting)
 	w.advance(t, turnID, entityID, vocabulary.PhaseAdjudicating)
 	w.execute(t, w.verdictTool, agentic.ToolCall{
 		ID: "call-" + actionID, Name: persona.VerdictToolName,
@@ -785,6 +786,7 @@ func TestIntegration_LatestAnswersWhileTheNextTurnIsStillRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("accept the second action: %v", err)
 	}
+	world.advance(t, acceptance.TurnID, acceptance.TurnEntityID, vocabulary.PhaseInterpreting)
 	world.advance(t, acceptance.TurnID, acceptance.TurnEntityID, vocabulary.PhaseAdjudicating)
 
 	latest, err := world.results.Latest(t.Context(), world.playerOneID)

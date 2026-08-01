@@ -277,6 +277,7 @@ func mockModels(baseURL string) *model.Registry {
 			"mock-narrator":    mockmodel.EndpointConfig(baseURL, "semmachina-mock-narrator"),
 		},
 		Capabilities: map[string]*model.CapabilityConfig{
+			persona.CapabilityCasekeeping:  {Preferred: []string{"mock-adjudicator"}},
 			persona.CapabilityAdjudication: {Preferred: []string{"mock-adjudicator"}},
 			persona.CapabilityNarration:    {Preferred: []string{"mock-narrator"}},
 		},

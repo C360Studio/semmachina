@@ -265,8 +265,9 @@ func (p *Projector) validateAudience(audience AuthenticatedAudience) error {
 		strings.TrimSpace(audience.turnEntityID) == "") {
 		return errors.New("epistemic audience requires exact turn and turn-entity IDs")
 	}
-	if len(audience.targetActorIDs) > 8 {
-		return fmt.Errorf("casekeeper audience has %d target actors; limit is 8", len(audience.targetActorIDs))
+	if len(audience.targetActorIDs) > MaxCasekeeperTargetActors {
+		return fmt.Errorf("casekeeper audience has %d target actors; limit is %d",
+			len(audience.targetActorIDs), MaxCasekeeperTargetActors)
 	}
 	seenTargets := make(map[string]bool, len(audience.targetActorIDs))
 	for _, targetActorID := range audience.targetActorIDs {

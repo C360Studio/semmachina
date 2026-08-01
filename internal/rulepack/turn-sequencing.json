@@ -1,14 +1,33 @@
 [
   {
-    "id": "turn-accepted-enters-adjudication",
+    "id": "turn-accepted-enters-interpretation",
     "type": "expression",
-    "name": "An accepted turn enters adjudication",
+    "name": "An accepted turn enters interpretation",
     "description": "The turn's first hop. It matches with eq rather than the transition operator because a transition condition needs a recorded previous value and returns false on an entity's FIRST evaluation (design F3) — and a turn entity is CREATED directly in `accepted` by intake's atomic create, so a transition-guarded rule would never fire for it at all.",
     "enabled": true,
     "logic": "and",
     "entity": { "pattern": "*.semmachina.*.*.turn.*" },
     "conditions": [
       { "field": "turn.phase.current", "operator": "eq", "value": "accepted", "required": false }
+    ],
+    "on_enter": [
+      { "type": "publish", "subject": "semmachina.turn.interpreting", "max_iterations": 3 }
+    ],
+    "on_recovery": [
+      { "type": "publish", "subject": "semmachina.turn.interpreting", "max_iterations": 3 }
+    ]
+  },
+  {
+    "id": "turn-interpretation-enters-adjudication",
+    "type": "expression",
+    "name": "A committed interpretation enters adjudication",
+    "description": "Both a real casekeeper decision and the deterministic non-mystery no-op commit one case-decision reference. Rules branch on the pointer's arrival, never on action prose or private case content.",
+    "enabled": true,
+    "logic": "and",
+    "entity": { "pattern": "*.semmachina.*.*.turn.*" },
+    "conditions": [
+      { "field": "turn.phase.current", "operator": "eq", "value": "interpreting", "required": false },
+      { "field": "turn.case-decision.ref", "operator": "ne", "value": "", "required": false }
     ],
     "on_enter": [
       { "type": "publish", "subject": "semmachina.turn.adjudicating", "max_iterations": 3 }
@@ -148,7 +167,7 @@
       {
         "field": "turn.phase.current",
         "operator": "transition",
-        "from": ["accepted", "adjudicating", "resolving", "applying", "narrating"],
+        "from": ["accepted", "interpreting", "adjudicating", "resolving", "applying", "narrating"],
         "value": "failed",
         "required": false
       }

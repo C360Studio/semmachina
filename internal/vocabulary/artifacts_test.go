@@ -10,6 +10,7 @@ import (
 // The phases a stage owns, and therefore the phases a parked turn can be
 // stranded in with an artifact to look for.
 var stageOwnedPhases = []vocabulary.TurnPhase{
+	vocabulary.PhaseInterpreting,
 	vocabulary.PhaseAdjudicating,
 	vocabulary.PhaseResolving,
 	vocabulary.PhaseApplying,

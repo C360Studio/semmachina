@@ -64,20 +64,32 @@ func TestE2E_ACrashInEachStageLaneIsResumedByTheNextBoot(t *testing.T) {
 
 	for _, point := range []crashPoint{
 		{
-			Name:     "before adjudication is triggered",
+			Name:     "before interpretation is triggered",
 			WorldNS:  "e2ecrash1",
 			Stream:   rulepack.StageStream,
-			Consumer: stageConsumer(vocabulary.PhaseAdjudicating),
+			Consumer: stageConsumer(vocabulary.PhaseInterpreting),
 			Parked:   vocabulary.PhaseAccepted,
 			Landed:   []vocabulary.Predicate{vocabulary.TurnActionRef},
-			Missing:  []vocabulary.Predicate{vocabulary.TurnVerdictRef},
+			Missing:  []vocabulary.Predicate{vocabulary.TurnCaseDecisionRef},
+		},
+		{
+			Name:     "after the case decision and before adjudication is triggered",
+			WorldNS:  "e2ecrash2",
+			Stream:   rulepack.StageStream,
+			Consumer: stageConsumer(vocabulary.PhaseAdjudicating),
+			Parked:   vocabulary.PhaseInterpreting,
+			Landed: []vocabulary.Predicate{
+				vocabulary.TurnActionRef,
+				vocabulary.TurnCaseDecisionRef,
+			},
+			Missing: []vocabulary.Predicate{vocabulary.TurnVerdictRef},
 		},
 		{
 			// The gap internal/resume exists for: the stage acknowledged its
 			// trigger when it PUBLISHED the persona task, so the only durable
 			// record that work is owed is the unacknowledged task itself.
 			Name:     "after the persona task is published and before its artifact lands",
-			WorldNS:  "e2ecrash2",
+			WorldNS:  "e2ecrash3",
 			Stream:   persona.TaskStream,
 			Consumer: func(t *testing.T) string { return consumerNameFor(t, persona.TaskStream, persona.TaskSubjectFilter) },
 			Parked:   vocabulary.PhaseAdjudicating,
@@ -86,7 +98,7 @@ func TestE2E_ACrashInEachStageLaneIsResumedByTheNextBoot(t *testing.T) {
 		},
 		{
 			Name:     "after the verdict and before the dice",
-			WorldNS:  "e2ecrash3",
+			WorldNS:  "e2ecrash4",
 			Stream:   rulepack.StageStream,
 			Consumer: stageConsumer(vocabulary.PhaseResolving),
 			Parked:   vocabulary.PhaseAdjudicating,
@@ -97,7 +109,7 @@ func TestE2E_ACrashInEachStageLaneIsResumedByTheNextBoot(t *testing.T) {
 			// The one the task names as the minimum, and the sharpest: the roll is
 			// a fact and the world has not moved.
 			Name:     "between the roll and the effects",
-			WorldNS:  "e2ecrash4",
+			WorldNS:  "e2ecrash5",
 			Stream:   rulepack.StageStream,
 			Consumer: stageConsumer(vocabulary.PhaseApplying),
 			Parked:   vocabulary.PhaseResolving,
@@ -106,7 +118,7 @@ func TestE2E_ACrashInEachStageLaneIsResumedByTheNextBoot(t *testing.T) {
 		},
 		{
 			Name:     "after the effects and before the narrator",
-			WorldNS:  "e2ecrash5",
+			WorldNS:  "e2ecrash6",
 			Stream:   rulepack.StageStream,
 			Consumer: stageConsumer(vocabulary.PhaseNarrating),
 			Parked:   vocabulary.PhaseApplying,
@@ -115,7 +127,7 @@ func TestE2E_ACrashInEachStageLaneIsResumedByTheNextBoot(t *testing.T) {
 		},
 		{
 			Name:     "after the narration and before the turn closes",
-			WorldNS:  "e2ecrash6",
+			WorldNS:  "e2ecrash7",
 			Stream:   rulepack.StageStream,
 			Consumer: stageConsumer(vocabulary.PhaseComplete),
 			Parked:   vocabulary.PhaseNarrating,

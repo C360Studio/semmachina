@@ -61,6 +61,7 @@ func testModels() *model.Registry {
 			},
 		},
 		Capabilities: map[string]*model.CapabilityConfig{
+			persona.CapabilityCasekeeping:  {Preferred: []string{"stub"}},
 			persona.CapabilityAdjudication: {Preferred: []string{"stub"}},
 			persona.CapabilityNarration:    {Preferred: []string{"stub"}},
 		},
@@ -140,7 +141,9 @@ func TestNew_RefusesARegistryThatCannotDecodeAPlayerAction(t *testing.T) {
 // F20, at boot: an undeclared capability RESOLVES — to the registry's default
 // model — so "it started" proves nothing about which model the adjudicator is on.
 func TestNew_RefusesAModelRegistryMissingAPersonaCapability(t *testing.T) {
-	for _, capability := range []string{persona.CapabilityAdjudication, persona.CapabilityNarration} {
+	for _, capability := range []string{
+		persona.CapabilityCasekeeping, persona.CapabilityAdjudication, persona.CapabilityNarration,
+	} {
 		t.Run(capability, func(t *testing.T) {
 			cfg := testConfig(t)
 			models := testModels()

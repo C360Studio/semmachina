@@ -59,6 +59,7 @@ func serveScenario(t *testing.T, scenario string) *stub {
 			"mock-narrator":    mockmodel.EndpointConfig(server.URL, mockNarratorModel),
 		},
 		Capabilities: map[string]*model.CapabilityConfig{
+			persona.CapabilityCasekeeping:  {Preferred: []string{"mock-adjudicator"}, RequiresTools: true},
 			persona.CapabilityAdjudication: {Preferred: []string{"mock-adjudicator"}, RequiresTools: true},
 			persona.CapabilityNarration:    {Preferred: []string{"mock-narrator"}, RequiresTools: true},
 		},
@@ -388,6 +389,7 @@ func serveLocal(t *testing.T, fixture *mockmodel.Fixture, scenario string) *stub
 				"mock-adjudicator": mockmodel.EndpointConfig(server.URL, mockAdjudicatorModel),
 			},
 			Capabilities: map[string]*model.CapabilityConfig{
+				persona.CapabilityCasekeeping:  {Preferred: []string{"mock-adjudicator"}, RequiresTools: true},
 				persona.CapabilityAdjudication: {Preferred: []string{"mock-adjudicator"}, RequiresTools: true},
 			},
 			Defaults: model.DefaultsConfig{Model: "mock-adjudicator"},

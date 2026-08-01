@@ -28,6 +28,11 @@
       }
     },
     "capabilities": {
+      "casekeeping": {
+        "description": "Private mystery interpretation retargeted to the local qwen3.5:9b live-smoke model.",
+        "preferred": ["local-qwen"],
+        "requires_tools": true
+      },
       "fiction_adjudication": {
         "description": "The engine's schema-bearing exit, retargeted to the local qwen3.5:9b live-smoke model.",
         "preferred": ["local-qwen"],

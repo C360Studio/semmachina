@@ -11,6 +11,7 @@ import (
 
 // ArtifactStore is the durable home of everything both personas produce.
 type ArtifactStore interface {
+	CaseDecisionStore
 	VerdictStore
 	NarrationStore
 }
@@ -45,9 +46,16 @@ func RegisterTools(
 	if err != nil {
 		return err
 	}
+	casekeeper, err := NewCaseDecisionExecutor(store, writer, opts...)
+	if err != nil {
+		return err
+	}
 	narration, err := NewNarrationExecutor(store, writer, opts...)
 	if err != nil {
 		return err
+	}
+	if err := registry.RegisterExecutor(casekeeper); err != nil {
+		return fmt.Errorf("register the %s tool: %w", CaseDecisionToolName, err)
 	}
 	if err := registry.RegisterExecutor(verdict); err != nil {
 		return fmt.Errorf("register the %s tool: %w", VerdictToolName, err)

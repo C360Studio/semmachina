@@ -692,7 +692,7 @@ func TestCurrent_RefusesATurnHoldingTwoPhases(t *testing.T) {
 		t.Fatalf("Accept: %v", err)
 	}
 	if _, err := recorder.Advance(
-		t.Context(), acceptance.TurnID, acceptance.TurnEntityID, vocabulary.PhaseAdjudicating); err != nil {
+		t.Context(), acceptance.TurnID, acceptance.TurnEntityID, vocabulary.PhaseInterpreting); err != nil {
 		t.Fatalf("Advance: %v", err)
 	}
 
@@ -728,6 +728,9 @@ func turnEntityWithPhase(phase vocabulary.TurnPhase) *graph.EntityState {
 
 func advanceTo(t *testing.T, recorder *turn.Recorder, acceptance turn.Acceptance, phases ...vocabulary.TurnPhase) {
 	t.Helper()
+	if len(phases) > 0 && phases[0] == vocabulary.PhaseAdjudicating {
+		phases = append([]vocabulary.TurnPhase{vocabulary.PhaseInterpreting}, phases...)
+	}
 	for _, phase := range phases {
 		transition, err := recorder.Advance(t.Context(), acceptance.TurnID, acceptance.TurnEntityID, phase)
 		if err != nil {
@@ -1030,7 +1033,7 @@ func TestFail_RecordsThePhaseAndTheClosedReasonTogether(t *testing.T) {
 	}
 	// One write, not two: a crash between them would leave a failed turn nobody
 	// can explain, or a reason on a turn still reporting itself as running.
-	if got := store.mergesInto(acceptance.TurnEntityID); got != 3 {
+	if got := store.mergesInto(acceptance.TurnEntityID); got != 4 {
 		t.Fatalf("the turn took %d merges; the failure must be one of them", got)
 	}
 }
@@ -1089,8 +1092,8 @@ func TestFail_RefusesADetailThatIsNotAResolvableReference(t *testing.T) {
 		vocabulary.FailureEffectInvalid, notAReference); err == nil {
 		t.Fatal("a reference with no key was recorded on the turn entity")
 	}
-	if got := store.mergesInto(acceptance.TurnEntityID); got != 2 {
-		t.Fatalf("the refused failure wrote to the turn (%d merges, want the 2 advances)", got)
+	if got := store.mergesInto(acceptance.TurnEntityID); got != 3 {
+		t.Fatalf("the refused failure wrote to the turn (%d merges, want the 3 advances)", got)
 	}
 }
 

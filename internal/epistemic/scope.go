@@ -16,6 +16,10 @@ type Scope struct {
 	beliefsByActorID map[string][]string
 }
 
+// MaxCasekeeperTargetActors is the audience bound shared by scope derivation
+// and projection validation.
+const MaxCasekeeperTargetActors = 8
+
 // NewScope records the resolved case ID and the authored belief record IDs
 // associated with each actor in that same validated world plan. An empty case
 // with no beliefs is the explicit non-mystery-world scope.
@@ -50,6 +54,27 @@ func NewScope(caseID string, beliefsByActorID map[string][]string) (Scope, error
 		scope.beliefsByActorID[actorID] = ids
 	}
 	return scope, nil
+}
+
+// CasekeeperAudience derives the private interpreter's authorization from the
+// validated plan scope. A non-mystery scope is explicitly not applicable; it
+// does not mint an empty privileged audience.
+func (s Scope) CasekeeperAudience(
+	turnID, turnEntityID string,
+) (AuthenticatedAudience, bool, error) {
+	if s.caseID == "" {
+		return AuthenticatedAudience{}, false, nil
+	}
+	targets := make([]string, 0, len(s.beliefsByActorID))
+	for actorID := range s.beliefsByActorID {
+		targets = append(targets, actorID)
+	}
+	sort.Strings(targets)
+	if len(targets) > MaxCasekeeperTargetActors {
+		return AuthenticatedAudience{}, false, fmt.Errorf(
+			"casekeeper scope has %d belief holders; limit is %d", len(targets), MaxCasekeeperTargetActors)
+	}
+	return CasekeeperAudience(s.caseID, turnID, turnEntityID, targets...), true, nil
 }
 
 func (s Scope) beliefRecords(targetActorIDs []string, limit int) (map[string]string, error) {

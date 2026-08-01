@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
 
 	"github.com/c360studio/semmachina/internal/epistemic"
+	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/persona"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
@@ -48,6 +50,7 @@ type ContextProjector interface {
 
 // Prompter renders an authorized projection into one persona's spawn request.
 type Prompter interface {
+	Interpret(ctx context.Context, projection *epistemic.Projection) (persona.TaskRequest, error)
 	Adjudicate(ctx context.Context, projection *epistemic.Projection) (persona.TaskRequest, error)
 	Narrate(ctx context.Context, projection *epistemic.Projection) (persona.TaskRequest, error)
 }
@@ -67,6 +70,7 @@ var (
 // spawnPhases pairs each persona with the phase its stage enters.
 var spawnPhases = map[persona.Role]vocabulary.TurnPhase{
 	persona.RoleAdjudicator: vocabulary.PhaseAdjudicating,
+	persona.RoleCasekeeper:  vocabulary.PhaseInterpreting,
 	persona.RoleNarrator:    vocabulary.PhaseNarrating,
 }
 
@@ -86,6 +90,12 @@ type Spawner struct {
 	prompter  Prompter
 	tasks     TaskPublisher
 	logger    *slog.Logger
+
+	caseConfigured bool
+	caseScope      epistemic.Scope
+	caseStore      persona.CaseDecisionStore
+	caseWriter     persona.TurnWriter
+	now            func() time.Time
 }
 
 // SpawnerOption configures a Spawner.
@@ -97,6 +107,21 @@ func WithSpawnerLogger(logger *slog.Logger) SpawnerOption {
 		if logger != nil {
 			s.logger = logger
 		}
+	}
+}
+
+// WithCaseInterpretation supplies the package-derived applicability and the
+// artifact/ref writers used by both the real and deterministic no-op paths.
+func WithCaseInterpretation(
+	scope epistemic.Scope,
+	store persona.CaseDecisionStore,
+	writer persona.TurnWriter,
+) SpawnerOption {
+	return func(s *Spawner) {
+		s.caseConfigured = true
+		s.caseScope = scope
+		s.caseStore = store
+		s.caseWriter = writer
 	}
 }
 
@@ -135,10 +160,15 @@ func NewSpawner(
 
 	spawner := &Spawner{
 		spec: spec, phase: phase, recorder: recorder, guard: guard,
-		projector: projector, prompter: prompter, tasks: tasks, logger: slog.Default(),
+		projector: projector, prompter: prompter, tasks: tasks, logger: slog.Default(), now: time.Now,
 	}
 	for _, opt := range opts {
 		opt(spawner)
+	}
+	if spec.Role == persona.RoleCasekeeper {
+		if !spawner.caseConfigured || spawner.caseStore == nil || spawner.caseWriter == nil {
+			return nil, fmt.Errorf("the casekeeper stage requires package applicability, content store, and graph writer")
+		}
 	}
 	return spawner, nil
 }
@@ -193,9 +223,21 @@ func (s *Spawner) Run(ctx context.Context, trigger Trigger) error {
 		return nil
 	}
 
-	audience, err := audienceFor(s.spec.Role, trigger)
-	if err != nil {
-		return err
+	var audience epistemic.AuthenticatedAudience
+	if s.spec.Role == persona.RoleCasekeeper {
+		var applicable bool
+		audience, applicable, err = s.caseScope.CasekeeperAudience(trigger.TurnID, trigger.TurnEntityID)
+		if err != nil {
+			return fmt.Errorf("derive casekeeper applicability for turn %s: %w", trigger.TurnEntityID, err)
+		}
+		if !applicable {
+			return s.commitNotApplicable(ctx, trigger)
+		}
+	} else {
+		audience, err = audienceFor(s.spec.Role, trigger)
+		if err != nil {
+			return err
+		}
 	}
 	projection, err := s.projector.Project(ctx, audience)
 	if err != nil {
@@ -215,6 +257,8 @@ func (s *Spawner) Run(ctx context.Context, trigger Trigger) error {
 // request renders the prompt this persona is spawned with.
 func (s *Spawner) request(ctx context.Context, projection *epistemic.Projection) (persona.TaskRequest, error) {
 	switch s.spec.Role {
+	case persona.RoleCasekeeper:
+		return s.prompter.Interpret(ctx, projection)
 	case persona.RoleAdjudicator:
 		return s.prompter.Adjudicate(ctx, projection)
 	case persona.RoleNarrator:
@@ -222,6 +266,31 @@ func (s *Spawner) request(ctx context.Context, projection *epistemic.Projection)
 	default:
 		return persona.TaskRequest{}, fmt.Errorf("persona %q has no prompt", s.spec.Role)
 	}
+}
+
+func (s *Spawner) commitNotApplicable(ctx context.Context, trigger Trigger) error {
+	actionID, err := payload.ActionIDForTurn(trigger.TurnID)
+	if err != nil {
+		return fmt.Errorf("derive action identity for non-mystery turn %s: %w", trigger.TurnID, err)
+	}
+	record := &payload.CaseDecisionRecord{
+		TurnID: trigger.TurnID, ActionID: actionID,
+		Status: payload.CaseDecisionStatusNotApplicable,
+	}
+	ref, err := s.caseStore.PutCaseDecisionRecord(ctx, trigger.TurnEntityID, record)
+	if err != nil {
+		return fmt.Errorf("store non-mystery interpretation for turn %s: %w", trigger.TurnEntityID, err)
+	}
+	triples, err := record.Triples(
+		trigger.TurnEntityID, ref.String(), "stage-casekeeper-not-applicable", s.now().UTC(),
+	)
+	if err != nil {
+		return fmt.Errorf("project non-mystery interpretation for turn %s: %w", trigger.TurnEntityID, err)
+	}
+	if _, err := s.caseWriter.MergeTriples(ctx, trigger.TurnEntityID, triples); err != nil {
+		return fmt.Errorf("record non-mystery interpretation for turn %s: %w", trigger.TurnEntityID, err)
+	}
+	return nil
 }
 
 func audienceFor(role persona.Role, trigger Trigger) (epistemic.AuthenticatedAudience, error) {

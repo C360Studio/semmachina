@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/epistemic"
+	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/persona"
 	"github.com/c360studio/semmachina/internal/stage"
@@ -137,6 +139,42 @@ func (f *fakePrompter) Narrate(
 	}, err
 }
 
+func (f *fakePrompter) Interpret(
+	_ context.Context, view *epistemic.Projection,
+) (persona.TaskRequest, error) {
+	f.journal.note("prompt:interpret")
+	identity := f.identity(view)
+	identity.CaseID = "acme.semmachina.keep.starter.case.bellweather"
+	identity.ActorID = "acme.semmachina.keep.starter.character.rook"
+	return persona.TaskRequest{Identity: identity, Prompt: "interpret this"}, nil
+}
+
+type fakeDecisionStore struct {
+	journal *journal
+	records []*payload.CaseDecisionRecord
+}
+
+func (s *fakeDecisionStore) PutCaseDecisionRecord(
+	_ context.Context, _ string, record *payload.CaseDecisionRecord,
+) (content.Ref, error) {
+	s.journal.note("put:case-decision")
+	s.records = append(s.records, record)
+	return content.Ref{Instance: "TEST_CONTENT", Key: "turn/" + record.TurnID + "/case-decision"}, nil
+}
+
+type fakeDecisionWriter struct {
+	journal *journal
+	triples []message.Triple
+}
+
+func (w *fakeDecisionWriter) MergeTriples(
+	_ context.Context, _ string, triples []message.Triple, _ ...graphio.MergeOption,
+) (*graph.EntityState, error) {
+	w.journal.note("merge:case-decision")
+	w.triples = append([]message.Triple(nil), triples...)
+	return &graph.EntityState{}, nil
+}
+
 func identityFor(view *epistemic.Projection) persona.Identity {
 	return persona.Identity{
 		TurnID:       view.TurnID,
@@ -254,6 +292,120 @@ func TestSpawner_MapsEachRoleToItsClosedEpistemicPurpose(t *testing.T) {
 				t.Fatalf("projection purposes = %v, want %s", fixture.projector.audiences, testCase.purpose)
 			}
 		})
+	}
+}
+
+func TestSpawner_NonMysteryInterpretationCommitsNoOpWithoutModelPath(t *testing.T) {
+	j := &journal{}
+	recorder := &fakeRecorder{journal: j, transition: turn.Transition{Outcome: turn.OutcomeAdvanced}}
+	guard := &fakeGuard{journal: j, resumption: persona.Resumption{Decision: persona.DecisionRun}}
+	projector := &fakeProjector{journal: j}
+	publisher := &fakePublisher{journal: j}
+	store := &fakeDecisionStore{journal: j}
+	writer := &fakeDecisionWriter{journal: j}
+	scope, err := epistemic.NewScope("", nil)
+	if err != nil {
+		t.Fatalf("NewScope: %v", err)
+	}
+	spawner, err := stage.NewSpawner(
+		persona.Casekeeper(), recorder, guard, projector, &fakePrompter{journal: j}, publisher,
+		stage.WithCaseInterpretation(scope, store, writer),
+	)
+	if err != nil {
+		t.Fatalf("NewSpawner: %v", err)
+	}
+	if err := spawner.Run(t.Context(), testTrigger()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := []string{"advance:interpreting", "guard:casekeeper", "put:case-decision", "merge:case-decision"}
+	if !slices.Equal(j.calls, want) {
+		t.Fatalf("calls = %v, want %v", j.calls, want)
+	}
+	if projector.calls != 0 || len(publisher.payloads) != 0 {
+		t.Fatalf("non-mystery used model path: projections=%d tasks=%d", projector.calls, len(publisher.payloads))
+	}
+	if len(store.records) != 1 || store.records[0].Status != payload.CaseDecisionStatusNotApplicable {
+		t.Fatalf("stored records = %#v", store.records)
+	}
+	if len(writer.triples) != 1 || writer.triples[0].Predicate != vocabulary.TurnCaseDecisionRef.String() {
+		t.Fatalf("no-op triples = %#v", writer.triples)
+	}
+}
+
+func TestSpawner_MysteryInterpretationUsesPrivateProjectionAndPublishesCasekeeperTask(t *testing.T) {
+	j := &journal{}
+	recorder := &fakeRecorder{journal: j, transition: turn.Transition{Outcome: turn.OutcomeAdvanced}}
+	guard := &fakeGuard{journal: j, resumption: persona.Resumption{Decision: persona.DecisionRun}}
+	projector := &fakeProjector{journal: j}
+	publisher := &fakePublisher{journal: j}
+	store := &fakeDecisionStore{journal: j}
+	writer := &fakeDecisionWriter{journal: j}
+	scope, err := epistemic.NewScope("acme.semmachina.keep.starter.case.bellweather", map[string][]string{
+		"acme.semmachina.keep.starter.character.rook": {"belief-rook"},
+	})
+	if err != nil {
+		t.Fatalf("NewScope: %v", err)
+	}
+	spawner, err := stage.NewSpawner(
+		persona.Casekeeper(), recorder, guard, projector, &fakePrompter{journal: j}, publisher,
+		stage.WithCaseInterpretation(scope, store, writer),
+	)
+	if err != nil {
+		t.Fatalf("NewSpawner: %v", err)
+	}
+	if err := spawner.Run(t.Context(), testTrigger()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := []string{
+		"advance:interpreting", "guard:casekeeper", "project:casekeeper", "prompt:interpret",
+		"publish:agent.task.casekeeper",
+	}
+	if !slices.Equal(j.calls, want) {
+		t.Fatalf("calls = %v, want %v", j.calls, want)
+	}
+	if len(publisher.payloads) != 1 || len(store.records) != 0 || len(writer.triples) != 0 {
+		t.Fatalf("real path tasks=%d no-op-records=%d no-op-triples=%d",
+			len(publisher.payloads), len(store.records), len(writer.triples))
+	}
+}
+
+func TestSpawner_RestartedInterpretationWithArtifactSkipsWithoutSecondDecision(t *testing.T) {
+	j := &journal{}
+	recorder := &fakeRecorder{journal: j, transition: turn.Transition{
+		Previous: vocabulary.PhaseInterpreting, Phase: vocabulary.PhaseInterpreting,
+		Outcome: turn.OutcomeResumed,
+	}}
+	guard := &fakeGuard{journal: j, resumption: persona.Resumption{
+		Role: persona.RoleCasekeeper, Decision: persona.DecisionSkip,
+		Ref: content.Ref{Instance: "TEST_CONTENT", Key: "turn/" + testTurnID + "/case-decision"},
+	}}
+	projector := &fakeProjector{journal: j}
+	publisher := &fakePublisher{journal: j}
+	store := &fakeDecisionStore{journal: j}
+	writer := &fakeDecisionWriter{journal: j}
+	scope, err := epistemic.NewScope("acme.semmachina.keep.starter.case.bellweather", map[string][]string{
+		"acme.semmachina.keep.starter.character.rook": {"belief-rook"},
+	})
+	if err != nil {
+		t.Fatalf("NewScope: %v", err)
+	}
+	spawner, err := stage.NewSpawner(
+		persona.Casekeeper(), recorder, guard, projector, &fakePrompter{journal: j}, publisher,
+		stage.WithCaseInterpretation(scope, store, writer),
+	)
+	if err != nil {
+		t.Fatalf("NewSpawner: %v", err)
+	}
+	if err := spawner.Run(t.Context(), testTrigger()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	want := []string{"advance:interpreting", "guard:casekeeper"}
+	if !slices.Equal(j.calls, want) {
+		t.Fatalf("restart calls = %v, want %v", j.calls, want)
+	}
+	if len(store.records) != 0 || len(writer.triples) != 0 || projector.calls != 0 || len(publisher.payloads) != 0 {
+		t.Fatalf("restart duplicated work: records=%d triples=%d projections=%d tasks=%d",
+			len(store.records), len(writer.triples), projector.calls, len(publisher.payloads))
 	}
 }
 

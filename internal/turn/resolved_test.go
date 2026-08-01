@@ -39,6 +39,7 @@ func resolvedTurn(t *testing.T, store *fakeStore) *turn.Recorder {
 		t.Fatalf("Accept: %v", err)
 	}
 	for _, phase := range []vocabulary.TurnPhase{
+		vocabulary.PhaseInterpreting,
 		vocabulary.PhaseAdjudicating,
 		vocabulary.PhaseResolving,
 		vocabulary.PhaseApplying,
@@ -101,6 +102,7 @@ func TestAdvance_ANonTerminalHopWritesNoResolvedPointer(t *testing.T) {
 	}
 
 	for _, phase := range []vocabulary.TurnPhase{
+		vocabulary.PhaseInterpreting,
 		vocabulary.PhaseAdjudicating,
 		vocabulary.PhaseResolving,
 		vocabulary.PhaseApplying,

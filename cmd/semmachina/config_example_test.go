@@ -111,7 +111,7 @@ func TestGemini36FlashExampleInstanceConfig_TargetsOneToolCapableWireEndpoint(t 
 		!endpoint.SupportsTools || endpoint.ToolFormat != "openai" {
 		t.Fatalf("Gemini live endpoint = %+v, want the explicit Gemini wire configuration", endpoint)
 	}
-	for _, capability := range []string{"fiction_adjudication", "narration"} {
+	for _, capability := range []string{"casekeeping", "fiction_adjudication", "narration"} {
 		declaration := cfg.Models.Capabilities[capability]
 		if declaration == nil {
 			t.Errorf("Gemini live configuration has no %s capability", capability)

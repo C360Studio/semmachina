@@ -1,6 +1,7 @@
 package boot_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	sspersona "github.com/c360studio/semstreams/persona"
@@ -31,6 +33,7 @@ import (
 	"github.com/c360studio/semmachina/internal/caseflow"
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/graphio"
+	"github.com/c360studio/semmachina/internal/mockmodel"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/persona"
 	"github.com/c360studio/semmachina/internal/playersocket"
@@ -253,6 +256,148 @@ func TestBoot_CaseLifecycleAttachesAfterImportAndPreservesPhaseOnRestart(t *test
 	}
 }
 
+// The private casekeeper boundary is proved from authored Bellweather data all
+// the way to the provider-shaped bytes. A hand-written chat request can prove
+// only that the mock records what it is handed; it says nothing about whether
+// Scope, Projector, Builder.Interpret, or Casekeeper().Task leaked or omitted a
+// fact before the production model client serialized the request.
+func TestBoot_BellweatherCasekeeperProjectionReachesTheActualModelCallBody(t *testing.T) {
+	fixture, err := mockmodel.ParseFixture([]byte(`{
+	  "roles": [{"name":"casekeeper","match":{"tools":["submit_case_decision"]}}],
+	  "scenarios": [{
+	    "name":"bellweather-private-wire",
+	    "scripts":[{"role":"casekeeper","steps":[{
+	      "kind":"tool_call",
+	      "usage":{"prompt_tokens":10,"completion_tokens":5},
+	      "tool_calls":[{"name":"submit_case_decision","arguments":{
+	        "kind":"investigate","target_refs":[],"reveal_refs":[],
+	        "culprit_ref":"","method_ref":"","motive_ref":""
+	      }}]
+	    }]}]
+	  }]
+	}`))
+	if err != nil {
+		t.Fatalf("parse casekeeper fixture: %v", err)
+	}
+	handler, err := mockmodel.New(fixture, "bellweather-private-wire")
+	if err != nil {
+		t.Fatalf("start casekeeper fixture: %v", err)
+	}
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+
+	worldFS, err := fs.Sub(fixtures.Worlds(), "worlds/bellweather-maze")
+	if err != nil {
+		t.Fatalf("Bellweather fixture: %v", err)
+	}
+	cfg := bootConfig(t)
+	cfg.World = worldFS
+	cfg.SceneLocalID = "fete-green"
+	cfg.Player.Character = "local:rowan-vale"
+	cfg.Models = testModels()
+	cfg.Models.Endpoints["stub"] = mockmodel.EndpointConfig(server.URL, "one-local-model")
+	engine := startEngine(t, cfg)
+
+	prefix := fmt.Sprintf("%s.semmachina.%s.bellweather-maze", cfg.Org, cfg.WorldNS)
+	foreignID := prefix + ".evidence.foreign-wire-canary"
+	const foreignText = "FOREIGN-UNAUTHORIZED-WIRE-CANARY"
+	seedForeignPrivateCanary(t, foreignID, foreignText)
+
+	const actionText = "ACTION-PRIVATE-WIRE-CANARY: I inspect the freshly cut wire."
+	response := submit(t, engine, cfg, "bellweather-private-wire", actionText)
+	if response.Status != payload.StatusAccepted {
+		t.Fatalf("the engine refused the Bellweather action: %+v", response.Refusal)
+	}
+
+	call := awaitCasekeeperCall(t, handler)
+	var rawRequest struct {
+		Tools []struct {
+			Function struct {
+				Name string `json:"name"`
+			} `json:"function"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(call.Body, &rawRequest); err != nil {
+		t.Fatalf("decode production casekeeper Call.Body: %v", err)
+	}
+	offered := make([]string, 0, len(rawRequest.Tools))
+	for _, tool := range rawRequest.Tools {
+		offered = append(offered, tool.Function.Name)
+	}
+	if !slices.Equal(offered, []string{persona.CaseDecisionToolName}) {
+		t.Fatalf("casekeeper Call.Body offered tools %v, want only %q", offered, persona.CaseDecisionToolName)
+	}
+	for _, authorized := range []string{
+		prefix + ".case.bellweather-case",
+		"Death in the Bellweather Maze",
+		prefix + ".character.judith-bell",
+		"Judith Bell",
+		prefix + ".evidence.evidence-wire",
+		"Freshly cut wire end",
+		actionText,
+	} {
+		if !bytes.Contains(call.Body, []byte(authorized)) {
+			t.Fatalf("production casekeeper Call.Body lacks authorized canary %q: %s", authorized, call.Body)
+		}
+	}
+	for _, forbidden := range []string{foreignID, foreignText} {
+		if bytes.Contains(call.Body, []byte(forbidden)) {
+			t.Fatalf("production casekeeper Call.Body leaked unauthorized canary %q: %s", forbidden, call.Body)
+		}
+	}
+}
+
+func seedForeignPrivateCanary(t *testing.T, entityID, text string) {
+	t.Helper()
+	at := time.Now().UTC()
+	state := &graph.EntityState{
+		ID: entityID,
+		MessageType: message.Type{
+			Domain: payload.Domain, Category: payload.CategoryWorldEntity, Version: payload.SchemaVersion,
+		},
+		Version: 1, UpdatedAt: at,
+		Triples: []message.Triple{
+			{Subject: entityID, Predicate: vocabulary.WorldEntityKind.String(),
+				Object: string(vocabulary.EntityKindEvidence), Source: "test", Timestamp: at, Confidence: 1},
+			{Subject: entityID, Predicate: vocabulary.WorldEntityName.String(),
+				Object: text, Source: "test", Timestamp: at, Confidence: 1},
+		},
+	}
+	store := graphStore(t)
+	if _, err := store.CreateEntity(t.Context(), state); err != nil {
+		t.Fatalf("seed foreign private canary: %v", err)
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		got, err := store.GetEntity(t.Context(), entityID)
+		if err == nil && !got.IsStub() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("foreign private canary never became readable: %v", err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func awaitCasekeeperCall(t *testing.T, handler *mockmodel.Handler) mockmodel.Call {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		calls := handler.CallsFor(string(persona.RoleCasekeeper))
+		if len(calls) > 0 {
+			if len(calls) != 1 {
+				t.Fatalf("casekeeper made %d calls before its first decision landed", len(calls))
+			}
+			return calls[0]
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("production Bellweather turn never reached the casekeeper model endpoint")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 // A failure emitted before a restart is terminal evidence from a persona that
 // already ran. Boot must settle that evidence before it exposes an older stage
 // trigger to the spawner, or one turn can buy a second model call during the
@@ -329,10 +474,14 @@ func acceptAndParkRestartProofTurn(
 	if err != nil {
 		t.Fatalf("accept test turn: %v", err)
 	}
-	if _, err := recorder.Advance(
-		t.Context(), accepted.TurnID, accepted.TurnEntityID, vocabulary.PhaseAdjudicating,
-	); err != nil {
-		t.Fatalf("park test turn in adjudicating: %v", err)
+	for _, phase := range []vocabulary.TurnPhase{
+		vocabulary.PhaseInterpreting, vocabulary.PhaseAdjudicating,
+	} {
+		if _, err := recorder.Advance(
+			t.Context(), accepted.TurnID, accepted.TurnEntityID, phase,
+		); err != nil {
+			t.Fatalf("park test turn in %s: %v", phase, err)
+		}
 	}
 	return accepted
 }

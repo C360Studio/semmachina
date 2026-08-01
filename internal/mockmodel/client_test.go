@@ -273,6 +273,7 @@ func TestStubEndpoint_IsAValidModelRegistryEntry(t *testing.T) {
 			"mock-narrator":    handler.endpoint(narratorModel),
 		},
 		Capabilities: map[string]*model.CapabilityConfig{
+			"casekeeping":          {Preferred: []string{"mock-adjudicator"}, RequiresTools: true},
 			"fiction_adjudication": {Preferred: []string{"mock-adjudicator"}, RequiresTools: true},
 			"narration":            {Preferred: []string{"mock-narrator"}, RequiresTools: true},
 		},

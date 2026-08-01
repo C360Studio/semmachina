@@ -35,6 +35,9 @@ import "slices"
 //     phase" stay distinguishable.
 var stageArtifacts = map[TurnPhase][]Predicate{
 	PhaseAccepted: nil,
+	// Both real and not-applicable interpretation records land this reference;
+	// only real decisions also carry a kind.
+	PhaseInterpreting: {TurnCaseDecisionRef},
 	// The adjudicator's rule-matched scalars plus the pointer at the banded
 	// intents. All five land in one merge write, which is why any one of them
 	// witnesses the whole stage.
@@ -68,6 +71,7 @@ var stageArtifacts = map[TurnPhase][]Predicate{
 // — not the reference beside it — is the thing that says the world actually
 // changed.
 var stageWitness = map[TurnPhase]Predicate{
+	PhaseInterpreting: TurnCaseDecisionRef,
 	PhaseAdjudicating: TurnVerdictRef,
 	PhaseResolving:    TurnRollRef,
 	PhaseApplying:     TurnEffectsBatch,

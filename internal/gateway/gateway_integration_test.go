@@ -292,6 +292,11 @@ func TestIntegration_ASubmissionBecomesATurnAndClosesTheGateBehindIt(t *testing.
 	// And it opens again when the turn ends — read from the TURN, which owns
 	// terminality, with nothing anywhere needing to be cleared.
 	transition, err := live.recorder.Advance(t.Context(), accepted.TurnID, turnEntityID,
+		vocabulary.PhaseInterpreting)
+	if err != nil || transition.Outcome != turn.OutcomeAdvanced {
+		t.Fatalf("Advance: %v (%q)", err, transition.Outcome)
+	}
+	transition, err = live.recorder.Advance(t.Context(), accepted.TurnID, turnEntityID,
 		vocabulary.PhaseAdjudicating)
 	if err != nil || transition.Outcome != turn.OutcomeAdvanced {
 		t.Fatalf("Advance: %v (%q)", err, transition.Outcome)
@@ -391,7 +396,8 @@ func TestIntegration_ASecondTurnLeavesThePlayerHoldingOnePointer(t *testing.T) {
 func (l *liveGateway) advanceToCompleteFrom(t *testing.T, turnID, turnEntityID string) {
 	t.Helper()
 	for _, phase := range []vocabulary.TurnPhase{
-		vocabulary.PhaseAdjudicating, vocabulary.PhaseResolving, vocabulary.PhaseApplying,
+		vocabulary.PhaseInterpreting, vocabulary.PhaseAdjudicating,
+		vocabulary.PhaseResolving, vocabulary.PhaseApplying,
 		vocabulary.PhaseNarrating, vocabulary.PhaseComplete,
 	} {
 		if _, err := l.recorder.Advance(t.Context(), turnID, turnEntityID, phase); err != nil {

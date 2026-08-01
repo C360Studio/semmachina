@@ -109,6 +109,65 @@ func (b *Builder) Adjudicate(ctx context.Context, view *epistemic.Projection) (T
 	return TaskRequest{Identity: identity, ResumeAttempt: resumeAttempt, Prompt: out.String()}, nil
 }
 
+// Interpret renders the private casekeeper prompt. The case identity and acting
+// actor are read from the authorized projection and injected as metadata; the
+// model sees them in context but is never asked to echo them through its tool.
+func (b *Builder) Interpret(ctx context.Context, view *epistemic.Projection) (TaskRequest, error) {
+	if view == nil {
+		return TaskRequest{}, errors.New("rendering a case interpretation prompt requires an assembled view")
+	}
+	if view.Purpose != epistemic.PurposeCasekeeper {
+		return TaskRequest{}, fmt.Errorf("case interpretation prompt requires %s projection, got %s",
+			epistemic.PurposeCasekeeper, view.Purpose)
+	}
+	if err := validateProjectionForPrompt(view); err != nil {
+		return TaskRequest{}, err
+	}
+	resumeAttempt, err := resumeAttemptOf(view)
+	if err != nil {
+		return TaskRequest{}, err
+	}
+	action, err := b.action(ctx, view)
+	if err != nil {
+		return TaskRequest{}, err
+	}
+	identity, err := identityOf(view, action)
+	if err != nil {
+		return TaskRequest{}, err
+	}
+	identity.CaseID, err = caseIDOf(view)
+	if err != nil {
+		return TaskRequest{}, err
+	}
+	identity.ActorID = view.Actor.CharacterID
+	if err := identity.Validate(); err != nil {
+		return TaskRequest{}, err
+	}
+
+	var out strings.Builder
+	writeWorld(&out, view)
+	out.WriteString("\n# The mystery action to interpret\n\n")
+	out.WriteString(quoteAction(action.Text))
+	out.WriteString("\n\nInterpret the action against the private case state above and exit through ")
+	out.WriteString(CaseDecisionToolName)
+	out.WriteString(".\n")
+	return TaskRequest{Identity: identity, ResumeAttempt: resumeAttempt, Prompt: out.String()}, nil
+}
+
+func caseIDOf(view *epistemic.Projection) (string, error) {
+	var ids []string
+	for _, entity := range view.Entities() {
+		kinds := entity.Objects(vocabulary.WorldEntityKind)
+		if len(kinds) == 1 && kinds[0] == string(vocabulary.EntityKindCase) {
+			ids = append(ids, entity.ID)
+		}
+	}
+	if len(ids) != 1 {
+		return "", fmt.Errorf("casekeeper projection carries %d case entities, want exactly one", len(ids))
+	}
+	return ids[0], nil
+}
+
 // Narrate renders the narrator's spawn request from an assembled view.
 //
 // The view is assembled at NARRATION time, so the world it describes is the

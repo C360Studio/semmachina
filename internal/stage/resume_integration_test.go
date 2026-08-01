@@ -336,6 +336,27 @@ func (w *parkedWorld) accept(t *testing.T, actionID string) (turnID, entityID st
 	return acceptance.TurnID, acceptance.TurnEntityID
 }
 
+// writeCaseDecision lands the deterministic non-mystery interpretation artifact
+// through the same content and graph lanes as the production stage.
+func (w *parkedWorld) writeCaseDecision(t *testing.T, turnID, actionID, entityID string) {
+	t.Helper()
+	record := &payload.CaseDecisionRecord{
+		TurnID: turnID, ActionID: actionID,
+		Status: payload.CaseDecisionStatusNotApplicable,
+	}
+	ref, err := w.content.PutCaseDecisionRecord(t.Context(), entityID, record)
+	if err != nil {
+		t.Fatalf("PutCaseDecisionRecord: %v", err)
+	}
+	triples, err := record.Triples(entityID, ref.String(), "test-executor", time.Now().UTC())
+	if err != nil {
+		t.Fatalf("case decision triples: %v", err)
+	}
+	if _, err := w.graph.MergeTriples(t.Context(), entityID, triples); err != nil {
+		t.Fatalf("merge case decision: %v", err)
+	}
+}
+
 // writeVerdict lands an adjudication artifact on a turn the way the terminal
 // tool executor does — through the real projection and the real merge lane.
 func (w *parkedWorld) writeVerdict(t *testing.T, turnID, actionID, entityID string) {
@@ -498,6 +519,7 @@ func (w *parkedWorld) attemptsOn(t *testing.T, entityID string) []any {
 // the same world's first hops land in well under a second (awaitTriggers, above).
 func TestBootstrapReplay_RescuesNoParkedTurn(t *testing.T) {
 	world := startParkedWorld(t)
+	interpreting := subjectForPhase(t, vocabulary.PhaseInterpreting)
 	adjudicating := subjectForPhase(t, vocabulary.PhaseAdjudicating)
 	resolving := subjectForPhase(t, vocabulary.PhaseResolving)
 
@@ -510,11 +532,18 @@ func TestBootstrapReplay_RescuesNoParkedTurn(t *testing.T) {
 	stalledID, stalledTurn := world.accept(t, "parked-stalled")
 
 	for _, entityID := range []string{acceptedTurn, strandedTurn, stalledTurn} {
-		world.awaitTriggers(t, adjudicating, entityID, 1)
+		world.awaitTriggers(t, interpreting, entityID, 1)
 	}
-	for _, parked := range []struct{ turnID, entityID string }{
-		{strandedID, strandedTurn}, {stalledID, stalledTurn},
+	for _, parked := range []struct{ turnID, actionID, entityID string }{
+		{strandedID, "parked-stranded", strandedTurn},
+		{stalledID, "parked-stalled", stalledTurn},
 	} {
+		if _, err := world.recorder.Advance(
+			t.Context(), parked.turnID, parked.entityID, vocabulary.PhaseInterpreting); err != nil {
+			t.Fatalf("advance %s: %v", parked.entityID, err)
+		}
+		world.writeCaseDecision(t, parked.turnID, parked.actionID, parked.entityID)
+		world.awaitTriggers(t, adjudicating, parked.entityID, 1)
 		if _, err := world.recorder.Advance(
 			t.Context(), parked.turnID, parked.entityID, vocabulary.PhaseAdjudicating); err != nil {
 			t.Fatalf("advance %s: %v", parked.entityID, err)
@@ -529,7 +558,7 @@ func TestBootstrapReplay_RescuesNoParkedTurn(t *testing.T) {
 		before   int
 	}
 	before := []watched{
-		{adjudicating, acceptedTurn, world.triggers(t, adjudicating, acceptedTurn)},
+		{interpreting, acceptedTurn, world.triggers(t, interpreting, acceptedTurn)},
 		{adjudicating, strandedTurn, world.triggers(t, adjudicating, strandedTurn)},
 		{resolving, stalledTurn, world.triggers(t, resolving, stalledTurn)},
 	}
@@ -578,10 +607,16 @@ func TestBootstrapReplay_RescuesNoParkedTurn(t *testing.T) {
 // A test that asserted either ordering would be asserting a race.
 func TestBootstrapReplay_PublishesForATurnWrittenWhileItWasDown(t *testing.T) {
 	world := startParkedWorld(t)
+	interpreting := subjectForPhase(t, vocabulary.PhaseInterpreting)
 	adjudicating := subjectForPhase(t, vocabulary.PhaseAdjudicating)
 	resolving := subjectForPhase(t, vocabulary.PhaseResolving)
 
 	turnID, entityID := world.accept(t, "replay-timing")
+	world.awaitTriggers(t, interpreting, entityID, 1)
+	if _, err := world.recorder.Advance(t.Context(), turnID, entityID, vocabulary.PhaseInterpreting); err != nil {
+		t.Fatalf("advance: %v", err)
+	}
+	world.writeCaseDecision(t, turnID, "replay-timing", entityID)
 	world.awaitTriggers(t, adjudicating, entityID, 1)
 	if _, err := world.recorder.Advance(t.Context(), turnID, entityID, vocabulary.PhaseAdjudicating); err != nil {
 		t.Fatalf("advance: %v", err)
@@ -632,12 +667,12 @@ func TestBootstrapReplay_PublishesForATurnWrittenWhileItWasDown(t *testing.T) {
 // left entirely alone — no re-trigger, no attempt, no ending.
 func TestResume_LeavesTurnsWithQueuedTriggersAlone(t *testing.T) {
 	world := startParkedWorld(t)
-	adjudicating := subjectForPhase(t, vocabulary.PhaseAdjudicating)
+	interpreting := subjectForPhase(t, vocabulary.PhaseInterpreting)
 
 	// Nothing consumes in this world, so the first hop stays queued.
 	_, acceptedTurn := world.accept(t, "queued-accepted")
-	world.awaitTriggers(t, adjudicating, acceptedTurn, 1)
-	before := world.triggers(t, adjudicating, acceptedTurn)
+	world.awaitTriggers(t, interpreting, acceptedTurn, 1)
+	before := world.triggers(t, interpreting, acceptedTurn)
 
 	report, err := world.reconciler(t).Reconcile(t.Context())
 	if err != nil {
@@ -646,7 +681,7 @@ func TestResume_LeavesTurnsWithQueuedTriggersAlone(t *testing.T) {
 	if report.Queued != 1 || report.StageRetriggered != 0 || report.Abandoned != 0 {
 		t.Fatalf("report = %+v; the turn has a queued trigger and must be left alone", report)
 	}
-	if got := world.triggers(t, adjudicating, acceptedTurn); got != before {
+	if got := world.triggers(t, interpreting, acceptedTurn); got != before {
 		t.Errorf("turn %s holds %d triggers, want %d; a second delivery on the first hop is a second billed "+
 			"adjudicator spawn, because no artifact exists yet for the resume guard to skip on",
 			acceptedTurn, got, before)
@@ -660,6 +695,7 @@ func TestResume_LeavesTurnsWithQueuedTriggersAlone(t *testing.T) {
 // gets the disposition its evidence earns.
 func TestResume_DisposesEveryShapeOnMeasuredEvidence(t *testing.T) {
 	world := startParkedWorld(t)
+	interpreting := subjectForPhase(t, vocabulary.PhaseInterpreting)
 	adjudicating := subjectForPhase(t, vocabulary.PhaseAdjudicating)
 	resolving := subjectForPhase(t, vocabulary.PhaseResolving)
 
@@ -668,11 +704,18 @@ func TestResume_DisposesEveryShapeOnMeasuredEvidence(t *testing.T) {
 	stalledID, stalledTurn := world.accept(t, "dispose-stalled")
 
 	for _, entityID := range []string{acceptedTurn, strandedTurn, stalledTurn} {
-		world.awaitTriggers(t, adjudicating, entityID, 1)
+		world.awaitTriggers(t, interpreting, entityID, 1)
 	}
-	for _, parked := range []struct{ turnID, entityID string }{
-		{strandedID, strandedTurn}, {stalledID, stalledTurn},
+	for _, parked := range []struct{ turnID, actionID, entityID string }{
+		{strandedID, "dispose-stranded", strandedTurn},
+		{stalledID, "dispose-stalled", stalledTurn},
 	} {
+		if _, err := world.recorder.Advance(
+			t.Context(), parked.turnID, parked.entityID, vocabulary.PhaseInterpreting); err != nil {
+			t.Fatalf("advance %s: %v", parked.entityID, err)
+		}
+		world.writeCaseDecision(t, parked.turnID, parked.actionID, parked.entityID)
+		world.awaitTriggers(t, adjudicating, parked.entityID, 1)
 		if _, err := world.recorder.Advance(
 			t.Context(), parked.turnID, parked.entityID, vocabulary.PhaseAdjudicating); err != nil {
 			t.Fatalf("advance %s: %v", parked.entityID, err)
@@ -688,7 +731,7 @@ func TestResume_DisposesEveryShapeOnMeasuredEvidence(t *testing.T) {
 	world.drainStageTriggers(t)
 
 	before := map[string]int{
-		acceptedTurn: world.triggers(t, adjudicating, acceptedTurn),
+		acceptedTurn: world.triggers(t, interpreting, acceptedTurn),
 		strandedTurn: world.triggers(t, adjudicating, strandedTurn),
 		stalledTurn:  world.triggers(t, resolving, stalledTurn),
 	}
@@ -727,7 +770,7 @@ func TestResume_DisposesEveryShapeOnMeasuredEvidence(t *testing.T) {
 		delta    int
 		why      string
 	}{
-		{adjudicating, acceptedTurn, 1, "it never started, and the first stage is what starts a turn"},
+		{interpreting, acceptedTurn, 1, "it never started, and the first stage is what starts a turn"},
 		{adjudicating, strandedTurn, 1, "nothing is queued for it and its persona produced nothing"},
 		{resolving, stalledTurn, 0, "its stage finished; re-running it would change nothing"},
 	} {
@@ -738,7 +781,7 @@ func TestResume_DisposesEveryShapeOnMeasuredEvidence(t *testing.T) {
 		}
 	}
 
-	// Both re-triggers cost an adjudicator spawn, so both are bounded.
+	// Both re-triggers consume one bounded recovery attempt.
 	for _, entityID := range []string{acceptedTurn, strandedTurn} {
 		if got := world.attemptsOn(t, entityID); len(got) != 1 || fmt.Sprint(got[0]) != "1" {
 			t.Errorf("the re-triggered turn %s records attempts %v, want exactly [1]", entityID, got)
@@ -762,9 +805,15 @@ func TestResume_DisposesEveryShapeOnMeasuredEvidence(t *testing.T) {
 // graph through the real recorder, with its explanation behind a real reference.
 func TestResume_AbandonsATurnItCannotRescue(t *testing.T) {
 	world := startParkedWorld(t)
+	interpreting := subjectForPhase(t, vocabulary.PhaseInterpreting)
 	adjudicating := subjectForPhase(t, vocabulary.PhaseAdjudicating)
 
 	turnID, entityID := world.accept(t, "resume-doomed")
+	world.awaitTriggers(t, interpreting, entityID, 1)
+	if _, err := world.recorder.Advance(t.Context(), turnID, entityID, vocabulary.PhaseInterpreting); err != nil {
+		t.Fatalf("advance: %v", err)
+	}
+	world.writeCaseDecision(t, turnID, "resume-doomed", entityID)
 	world.awaitTriggers(t, adjudicating, entityID, 1)
 	if _, err := world.recorder.Advance(t.Context(), turnID, entityID, vocabulary.PhaseAdjudicating); err != nil {
 		t.Fatalf("advance: %v", err)

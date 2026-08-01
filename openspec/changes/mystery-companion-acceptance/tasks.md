@@ -36,23 +36,23 @@
   pin public-adjudicator acting-actor knowledge and exclusions, and remove the
   audience-agnostic scene view as a direct persona input
 - [ ] 3.4 Assert canaries at projector, serialized prompt, mock-model request, and player
-  egress boundaries before connecting new personas
-  - Projector and serialized-prompt canary boundaries are complete. Actual mock-model
-    `Call.Body` and raw player-egress byte assertions remain and must close before new
-    personas or the full Bellweather E2E are connected.
+  egress boundaries before player-facing or full Bellweather E2E acceptance
+  - Projector, serialized-prompt, and actual mock-model `Call.Body` canary boundaries are
+    complete. Raw player-egress byte assertions remain and must close before player-facing
+    or full Bellweather E2E acceptance.
 
 ## 4. Case Decisions and Interpretation Stage
 
-- [ ] 4.1 Add failing schema, validation, closed-vocabulary, deterministic-ID, eight-target,
+- [x] 4.1 Add failing schema, validation, closed-vocabulary, deterministic-ID, eight-target,
   twelve-reveal, duplicate-reference, accuse-field, JSON, and production-decoder tests for
   `CaseDecision`
-- [ ] 4.2 Implement `CaseDecision` with `Schema()`, strict `Validate()`, alias-only JSON
+- [x] 4.2 Implement `CaseDecision` with `Schema()`, strict `Validate()`, alias-only JSON
   methods, explicit payload registration, and all production/test bootstrap wiring
-- [ ] 4.3 Add the casekeeper role and terminal tool with private purpose-scoped context and
+- [x] 4.3 Add the casekeeper role and terminal tool with private purpose-scoped context and
   no rule-visible prose fields
-- [ ] 4.4 Add the durable `interpreting` turn stage, package-driven applicability, and a
+- [x] 4.4 Add the durable `interpreting` turn stage, package-driven applicability, and a
   deterministic no-model-call artifact for non-mystery turns
-- [ ] 4.5 Add restart and duplicate-delivery tests for one logical case decision per turn
+- [x] 4.5 Add restart and duplicate-delivery tests for one logical case decision per turn
 
 ## 5. Knowledge and Testimony
 

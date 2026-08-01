@@ -48,7 +48,45 @@ const (
 	VerdictToolName = "submit_verdict"
 	// NarrationToolName is the narrator's single exit.
 	NarrationToolName = "submit_narration"
+	// CaseDecisionToolName is the casekeeper's single exit.
+	CaseDecisionToolName = "submit_case_decision"
 )
+
+func caseDecisionToolDefinition() agentic.ToolDefinition {
+	kinds := payload.CaseDecisionKinds()
+	kindValues := make([]string, len(kinds))
+	for idx, kind := range kinds {
+		kindValues[idx] = string(kind)
+	}
+	ref := func(description string) map[string]any {
+		return map[string]any{"type": "string", "description": description}
+	}
+	refs := func(description string) map[string]any {
+		return map[string]any{
+			"type": "array", "description": description,
+			"items": map[string]any{"type": "string"},
+		}
+	}
+	return agentic.ToolDefinition{
+		Name: CaseDecisionToolName,
+		Description: "Exit once with the closed structural interpretation of the player's mystery action. " +
+			"Use empty accusation-reference strings for every non-accuse kind.",
+		Strict: true,
+		Parameters: map[string]any{
+			"type": "object", "additionalProperties": false,
+			"required": []string{"kind", "target_refs", "reveal_refs", "culprit_ref", "method_ref", "motive_ref"},
+			"properties": map[string]any{
+				"kind": map[string]any{"type": "string", "enum": kindValues,
+					"description": "The closed interpretation kind."},
+				"target_refs": refs("Zero to eight authorized entity references targeted by the action."),
+				"reveal_refs": refs("Zero to twelve eligible evidence references proposed for revelation."),
+				"culprit_ref": ref("For accuse only: the proposed culprit entity ID; otherwise an empty string."),
+				"method_ref":  ref("For accuse only: the proposed method entity ID; otherwise an empty string."),
+				"motive_ref":  ref("For accuse only: the proposed motive entity ID; otherwise an empty string."),
+			},
+		},
+	}
+}
 
 // verdictToolDefinition builds the adjudicator's terminal-tool definition.
 //

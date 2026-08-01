@@ -243,6 +243,31 @@ func (s *Store) GetVerdict(ctx context.Context, ref Ref) (*payload.Verdict, erro
 	return verdict, nil
 }
 
+// PutCaseDecisionRecord stores the private interpretation artifact before its
+// reference is eligible to land on the turn entity.
+func (s *Store) PutCaseDecisionRecord(
+	ctx context.Context,
+	turnEntityID string,
+	record *payload.CaseDecisionRecord,
+) (Ref, error) {
+	if record == nil {
+		return Ref{}, errors.New("storing a case decision record requires a record")
+	}
+	if err := payload.RequireTurnEntityID(record.TurnID, turnEntityID); err != nil {
+		return Ref{}, err
+	}
+	return s.put(ctx, vocabulary.TurnCaseDecisionRef, SubjectTurn, record.TurnID, record)
+}
+
+// GetCaseDecisionRecord reads a stored interpretation artifact back.
+func (s *Store) GetCaseDecisionRecord(ctx context.Context, ref Ref) (*payload.CaseDecisionRecord, error) {
+	record := &payload.CaseDecisionRecord{}
+	if err := s.get(ctx, vocabulary.TurnCaseDecisionRef, ref, record); err != nil {
+		return nil, err
+	}
+	return record, nil
+}
+
 // PutRoll stores the turn's resolution record and returns the reference the
 // turn entity will carry.
 //

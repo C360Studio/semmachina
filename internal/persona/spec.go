@@ -23,6 +23,8 @@ const (
 	RoleAdjudicator Role = "adjudicator"
 	// RoleNarrator voices a committed outcome and exits through prose.
 	RoleNarrator Role = "narrator"
+	// RoleCasekeeper privately interprets mystery actions into CaseDecision.
+	RoleCasekeeper Role = "casekeeper"
 )
 
 // ModelSlot is the size class a persona expects to run on.
@@ -62,6 +64,8 @@ const (
 	CapabilityAdjudication = "fiction_adjudication"
 	// CapabilityNarration is the narrator's capability.
 	CapabilityNarration = "narration"
+	// CapabilityCasekeeping resolves the private case interpreter.
+	CapabilityCasekeeping = "casekeeping"
 )
 
 // Iteration budgets and per-call timeouts.
@@ -82,12 +86,16 @@ const (
 	AdjudicatorMaxIterations = 3
 	// NarratorMaxIterations is the narrator's per-spawn iteration budget.
 	NarratorMaxIterations = 2
+	// CasekeeperMaxIterations permits one exit and two correction rounds.
+	CasekeeperMaxIterations = 3
 
 	// AdjudicatorTimeout bounds one adjudication's model calls.
 	AdjudicatorTimeout = 90 * time.Second
 	// NarratorTimeout bounds one narration's model calls. Longer because the
 	// large slot generates prose, and prose is more tokens than a verdict.
 	NarratorTimeout = 120 * time.Second
+	// CasekeeperTimeout bounds private structured interpretation.
+	CasekeeperTimeout = 90 * time.Second
 )
 
 // Spec is one persona's whole configuration: which model class it expects, how
@@ -124,6 +132,8 @@ type Spec struct {
 	// band. Only the narrator does: it is voicing a band, and the adjudicator has
 	// not produced one yet.
 	NeedsBand bool
+	// NeedsCase requires casekeeper-only case and acting-actor metadata.
+	NeedsCase bool
 }
 
 // Adjudicator returns the fiction adjudicator's spec.
@@ -153,9 +163,18 @@ func Narrator() Spec {
 	}
 }
 
+// Casekeeper returns the private mystery interpreter's spec.
+func Casekeeper() Spec {
+	return Spec{
+		Role: RoleCasekeeper, Slot: SlotMid, Capability: CapabilityCasekeeping,
+		MaxIterations: CasekeeperMaxIterations, Timeout: CasekeeperTimeout,
+		Artifact: vocabulary.TurnCaseDecisionRef, Tool: caseDecisionToolDefinition(), NeedsCase: true,
+	}
+}
+
 // specs is the authoritative list. A persona missing from it is invisible to
 // boot-time registry checks and to tool registration.
-var specs = []Spec{Adjudicator(), Narrator()}
+var specs = []Spec{Casekeeper(), Adjudicator(), Narrator()}
 
 // Specs returns every persona this engine runs.
 func Specs() []Spec { return slices.Clone(specs) }
@@ -327,6 +346,13 @@ func (s Spec) Task(request TaskRequest) (agentic.TaskMessage, error) {
 	}
 
 	metadata := request.Identity.metadata()
+	if s.NeedsCase {
+		if request.Identity.CaseID == "" || request.Identity.ActorID == "" {
+			return agentic.TaskMessage{}, fmt.Errorf("persona %q requires injected case_id and actor_id", s.Role)
+		}
+	} else if request.Identity.CaseID != "" || request.Identity.ActorID != "" {
+		return agentic.TaskMessage{}, fmt.Errorf("persona %q must not receive private case identity", s.Role)
+	}
 	switch {
 	case s.NeedsBand:
 		band, err := vocabulary.ParseOutcomeBand(string(request.Band))

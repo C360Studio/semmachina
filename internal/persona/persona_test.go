@@ -68,6 +68,7 @@ type fakeArtifacts struct {
 
 	actions    map[string]*payload.PlayerAction
 	verdicts   map[string]*payload.Verdict
+	decisions  map[string]*payload.CaseDecisionRecord
 	narrations map[string]*content.Narration
 	failures   map[string]*content.FailureDetail
 
@@ -76,6 +77,7 @@ type fakeArtifacts struct {
 	failureErr   error
 
 	verdictPuts   int
+	decisionPuts  int
 	narrationPuts int
 }
 
@@ -84,9 +86,38 @@ func newFakeArtifacts(j *journal) *fakeArtifacts {
 		journal:    j,
 		actions:    map[string]*payload.PlayerAction{},
 		verdicts:   map[string]*payload.Verdict{},
+		decisions:  map[string]*payload.CaseDecisionRecord{},
 		narrations: map[string]*content.Narration{},
 		failures:   map[string]*content.FailureDetail{},
 	}
+}
+
+func (a *fakeArtifacts) PutCaseDecisionRecord(
+	_ context.Context,
+	turnEntityID string,
+	record *payload.CaseDecisionRecord,
+) (content.Ref, error) {
+	a.decisionPuts++
+	if err := payload.RequireTurnEntityID(record.TurnID, turnEntityID); err != nil {
+		return content.Ref{}, err
+	}
+	if err := record.Validate(); err != nil {
+		return content.Ref{}, err
+	}
+	ref, err := a.put(vocabulary.TurnCaseDecisionRef, record.TurnID)
+	if err != nil {
+		return content.Ref{}, err
+	}
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		return content.Ref{}, err
+	}
+	var stored payload.CaseDecisionRecord
+	if err := json.Unmarshal(encoded, &stored); err != nil {
+		return content.Ref{}, err
+	}
+	a.decisions[ref.Key] = &stored
+	return ref, nil
 }
 
 func (a *fakeArtifacts) ref(t *testing.T, predicate vocabulary.Predicate, turnID string) content.Ref {
@@ -316,10 +347,10 @@ func injected(t *testing.T, spec persona.Spec, band vocabulary.OutcomeBand) map[
 
 // ------------------------------------------------------------------- specs
 
-func TestSpecs_AreTheTwoPlacesAModelIsAllowedToSpeak(t *testing.T) {
+func TestSpecs_AreTheThreePlacesAModelIsAllowedToSpeak(t *testing.T) {
 	specs := persona.Specs()
-	if len(specs) != 2 {
-		t.Fatalf("the engine declares %d personas, want exactly the adjudicator and the narrator", len(specs))
+	if len(specs) != 3 {
+		t.Fatalf("the engine declares %d personas, want casekeeper, adjudicator, and narrator", len(specs))
 	}
 	for _, spec := range specs {
 		if err := spec.Validate(); err != nil {
@@ -865,7 +896,9 @@ func TestRegisterTools_WiresBothExitsOrNeither(t *testing.T) {
 	for _, tool := range registry.ListTools() {
 		names[tool.Name] = true
 	}
-	for _, want := range []string{persona.VerdictToolName, persona.NarrationToolName} {
+	for _, want := range []string{
+		persona.CaseDecisionToolName, persona.VerdictToolName, persona.NarrationToolName,
+	} {
 		if !names[want] {
 			t.Fatalf("the registry advertises %v, missing %q", names, want)
 		}
@@ -905,6 +938,7 @@ func TestCheckRegistry_RefusesAnEndpointThatCannotCallTools(t *testing.T) {
 			"local": {Provider: "openai", URL: "http://localhost:1/v1", Model: "m", MaxTokens: 8192},
 		},
 		Capabilities: map[string]*model.CapabilityConfig{
+			persona.CapabilityCasekeeping:  {Preferred: []string{"local"}},
 			persona.CapabilityAdjudication: {Preferred: []string{"local"}},
 			persona.CapabilityNarration:    {Preferred: []string{"local"}},
 		},
@@ -922,6 +956,7 @@ func TestCheckRegistry_RefusesAnEndpointThatCannotCallTools(t *testing.T) {
 			},
 		},
 		Capabilities: map[string]*model.CapabilityConfig{
+			persona.CapabilityCasekeeping:  {Preferred: []string{"local"}, RequiresTools: true},
 			persona.CapabilityAdjudication: {Preferred: []string{"local"}, RequiresTools: true},
 			persona.CapabilityNarration:    {Preferred: []string{"local"}, RequiresTools: true},
 		},
@@ -946,7 +981,7 @@ func TestCheckRegistry_RefusesADeploymentThatDeclaresNoCapability(t *testing.T) 
 	if err == nil {
 		t.Fatal("a deployment declaring neither persona capability was accepted")
 	}
-	if !strings.Contains(err.Error(), persona.CapabilityAdjudication) {
+	if !strings.Contains(err.Error(), persona.CapabilityCasekeeping) {
 		t.Fatalf("the refusal is %q; it must name the capability the operator has to declare", err)
 	}
 }

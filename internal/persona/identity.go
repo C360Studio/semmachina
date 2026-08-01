@@ -48,6 +48,10 @@ const (
 	MetadataKeyActionID = "semmachina.action.id"
 	// MetadataKeySceneID carries the scene the turn is happening in.
 	MetadataKeySceneID = "semmachina.scene.id"
+	// MetadataKeyCaseID carries the active mystery case for the casekeeper.
+	MetadataKeyCaseID = "semmachina.case.id"
+	// MetadataKeyActorID carries the acting character whose action is interpreted.
+	MetadataKeyActorID = "semmachina.actor.id"
 	// MetadataKeyBand carries the outcome band a narration voices. It is the
 	// dice's answer or the verdict's declined-the-dice `auto`, and it is engine
 	// knowledge for exactly the same reason the identifiers are: a narrator asked
@@ -71,6 +75,9 @@ type Identity struct {
 	ActionID string
 	// SceneID is the scene entity the turn is happening in.
 	SceneID string
+	// CaseID and ActorID are present together only for the private casekeeper.
+	CaseID  string
+	ActorID string
 }
 
 // Validate holds an identity to the same contracts the payloads do, so a
@@ -88,17 +95,57 @@ func (i Identity) Validate() error {
 	if err := vocabulary.ValidateIDSegment(i.ActionID); err != nil {
 		return fmt.Errorf("action_id: %w", err)
 	}
-	return requireEntityID("scene_id", i.SceneID)
+	if err := requireEntityID("scene_id", i.SceneID); err != nil {
+		return err
+	}
+	if (i.CaseID == "") != (i.ActorID == "") {
+		return fmt.Errorf("case_id and actor_id must be supplied together")
+	}
+	if i.CaseID != "" {
+		if err := requireEntityID("case_id", i.CaseID); err != nil {
+			return err
+		}
+		if err := requireEntityID("actor_id", i.ActorID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // metadata renders the identity as the map a task carries.
 func (i Identity) metadata() map[string]any {
-	return map[string]any{
+	metadata := map[string]any{
 		MetadataKeyTurnID:       i.TurnID,
 		MetadataKeyTurnEntityID: i.TurnEntityID,
 		MetadataKeyActionID:     i.ActionID,
 		MetadataKeySceneID:      i.SceneID,
 	}
+	if i.CaseID != "" {
+		metadata[MetadataKeyCaseID] = i.CaseID
+		metadata[MetadataKeyActorID] = i.ActorID
+	}
+	return metadata
+}
+
+// CaseIdentityFrom reads the ordinary turn identity plus the casekeeper-only
+// case and actor coordinates injected by the spawner.
+func CaseIdentityFrom(metadata map[string]any) (Identity, error) {
+	identity, err := IdentityFrom(metadata)
+	if err != nil {
+		return Identity{}, err
+	}
+	identity.CaseID, err = metadataString(metadata, MetadataKeyCaseID)
+	if err != nil {
+		return Identity{}, err
+	}
+	identity.ActorID, err = metadataString(metadata, MetadataKeyActorID)
+	if err != nil {
+		return Identity{}, err
+	}
+	if err := identity.Validate(); err != nil {
+		return Identity{}, err
+	}
+	return identity, nil
 }
 
 // IdentityFrom reads the injected identity back off a tool call's metadata.

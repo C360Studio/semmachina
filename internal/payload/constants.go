@@ -21,6 +21,9 @@ const (
 	CategoryPlayerAction = "player_action"
 	// CategoryVerdict is the fiction adjudicator's single structured exit.
 	CategoryVerdict = "verdict"
+	// CategoryCaseDecision is the casekeeper's structured interpretation of a
+	// mystery action.
+	CategoryCaseDecision = "case_decision"
 	// CategoryRollResult is the dice component's resolution record.
 	CategoryRollResult = "roll_result"
 	// CategoryEffectBatch is the applier's validated, committed intent set.
@@ -116,6 +119,10 @@ const (
 	// package a future collision would be invisible, because the registry cannot
 	// report an overlap it never sees.
 	CategoryTurnNarration = "turn_narration"
+
+	// CategoryCaseDecisionRecord is the entity-only interpretation artifact
+	// envelope stored behind the turn's case-decision reference.
+	CategoryCaseDecisionRecord = "case_decision_record"
 
 	// CategoryCampaignEntity is the campaign entity's provenance envelope, and
 	// it is deliberately NOT registered: no message of this type is ever

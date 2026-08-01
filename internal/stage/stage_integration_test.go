@@ -256,6 +256,13 @@ func (l *loop) startStages(t *testing.T, artifacts *content.Store) {
 		t.Fatalf("NewBuilder: %v", err)
 	}
 
+	casekeeper, err := stage.NewSpawner(
+		persona.Casekeeper(), l.recorder, guard, projector, builder, l.harness.Client,
+		stage.WithCaseInterpretation(scope, artifacts, l.graph),
+	)
+	if err != nil {
+		t.Fatalf("NewSpawner(casekeeper): %v", err)
+	}
 	adjudicator, err := stage.NewSpawner(
 		persona.Adjudicator(), l.recorder, guard, projector, builder, l.harness.Client)
 	if err != nil {
@@ -302,7 +309,7 @@ func (l *loop) startStages(t *testing.T, artifacts *content.Store) {
 
 	runner, err := stage.NewRunner(
 		l.harness.Client, l.harness.Client,
-		l.runs.wrap(adjudicator, diceStage, effectStage, narrator, completer),
+		l.runs.wrap(casekeeper, adjudicator, diceStage, effectStage, narrator, completer),
 		stage.WithAckTimings(20*time.Second, 5*time.Second),
 	)
 	if err != nil {

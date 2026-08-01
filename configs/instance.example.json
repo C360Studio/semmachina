@@ -36,6 +36,11 @@
       }
     },
     "capabilities": {
+      "casekeeping": {
+        "description": "Private mystery interpretation with a closed structured exit; the MID slot carries its schema burden.",
+        "preferred": ["mid"],
+        "requires_tools": true
+      },
       "fiction_adjudication": {
         "description": "The engine's only schema-bearing exit. ADR-026 records upstream living the alternative, so this is the MID slot and demoting it is an experiment, never the starting configuration.",
         "preferred": ["mid"],

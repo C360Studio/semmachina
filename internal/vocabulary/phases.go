@@ -29,12 +29,13 @@ var (
 	// stage" (a wiring bug that must be loud).
 	phaseRanks = map[TurnPhase]int{
 		PhaseAccepted:     0,
-		PhaseAdjudicating: 1,
-		PhaseResolving:    2,
-		PhaseApplying:     3,
-		PhaseNarrating:    4,
-		PhaseComplete:     5,
-		PhaseFailed:       5,
+		PhaseInterpreting: 1,
+		PhaseAdjudicating: 2,
+		PhaseResolving:    3,
+		PhaseApplying:     4,
+		PhaseNarrating:    5,
+		PhaseComplete:     6,
+		PhaseFailed:       6,
 	}
 
 	// phasePredecessors is the legal from-set for each phase.
@@ -52,13 +53,14 @@ var (
 	// means any stage may end the turn explicitly rather than stalling.
 	phasePredecessors = map[TurnPhase][]TurnPhase{
 		PhaseAccepted:     nil,
-		PhaseAdjudicating: {PhaseAccepted},
+		PhaseInterpreting: {PhaseAccepted},
+		PhaseAdjudicating: {PhaseInterpreting},
 		PhaseResolving:    {PhaseAdjudicating},
 		PhaseApplying:     {PhaseAdjudicating, PhaseResolving},
 		PhaseNarrating:    {PhaseApplying},
 		PhaseComplete:     {PhaseNarrating},
 		PhaseFailed: {
-			PhaseAccepted, PhaseAdjudicating, PhaseResolving,
+			PhaseAccepted, PhaseInterpreting, PhaseAdjudicating, PhaseResolving,
 			PhaseApplying, PhaseNarrating,
 		},
 	}
