@@ -52,6 +52,9 @@ const (
 	// KindEvidenceTruthStatus classifies authored evidence without exposing an
 	// open-ended truth label to rules or personas.
 	KindEvidenceTruthStatus Kind = "evidence_truth_status"
+	// KindEvidenceRevealKind is the closed authored action mode under which
+	// private evidence may be granted.
+	KindEvidenceRevealKind Kind = "evidence_reveal_kind"
 	// KindBeliefStance is the closed stance a named actor holds toward evidence.
 	KindBeliefStance Kind = "belief_stance"
 	// KindCompanionPolicy is the package-authored admission policy for a
@@ -145,6 +148,7 @@ var registeredEnums = []enumSet{
 	failureReasonEnum,
 	rollGateMappingEnum,
 	evidenceTruthStatusEnum,
+	evidenceRevealKindEnum,
 	beliefStanceEnum,
 	companionPolicyEnum,
 	hintLevelEnum,

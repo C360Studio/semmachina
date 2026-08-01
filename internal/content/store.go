@@ -268,6 +268,49 @@ func (s *Store) GetCaseDecisionRecord(ctx context.Context, ref Ref) (*payload.Ca
 	return record, nil
 }
 
+// PutKnowledgeReceipt stores the aggregate before its reference lands on the turn.
+func (s *Store) PutKnowledgeReceipt(
+	ctx context.Context, turnEntityID string, receipt *KnowledgeReceipt,
+) (Ref, error) {
+	if receipt == nil {
+		return Ref{}, errors.New("storing a knowledge receipt requires a receipt")
+	}
+	if err := payload.RequireTurnEntityID(receipt.TurnID, turnEntityID); err != nil {
+		return Ref{}, err
+	}
+	return s.put(ctx, vocabulary.TurnKnowledgeRef, SubjectTurn, receipt.TurnID, receipt)
+}
+
+// GetKnowledgeReceipt reads a stored aggregate receipt.
+func (s *Store) GetKnowledgeReceipt(ctx context.Context, ref Ref) (*KnowledgeReceipt, error) {
+	receipt := &KnowledgeReceipt{}
+	if err := s.get(ctx, vocabulary.TurnKnowledgeRef, ref, receipt); err != nil {
+		return nil, err
+	}
+	return receipt, nil
+}
+
+// PutTestimony stores attributed prose under its deterministic revelation identity.
+func (s *Store) PutTestimony(ctx context.Context, testimonyID string, testimony *Testimony) (Ref, error) {
+	if testimony == nil {
+		return Ref{}, errors.New("storing testimony requires a record")
+	}
+	if expected := TestimonyID(testimony.TurnID, testimony.DecisionID, testimony.BeliefID,
+		testimony.RecipientID, testimony.EvidenceID); testimonyID != expected {
+		return Ref{}, fmt.Errorf("testimony id %q does not match deterministic identity %q", testimonyID, expected)
+	}
+	return s.put(ctx, vocabulary.RevelationTestimonyRef, SubjectRevelation, testimonyID, testimony)
+}
+
+// GetTestimony reads one attributed testimony artifact.
+func (s *Store) GetTestimony(ctx context.Context, ref Ref) (*Testimony, error) {
+	testimony := &Testimony{}
+	if err := s.get(ctx, vocabulary.RevelationTestimonyRef, ref, testimony); err != nil {
+		return nil, err
+	}
+	return testimony, nil
+}
+
 // PutRoll stores the turn's resolution record and returns the reference the
 // turn entity will carry.
 //

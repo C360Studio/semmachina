@@ -343,6 +343,8 @@ func TestAuthorWritablePredicates_AreWorldFactsMinusEngineOwnedState(t *testing.
 		vocabulary.RevelationEvidenceRef:           true,
 		vocabulary.RevelationActorHolder:           true,
 		vocabulary.RevelationTurnID:                true,
+		vocabulary.RevelationSourceActor:           true,
+		vocabulary.RevelationTestimonyRef:          true,
 		vocabulary.CompanionBondPlayer:             true,
 		vocabulary.CompanionBondCharacter:          true,
 		vocabulary.CompanionBondPolicy:             true,

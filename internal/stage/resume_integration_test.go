@@ -178,6 +178,13 @@ func (w *parkedWorld) drainStageTriggers(t *testing.T) {
 	if err := runner.Start(context.Background()); err != nil {
 		t.Fatalf("start the draining runner: %v", err)
 	}
+	if err := w.harness.Client.ConsumeDurable(context.Background(), natsclient.StreamConsumerConfig{
+		StreamName: rulepack.StageStream, ConsumerName: rulepack.KnowledgeConsumerName,
+		FilterSubject: rulepack.SubjectKnowledge, DeliverPolicy: "all", AckPolicy: "explicit",
+		MaxDeliver: 0, AckWait: 20 * time.Second,
+	}, 5*time.Second, func(context.Context, []byte) error { return nil }); err != nil {
+		t.Fatalf("start the draining knowledge consumer: %v", err)
+	}
 	defer w.harness.Client.StopAllConsumers()
 
 	deadline := time.Now().Add(30 * time.Second)
@@ -210,6 +217,17 @@ func (w *parkedWorld) stageConsumersIdle(t *testing.T) bool {
 		if info.NumPending != 0 || info.NumAckPending != 0 {
 			return false
 		}
+	}
+	consumer, err := w.stream.Consumer(ctx, rulepack.KnowledgeConsumerName)
+	if err != nil {
+		t.Fatalf("read the knowledge consumer: %v", err)
+	}
+	info, err := consumer.Info(ctx)
+	if err != nil {
+		t.Fatalf("read the knowledge consumer info: %v", err)
+	}
+	if info.NumPending != 0 || info.NumAckPending != 0 {
+		return false
 	}
 	return true
 }
@@ -941,6 +959,24 @@ func TestTurnLoop_APersonaStillRunningIsLeftAlone(t *testing.T) {
 	stream, err := world.harness.Client.GetStream(t.Context(), rulepack.StageStream)
 	if err != nil {
 		t.Fatalf("get the stage stream: %v", err)
+	}
+	knowledgeConsumer, err := stream.Consumer(t.Context(), rulepack.KnowledgeConsumerName)
+	if err != nil {
+		t.Fatalf("get the knowledge consumer: %v", err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		info, infoErr := knowledgeConsumer.Info(t.Context())
+		if infoErr != nil {
+			t.Fatalf("read the knowledge consumer: %v", infoErr)
+		}
+		if info.NumPending == 0 && info.NumAckPending == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("knowledge work did not retire before measuring a genuinely stranded turn: %+v", info)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 	agent, err := world.harness.Client.GetStream(t.Context(), persona.TaskStream)
 	if err != nil {

@@ -27,6 +27,7 @@ import (
 	"github.com/c360studio/semmachina/internal/effect"
 	"github.com/c360studio/semmachina/internal/epistemic"
 	"github.com/c360studio/semmachina/internal/graphio"
+	"github.com/c360studio/semmachina/internal/knowledge"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/persona"
 	"github.com/c360studio/semmachina/internal/rulepack"
@@ -235,6 +236,23 @@ func (l *loop) startRules(t *testing.T) {
 // startStages binds every stage to the stage stream.
 func (l *loop) startStages(t *testing.T, artifacts *content.Store) {
 	t.Helper()
+	loader, err := knowledge.NewLoader(l.graph, artifacts, "")
+	if err != nil {
+		t.Fatalf("NewLoader: %v", err)
+	}
+	granter, err := knowledge.NewGranter(l.graph, artifacts)
+	if err != nil {
+		t.Fatalf("NewGranter: %v", err)
+	}
+	granterConsumer, err := knowledge.NewConsumer(
+		l.harness.Client, loader, granter, l.recorder, knowledge.DenyShares{})
+	if err != nil {
+		t.Fatalf("NewConsumer(knowledge): %v", err)
+	}
+	if err := granterConsumer.Start(context.Background()); err != nil {
+		t.Fatalf("start knowledge consumer: %v", err)
+	}
+
 	assembler, err := scene.NewAssembler(l.graph)
 	if err != nil {
 		t.Fatalf("NewAssembler: %v", err)

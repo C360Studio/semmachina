@@ -32,6 +32,7 @@ import (
 	"github.com/c360studio/semmachina/internal/epistemic"
 	"github.com/c360studio/semmachina/internal/gateway"
 	"github.com/c360studio/semmachina/internal/graphio"
+	"github.com/c360studio/semmachina/internal/knowledge"
 	"github.com/c360studio/semmachina/internal/ledger"
 	"github.com/c360studio/semmachina/internal/persona"
 	"github.com/c360studio/semmachina/internal/playersocket"
@@ -70,6 +71,8 @@ const (
 	StepLifecycle StepID = "lifecycle"
 	// StepStageStream creates the stage-trigger stream.
 	StepStageStream StepID = "stage-stream"
+	// StepKnowledge binds the deterministic grant consumer before rules can publish to it.
+	StepKnowledge StepID = "knowledge"
 	// StepRules starts the rule processor that IS the turn's state machine.
 	StepRules StepID = "rules"
 	// StepResume runs the boot-time stranded-turn pass.
@@ -350,6 +353,7 @@ func (e *Engine) steps() []Step {
 			Run:   e.attachCaseLifecycle,
 		},
 		{ID: StepStageStream, Needs: []StepID{StepStreams}, Run: e.ensureStageStream},
+		{ID: StepKnowledge, Needs: []StepID{StepStageStream, StepGraph, StepWorld}, Run: e.startKnowledge},
 		{
 			ID: StepRules,
 			// The stage stream must exist before a rule can fire: the pack's
@@ -357,7 +361,7 @@ func (e *Engine) steps() []Step {
 			// subject no stream captures reaches no durable consumer while
 			// reporting success. The world must be instantiated because the pack
 			// matches turn entities against a world the stages will read.
-			Needs: []StepID{StepStageStream, StepGraph, StepWorld, StepLifecycle},
+			Needs: []StepID{StepStageStream, StepGraph, StepWorld, StepLifecycle, StepKnowledge},
 			Run:   e.startRules,
 		},
 		{
@@ -368,7 +372,7 @@ func (e *Engine) steps() []Step {
 			// rather than read "nothing in flight" and re-trigger every turn whose
 			// persona is mid-flight. And the rule processor must have STARTED:
 			// its bootstrap replay publishes into the set the pass reads.
-			Needs: []StepID{StepRules, StepStageStream, StepAgentStream, StepAgentic, StepWorld},
+			Needs: []StepID{StepRules, StepStageStream, StepAgentStream, StepAgentic, StepWorld, StepKnowledge},
 			Check: e.checkResumePreconditions,
 			Run:   e.reconcileStrandedTurns,
 		},
@@ -798,6 +802,26 @@ func (e *Engine) startRules(ctx context.Context) error {
 		return err
 	}
 	return e.startComponent(ctx, "rule-processor", rule.CreateRuleProcessor, raw)
+}
+
+func (e *Engine) startKnowledge(ctx context.Context) error {
+	scope, err := e.epistemicScope()
+	if err != nil {
+		return err
+	}
+	loader, err := knowledge.NewLoader(e.graph, e.content, scope.CaseID())
+	if err != nil {
+		return err
+	}
+	granter, err := knowledge.NewGranter(e.graph, e.content)
+	if err != nil {
+		return err
+	}
+	consumer, err := knowledge.NewConsumer(e.client, loader, granter, e.recorder, knowledge.DenyShares{})
+	if err != nil {
+		return err
+	}
+	return consumer.Start(ctx)
 }
 
 // checkResumePreconditions is every external fact the stranded-turn pass needs

@@ -38,6 +38,8 @@ const (
 	TurnCaseDecisionRef Predicate = "turn.case-decision.ref"
 	// TurnCaseDecisionKind is the sole rule-visible casekeeper scalar.
 	TurnCaseDecisionKind Predicate = "turn.case-decision.kind"
+	// TurnKnowledgeRef witnesses the deterministic knowledge batch committed for the turn.
+	TurnKnowledgeRef Predicate = "turn.knowledge.ref"
 
 	// TurnVerdictPlausibility is the rule-matched plausibility scalar.
 	TurnVerdictPlausibility Predicate = "turn.verdict.plausibility"
@@ -326,16 +328,21 @@ const (
 	CaseTransitionAt                Predicate = "case.transition.at"
 	CaseTransitionFrom              Predicate = "case.transition.from"
 
-	EvidenceTruthStatusCurrent Predicate = "evidence.truth.status"
+	EvidenceTruthStatusCurrent  Predicate = "evidence.truth.status"
+	EvidenceRevealPhase         Predicate = "evidence.reveal.phase"
+	EvidenceRevealKindPredicate Predicate = "evidence.reveal.kind"
+	EvidenceRevealTarget        Predicate = "evidence.reveal.target"
 
-	BeliefActorHolder     Predicate = "belief.actor.holder"
-	BeliefEvidenceRef     Predicate = "belief.evidence.target"
-	BeliefStanceCurrent   Predicate = "belief.stance.current"
-	KnowledgeActorHolder  Predicate = "knowledge.actor.holder"
-	KnowledgeEvidenceRef  Predicate = "knowledge.evidence.target"
-	RevelationEvidenceRef Predicate = "revelation.evidence.target"
-	RevelationActorHolder Predicate = "revelation.actor.holder"
-	RevelationTurnID      Predicate = "revelation.turn.id"
+	BeliefActorHolder      Predicate = "belief.actor.holder"
+	BeliefEvidenceRef      Predicate = "belief.evidence.target"
+	BeliefStanceCurrent    Predicate = "belief.stance.current"
+	KnowledgeActorHolder   Predicate = "knowledge.actor.holder"
+	KnowledgeEvidenceRef   Predicate = "knowledge.evidence.target"
+	RevelationEvidenceRef  Predicate = "revelation.evidence.target"
+	RevelationActorHolder  Predicate = "revelation.actor.holder"
+	RevelationTurnID       Predicate = "revelation.turn.id"
+	RevelationSourceActor  Predicate = "revelation.source.actor"
+	RevelationTestimonyRef Predicate = "revelation.testimony.ref"
 
 	CompanionCandidatePolicy Predicate = "companion.candidate.policy"
 	CompanionBondPlayer      Predicate = "companion.bond.player"
@@ -353,6 +360,7 @@ var allPredicates = []Predicate{
 	TurnActionScene,
 	TurnCaseDecisionRef,
 	TurnCaseDecisionKind,
+	TurnKnowledgeRef,
 	TurnVerdictPlausibility,
 	TurnVerdictRisk,
 	TurnVerdictConsequence,
@@ -406,6 +414,9 @@ var allPredicates = []Predicate{
 	CaseTransitionAt,
 	CaseTransitionFrom,
 	EvidenceTruthStatusCurrent,
+	EvidenceRevealPhase,
+	EvidenceRevealKindPredicate,
+	EvidenceRevealTarget,
 	BeliefActorHolder,
 	BeliefEvidenceRef,
 	BeliefStanceCurrent,
@@ -414,6 +425,8 @@ var allPredicates = []Predicate{
 	RevelationEvidenceRef,
 	RevelationActorHolder,
 	RevelationTurnID,
+	RevelationSourceActor,
+	RevelationTestimonyRef,
 	CompanionCandidatePolicy,
 	CompanionBondPlayer,
 	CompanionBondCharacter,

@@ -31,6 +31,10 @@ const (
 	ShapeOrdinal
 	// ShapeEvidenceTruthStatus is the closed evidence classification.
 	ShapeEvidenceTruthStatus
+	// ShapeCasePhase is one closed mystery lifecycle phase.
+	ShapeCasePhase
+	// ShapeEvidenceRevealKind is an authored observe/investigate authorization.
+	ShapeEvidenceRevealKind
 	// ShapeBeliefStance is the closed actor-belief stance.
 	ShapeBeliefStance
 	// ShapeCompanionPolicy is the closed companion admission policy.
@@ -65,6 +69,10 @@ func ObjectShapeFor(p vocabulary.Predicate) ObjectShape {
 		return ShapeCompanionPolicy
 	case vocabulary.EvidenceTruthStatusCurrent:
 		return ShapeEvidenceTruthStatus
+	case vocabulary.EvidenceRevealPhase:
+		return ShapeCasePhase
+	case vocabulary.EvidenceRevealKindPredicate:
+		return ShapeEvidenceRevealKind
 	case vocabulary.BeliefStanceCurrent:
 		return ShapeBeliefStance
 	case vocabulary.CompanionBondPolicy:
@@ -96,6 +104,8 @@ var engineOwnedFacts = []vocabulary.Predicate{
 	vocabulary.RevelationEvidenceRef,
 	vocabulary.RevelationActorHolder,
 	vocabulary.RevelationTurnID,
+	vocabulary.RevelationSourceActor,
+	vocabulary.RevelationTestimonyRef,
 	// A bond names an instance-configured player, so the template can only mark
 	// a character as eligible; the durable bond itself is runtime state.
 	vocabulary.CompanionBondPlayer,

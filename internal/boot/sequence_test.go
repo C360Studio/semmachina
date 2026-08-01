@@ -268,9 +268,10 @@ var wantDependencies = map[boot.StepID][]boot.StepID{
 	boot.StepWorld:        {boot.StepGraph},
 	boot.StepLifecycle:    {boot.StepWorld, boot.StepGraph},
 	boot.StepStageStream:  {boot.StepStreams},
-	boot.StepRules:        {boot.StepStageStream, boot.StepGraph, boot.StepWorld, boot.StepLifecycle},
+	boot.StepKnowledge:    {boot.StepStageStream, boot.StepGraph, boot.StepWorld},
+	boot.StepRules:        {boot.StepStageStream, boot.StepGraph, boot.StepWorld, boot.StepLifecycle, boot.StepKnowledge},
 	boot.StepResume: {
-		boot.StepRules, boot.StepStageStream, boot.StepAgentStream, boot.StepAgentic, boot.StepWorld,
+		boot.StepRules, boot.StepStageStream, boot.StepAgentStream, boot.StepAgentic, boot.StepWorld, boot.StepKnowledge,
 	},
 	boot.StepLoopFailures: {boot.StepResume, boot.StepAgentStream, boot.StepWorld},
 	boot.StepStages:       {boot.StepLoopFailures, boot.StepAgentic, boot.StepWorld},

@@ -160,6 +160,21 @@ func (w *pendingWorld) publish(t *testing.T, phase vocabulary.TurnPhase, turnID 
 	return entityID
 }
 
+func (w *pendingWorld) publishKnowledge(t *testing.T, turnID string) string {
+	t.Helper()
+	entityID := w.prefix + turnID
+	body, err := json.Marshal(map[string]any{
+		"entity_id": entityID, "subject": rulepack.SubjectKnowledge, "source": "rule_engine",
+	})
+	if err != nil {
+		t.Fatalf("encode knowledge trigger: %v", err)
+	}
+	if err := w.client.PublishToStream(t.Context(), rulepack.SubjectKnowledge, body); err != nil {
+		t.Fatalf("publish knowledge trigger: %v", err)
+	}
+	return entityID
+}
+
 // consume binds the REAL stage consumer name and acknowledges want messages,
 // which is what a stage that ran leaves behind.
 func (w *pendingWorld) consume(t *testing.T, phase vocabulary.TurnPhase, want int) {
@@ -213,6 +228,49 @@ func (w *pendingWorld) consume(t *testing.T, phase vocabulary.TurnPhase, want in
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatalf("the %s consumer never settled", phase)
+}
+
+func (w *pendingWorld) consumeKnowledge(t *testing.T, want int) {
+	t.Helper()
+	got := make(chan struct{}, want+4)
+	if err := w.client.ConsumeDurable(context.Background(), natsclient.StreamConsumerConfig{
+		StreamName: rulepack.StageStream, ConsumerName: rulepack.KnowledgeConsumerName,
+		FilterSubject: rulepack.SubjectKnowledge, DeliverPolicy: "all", AckPolicy: "explicit",
+		MaxDeliver: 0, AckWait: 20 * time.Second,
+	}, 5*time.Second, func(context.Context, []byte) error {
+		select {
+		case got <- struct{}{}:
+		default:
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("bind the knowledge consumer: %v", err)
+	}
+	defer w.client.StopAllConsumers()
+
+	for i := 0; i < want; i++ {
+		select {
+		case <-got:
+		case <-time.After(30 * time.Second):
+			t.Fatalf("the knowledge consumer received %d of %d triggers", i, want)
+		}
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		consumer, err := w.stream.Consumer(t.Context(), rulepack.KnowledgeConsumerName)
+		if err != nil {
+			t.Fatalf("read the knowledge consumer: %v", err)
+		}
+		info, err := consumer.Info(t.Context())
+		if err != nil {
+			t.Fatalf("read the knowledge consumer info: %v", err)
+		}
+		if info.NumPending == 0 && info.NumAckPending == 0 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("the knowledge consumer never settled")
 }
 
 // consumeTasks binds the stand-in loop consumer and acknowledges want tasks.
@@ -311,6 +369,29 @@ func TestWorkQueues_ReportsOnlyWhatNoStageHasFinished(t *testing.T) {
 	if got := pending[done]; got != 0 {
 		t.Errorf("a trigger a stage already finished with is reported %d times for %s; every turn the campaign "+
 			"has ever run would read as waiting, and the pass would never resume anything", got, done)
+	}
+}
+
+func TestWorkQueues_ReportsOnlyKnowledgeNoGranterHasFinished(t *testing.T) {
+	world := startPendingWorld(t)
+
+	done := world.publishKnowledge(t, "knowledge-done")
+	world.consumeKnowledge(t, 1)
+	waiting := world.publishKnowledge(t, "knowledge-waiting")
+
+	view := world.view(t)
+	if err := view.Settle(t.Context()); err != nil {
+		t.Fatalf("Settle: %v", err)
+	}
+	pending, err := view.Pending(t.Context())
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	if pending[waiting] != 1 {
+		t.Errorf("unacknowledged knowledge trigger for %s reported %d times, want 1", waiting, pending[waiting])
+	}
+	if pending[done] != 0 {
+		t.Errorf("acknowledged knowledge trigger for %s reported %d times", done, pending[done])
 	}
 }
 

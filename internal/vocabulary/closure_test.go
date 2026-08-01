@@ -128,6 +128,7 @@ func enumerations() map[string][]string {
 		"FailureReason":          sets[vocabulary.KindFailureReason],
 		"RollGateMapping":        sets[vocabulary.KindRollGateMapping],
 		"EvidenceTruthStatus":    sets[vocabulary.KindEvidenceTruthStatus],
+		"EvidenceRevealKind":     sets[vocabulary.KindEvidenceRevealKind],
 		"BeliefStance":           sets[vocabulary.KindBeliefStance],
 		"CompanionPolicy":        sets[vocabulary.KindCompanionPolicy],
 		"HintLevel":              sets[vocabulary.KindHintLevel],

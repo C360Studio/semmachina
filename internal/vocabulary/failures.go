@@ -73,12 +73,15 @@ const (
 	// the record rather than left waiting forever, which is the same trade cap
 	// exhaustion makes for a loop.
 	FailureTurnStranded FailureReason = "turn-stranded"
+	// FailureKnowledgeUnauthorized reports a permanently refused reveal batch.
+	FailureKnowledgeUnauthorized FailureReason = "knowledge-unauthorized"
 )
 
 var failureReasonEnum = newEnum(KindFailureReason,
 	FailureEffectInvalid, FailureEffectEntityMissing,
 	FailureEffectEntityKind, FailureEffectCommitIncomplete,
-	FailurePersonaCapExhausted, FailurePersonaLoopFailed, FailureTurnStranded)
+	FailurePersonaCapExhausted, FailurePersonaLoopFailed, FailureTurnStranded,
+	FailureKnowledgeUnauthorized)
 
 // FailureReasons returns the closed failure-reason set.
 func FailureReasons() []FailureReason { return failureReasonEnum.all() }

@@ -395,6 +395,8 @@ func TestIsMultiValued_CoversRelationsAndCaseMemberships(t *testing.T) {
 		vocabulary.CaseMemberSuspect,
 		vocabulary.CaseMemberEvidence,
 		vocabulary.CaseMemberTimeline,
+		vocabulary.EvidenceRevealKindPredicate,
+		vocabulary.EvidenceRevealTarget,
 	} {
 		multi[p] = true
 	}

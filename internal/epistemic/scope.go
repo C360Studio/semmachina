@@ -16,6 +16,9 @@ type Scope struct {
 	beliefsByActorID map[string][]string
 }
 
+// CaseID returns the plan-pinned active case, empty for a non-mystery world.
+func (s Scope) CaseID() string { return s.caseID }
+
 // MaxCasekeeperTargetActors is the audience bound shared by scope derivation
 // and projection validation.
 const MaxCasekeeperTargetActors = 8

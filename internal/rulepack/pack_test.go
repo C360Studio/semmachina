@@ -347,6 +347,66 @@ func TestPack_FirstHopIsTheFirstStagePhase(t *testing.T) {
 	}
 }
 
+func TestPack_InterpretationFansOutToAdjudicationAndKnowledge(t *testing.T) {
+	declare(t)
+	definitions, err := rulepack.Definitions()
+	if err != nil {
+		t.Fatalf("Definitions: %v", err)
+	}
+	hop := hopForPhase(t, definitions, vocabulary.PhaseInterpreting)
+	for _, actions := range [][]rule.Action{hop.OnEnter, hop.OnRecovery} {
+		published := map[string]bool{}
+		for _, action := range actions {
+			published[action.Subject] = true
+		}
+		for _, subject := range []string{
+			rulepack.StageSubjectPrefix + string(vocabulary.PhaseAdjudicating),
+			rulepack.SubjectKnowledge,
+		} {
+			if !published[subject] {
+				t.Errorf("interpretation does not publish %s in both entry and recovery", subject)
+			}
+		}
+	}
+}
+
+func TestPack_ApplicationFansInEffectsAndKnowledgeBeforeNarration(t *testing.T) {
+	declare(t)
+	definitions, err := rulepack.Definitions()
+	if err != nil {
+		t.Fatalf("Definitions: %v", err)
+	}
+	hop := hopForPhase(t, definitions, vocabulary.PhaseApplying)
+	conditions := map[string]bool{}
+	for _, condition := range hop.Conditions {
+		if condition.Operator == "ne" && condition.Value == "" {
+			conditions[condition.Field] = true
+		}
+	}
+	for _, predicate := range []vocabulary.Predicate{
+		vocabulary.TurnEffectsBatch, vocabulary.TurnKnowledgeRef,
+	} {
+		if !conditions[predicate.String()] {
+			t.Errorf("narration is not gated on %s", predicate)
+		}
+	}
+}
+
+func TestSubjectKnowledgeIsAuxiliaryRatherThanAStagePhase(t *testing.T) {
+	if phase, ok := rulepack.PhaseForSubject(rulepack.SubjectKnowledge); ok {
+		t.Fatalf("knowledge subject maps to stage phase %q", phase)
+	}
+	for _, phase := range rulepack.StagePhases() {
+		subject, err := rulepack.SubjectForPhase(phase)
+		if err != nil {
+			t.Fatalf("SubjectForPhase(%s): %v", phase, err)
+		}
+		if subject == rulepack.SubjectKnowledge {
+			t.Fatalf("knowledge appears in StagePhases as %s", phase)
+		}
+	}
+}
+
 func TestSubjectForPhase_RefusesThePhasesNoTriggerEnters(t *testing.T) {
 	for _, phase := range []vocabulary.TurnPhase{
 		vocabulary.PhaseAccepted, vocabulary.PhaseFailed, vocabulary.TurnPhase("nonsense"),
@@ -511,13 +571,22 @@ func transitionHopInto(t *testing.T, definitions []rule.Definition, phase vocabu
 	return found
 }
 
-// artifactCondition returns the one condition of a mid-chain hop that is not the
-// phase test — the half that is supposed to prove the previous stage FINISHED.
+// artifactCondition returns the condition written by the stage owning the
+// gated phase. Auxiliary fan-in witnesses are allowed beside it.
 func artifactCondition(t *testing.T, definition *rule.Definition) *expression.ConditionExpression {
 	t.Helper()
+	var phase vocabulary.TurnPhase
+	for _, condition := range definition.Conditions {
+		if condition.Field == vocabulary.TurnPhaseCurrent.String() {
+			phase = vocabulary.TurnPhase(condition.Value.(string))
+		}
+	}
+	artifacts, _ := vocabulary.StageArtifacts(phase)
 	var found *expression.ConditionExpression
 	for index := range definition.Conditions {
-		if definition.Conditions[index].Field == vocabulary.TurnPhaseCurrent.String() {
+		if !slices.ContainsFunc(artifacts, func(p vocabulary.Predicate) bool {
+			return p.String() == definition.Conditions[index].Field
+		}) {
 			continue
 		}
 		if found != nil {

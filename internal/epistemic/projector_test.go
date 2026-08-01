@@ -169,6 +169,9 @@ func fixture() (*fakeScenes, *fakeProjectionGraph) {
 			fact(vocabulary.WorldEntityKind, string(vocabulary.EntityKindEvidence)),
 			fact(vocabulary.WorldEntityName, "UNREVEALED-CLUE-CANARY"),
 			fact(vocabulary.EvidenceTruthStatusCurrent, "hidden"),
+			fact(vocabulary.EvidenceRevealPhase, string(vocabulary.CasePhaseInvestigation)),
+			fact(vocabulary.EvidenceRevealKindPredicate, string(vocabulary.EvidenceRevealInvestigate)),
+			fact(vocabulary.EvidenceRevealTarget, culpritID),
 		),
 		culpritID: state(culpritID,
 			fact(vocabulary.WorldEntityKind, string(vocabulary.EntityKindCharacter)),
@@ -567,12 +570,36 @@ func TestCasekeeperGetsSolutionEvidenceTruthAndBeliefs(t *testing.T) {
 	for _, canary := range []string{
 		culpritID, methodID, motiveID, hiddenEvidence, "UNREVEALED-CLUE-CANARY",
 		"TRUTH-CANARY", "BELIEF-CANARY",
+		string(vocabulary.CasePhaseInvestigation), string(vocabulary.EvidenceRevealInvestigate),
 	} {
 		if !strings.Contains(body, canary) {
 			t.Fatalf("casekeeper projection lacks %q: %s", canary, body)
 		}
 	}
 	assertNoDanglingReferences(t, projection)
+}
+
+func TestRevealEligibilityPredicatesStayInsideTheCasekeeperBoundary(t *testing.T) {
+	for name, audience := range map[string]epistemic.AuthenticatedAudience{
+		"player":             playerAudience(),
+		"public-adjudicator": publicAudience(),
+		"companion":          companionAudience(),
+		"narrator":           narratorAudience(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			scenes, graphReader := fixture()
+			body := string(mustBytes(t, mustProject(t, scenes, graphReader, audience)))
+			for _, predicate := range []vocabulary.Predicate{
+				vocabulary.EvidenceRevealPhase,
+				vocabulary.EvidenceRevealKindPredicate,
+				vocabulary.EvidenceRevealTarget,
+			} {
+				if strings.Contains(body, predicate.String()) {
+					t.Fatalf("%s projection leaked private eligibility predicate %s: %s", name, predicate, body)
+				}
+			}
+		})
+	}
 }
 
 func TestVerifierGetsExactSolutionIDsAndNoDescriptiveEntities(t *testing.T) {

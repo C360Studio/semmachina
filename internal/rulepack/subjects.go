@@ -40,6 +40,13 @@ const (
 // either way. A consumer that cares which ending it was reads the turn's phase.
 const SubjectResolved = StageSubjectPrefix + "resolved"
 
+// SubjectKnowledge requests deterministic knowledge authorization. It shares
+// TURN_STAGES durability but enters no phase and is never part of StagePhases.
+const SubjectKnowledge = StageSubjectPrefix + "knowledge"
+
+// KnowledgeConsumerName is the separate durable bound by KnowledgeGranter.
+const KnowledgeConsumerName = "semmachina-knowledge-granter"
+
 // stagePhases are the phases a stage runner ENTERS, in turn order.
 //
 // Two phases are deliberately absent. `accepted` is written by the turn

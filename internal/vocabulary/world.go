@@ -81,7 +81,7 @@ var worldFactSubjectKinds = map[Predicate][]EntityKind{
 		EntityKindCase, EntityKindEvidence, EntityKindEvent, EntityKindBelief, EntityKindKnowledge,
 		EntityKindRevelation, EntityKindCompanionBond},
 	WorldEntityDescription: {EntityKindCharacter, EntityKindItem, EntityKindScene, EntityKindPlayer,
-		EntityKindCase, EntityKindEvidence, EntityKindEvent},
+		EntityKindCase, EntityKindEvidence, EntityKindEvent, EntityKindBelief},
 
 	PlayerCharacterCurrent: {EntityKindPlayer},
 
@@ -124,6 +124,9 @@ var worldFactSubjectKinds = map[Predicate][]EntityKind{
 	CaseTransitionFrom:              {EntityKindCase},
 	CaseTimelineOrder:               {EntityKindEvent},
 	EvidenceTruthStatusCurrent:      {EntityKindEvidence},
+	EvidenceRevealPhase:             {EntityKindEvidence},
+	EvidenceRevealKindPredicate:     {EntityKindEvidence},
+	EvidenceRevealTarget:            {EntityKindEvidence},
 	BeliefActorHolder:               {EntityKindBelief},
 	BeliefEvidenceRef:               {EntityKindBelief},
 	BeliefStanceCurrent:             {EntityKindBelief},
@@ -132,6 +135,8 @@ var worldFactSubjectKinds = map[Predicate][]EntityKind{
 	RevelationEvidenceRef:           {EntityKindRevelation},
 	RevelationActorHolder:           {EntityKindRevelation},
 	RevelationTurnID:                {EntityKindRevelation},
+	RevelationSourceActor:           {EntityKindRevelation},
+	RevelationTestimonyRef:          {EntityKindRevelation},
 	CompanionCandidatePolicy:        {EntityKindCharacter},
 	CompanionBondPlayer:             {EntityKindCompanionBond},
 	CompanionBondCharacter:          {EntityKindCompanionBond},
@@ -175,11 +180,13 @@ var referenceObjectKinds = map[Predicate][]EntityKind{
 	CaseMemberTimeline:      {EntityKindEvent},
 	CaseMemberVictim:        {EntityKindCharacter},
 	BeliefActorHolder:       {EntityKindCharacter},
+	EvidenceRevealTarget:    {EntityKindCharacter, EntityKindItem, EntityKindScene, EntityKindEvidence},
 	BeliefEvidenceRef:       {EntityKindEvidence},
 	KnowledgeActorHolder:    {EntityKindCharacter},
 	KnowledgeEvidenceRef:    {EntityKindEvidence},
 	RevelationEvidenceRef:   {EntityKindEvidence},
 	RevelationActorHolder:   {EntityKindCharacter},
+	RevelationSourceActor:   {EntityKindCharacter},
 	CompanionBondPlayer:     {EntityKindPlayer},
 	CompanionBondCharacter:  {EntityKindCharacter},
 }
@@ -259,7 +266,10 @@ func IsEntityReference(p Predicate) bool {
 // carries several things and knows several people, while health, status, and
 // location each hold one value by definition.
 func IsMultiValued(p Predicate) bool {
-	if slices.Contains([]Predicate{CaseMemberSuspect, CaseMemberEvidence, CaseMemberTimeline}, p) {
+	if slices.Contains([]Predicate{
+		CaseMemberSuspect, CaseMemberEvidence, CaseMemberTimeline,
+		EvidenceRevealKindPredicate, EvidenceRevealTarget,
+	}, p) {
 		return true
 	}
 	_, ok := RelationForPredicate(p)

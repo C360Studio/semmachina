@@ -40,7 +40,7 @@ func ProcessorConfig() (json.RawMessage, error) {
 	}
 	definitions = append(definitions, caseDefinitions...)
 
-	outputs := make([]component.PortDefinition, 0, len(stagePhases)+1)
+	outputs := make([]component.PortDefinition, 0, len(stagePhases)+2)
 	for _, phase := range stagePhases {
 		subject, subjectErr := SubjectForPhase(phase)
 		if subjectErr != nil {
@@ -49,6 +49,7 @@ func ProcessorConfig() (json.RawMessage, error) {
 		outputs = append(outputs, stagePort(string(phase), subject))
 	}
 	outputs = append(outputs, stagePort("resolved", SubjectResolved))
+	outputs = append(outputs, stagePort("knowledge", SubjectKnowledge))
 
 	config := rule.Config{
 		PackID:      PackID,

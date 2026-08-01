@@ -37,6 +37,16 @@ type MysteryKnowledgeSeed struct {
 	Evidence string
 }
 
+// MysteryEvidenceEligibility is private authored authorization metadata for
+// one case-evidence entity. Phase is the minimum lifecycle phase; kinds and
+// targets are independent non-empty allow-sets.
+type MysteryEvidenceEligibility struct {
+	Evidence     string
+	MinimumPhase vocabulary.CasePhase
+	Kinds        []vocabulary.EvidenceRevealKind
+	Targets      []string
+}
+
 // MysteryCase is the typed projection of one fully validated authored case.
 type MysteryCase struct {
 	ID                  string
@@ -44,6 +54,7 @@ type MysteryCase struct {
 	Solution            MysterySolution
 	Suspects            []string
 	Evidence            []string
+	EvidenceEligibility []MysteryEvidenceEligibility
 	Timeline            []MysteryTimelineEvent
 	Beliefs             []MysteryBelief
 	KnowledgeSeeds      []MysteryKnowledgeSeed
@@ -161,9 +172,10 @@ func validateMysteryCase(
 	if err != nil {
 		return nil, err
 	}
-	if err := validateMysteryEvidence(
+	eligibility, err := validateMysteryEvidence(
 		caseEntity.LocalID, evidence, timelineRefs, entities, byID,
-	); err != nil {
+	)
+	if err != nil {
 		return nil, err
 	}
 
@@ -187,6 +199,7 @@ func validateMysteryCase(
 		Solution:            MysterySolution{Culprit: culprit, Method: method, Motive: motive},
 		Suspects:            suspects,
 		Evidence:            evidence,
+		EvidenceEligibility: eligibility,
 		Timeline:            timeline,
 		Beliefs:             beliefs,
 		KnowledgeSeeds:      knowledge,
@@ -221,34 +234,63 @@ func validateMysteryEvidence(
 	timelineRefs []string,
 	entities []TemplateEntity,
 	byID map[string]TemplateEntity,
-) error {
+) ([]MysteryEvidenceEligibility, error) {
 	redHerrings := 0
+	eligibility := make([]MysteryEvidenceEligibility, 0, len(evidence))
 	for _, evidenceID := range evidence {
-		statusText, err := exactlyOneLiteral(byID[evidenceID], vocabulary.EvidenceTruthStatusCurrent,
+		entity := byID[evidenceID]
+		statusText, err := exactlyOneLiteral(entity, vocabulary.EvidenceTruthStatusCurrent,
 			"evidence truth status")
 		if err != nil {
-			return err
+			return nil, err
 		}
 		status, err := vocabulary.ParseEvidenceTruthStatus(statusText)
 		if err != nil {
-			return fmt.Errorf("evidence %q truth status: %w", evidenceID, err)
+			return nil, fmt.Errorf("evidence %q truth status: %w", evidenceID, err)
 		}
 		if status == vocabulary.EvidenceTruthRedHerring {
 			redHerrings++
 		}
+		phaseText, err := exactlyOneLiteral(entity, vocabulary.EvidenceRevealPhase, "reveal phase")
+		if err != nil {
+			return nil, err
+		}
+		phase, err := vocabulary.ParseCasePhase(phaseText)
+		if err != nil {
+			return nil, fmt.Errorf("evidence %q reveal phase: %w", evidenceID, err)
+		}
+		kindTexts, err := uniqueLiterals(entity, vocabulary.EvidenceRevealKindPredicate, "reveal kind")
+		if err != nil {
+			return nil, err
+		}
+		kinds := make([]vocabulary.EvidenceRevealKind, 0, len(kindTexts))
+		for _, text := range kindTexts {
+			kind, parseErr := vocabulary.ParseEvidenceRevealKind(text)
+			if parseErr != nil {
+				return nil, fmt.Errorf("evidence %q reveal kind: %w", evidenceID, parseErr)
+			}
+			kinds = append(kinds, kind)
+		}
+		targets, err := uniqueRefs(entity, vocabulary.EvidenceRevealTarget, "reveal target")
+		if err != nil {
+			return nil, err
+		}
+		eligibility = append(eligibility, MysteryEvidenceEligibility{
+			Evidence: evidenceID, MinimumPhase: phase, Kinds: kinds, Targets: targets,
+		})
 	}
 	if redHerrings == 0 {
-		return fmt.Errorf("case %q evidence includes no red herrings", caseID)
+		return nil, fmt.Errorf("case %q evidence includes no red herrings", caseID)
 	}
 	for _, entity := range entities {
 		if entity.Kind == vocabulary.EntityKindEvidence && !slices.Contains(evidence, entity.LocalID) {
-			return fmt.Errorf("evidence entity %q is outside case %q evidence membership", entity.LocalID, caseID)
+			return nil, fmt.Errorf("evidence entity %q is outside case %q evidence membership", entity.LocalID, caseID)
 		}
 		if entity.Kind == vocabulary.EntityKindEvent && !slices.Contains(timelineRefs, entity.LocalID) {
-			return fmt.Errorf("timeline event %q is outside case %q timeline membership", entity.LocalID, caseID)
+			return nil, fmt.Errorf("timeline event %q is outside case %q timeline membership", entity.LocalID, caseID)
 		}
 	}
-	return nil
+	return eligibility, nil
 }
 
 func validateMysteryRecords(
@@ -383,6 +425,27 @@ func uniqueRefs(entity TemplateEntity, predicate vocabulary.Predicate, field str
 		refs = append(refs, fact.LocalRef)
 	}
 	return refs, nil
+}
+
+func uniqueLiterals(entity TemplateEntity, predicate vocabulary.Predicate, field string) ([]string, error) {
+	facts := factsFor(entity, predicate)
+	if len(facts) == 0 {
+		return nil, fmt.Errorf("entity %q %s: requires at least one value", entity.LocalID, field)
+	}
+	values := make([]string, 0, len(facts))
+	seen := make(map[string]bool, len(facts))
+	for _, fact := range facts {
+		value, ok := fact.Literal.(string)
+		if !ok {
+			return nil, fmt.Errorf("entity %q %s contains a non-text value", entity.LocalID, field)
+		}
+		if seen[value] {
+			return nil, fmt.Errorf("entity %q %s names %q more than once", entity.LocalID, field, value)
+		}
+		seen[value] = true
+		values = append(values, value)
+	}
+	return values, nil
 }
 
 func requireRefs(byID map[string]TemplateEntity, refs []string, kind vocabulary.EntityKind, field string) error {

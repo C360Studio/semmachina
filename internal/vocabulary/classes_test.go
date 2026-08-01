@@ -167,6 +167,13 @@ func closedSets() []closedSet {
 			sampleBad: "probably",
 		},
 		{
+			kind:      vocabulary.KindEvidenceRevealKind,
+			members:   strs(vocabulary.EvidenceRevealKinds()),
+			parse:     asStringParser(vocabulary.ParseEvidenceRevealKind),
+			nearMiss:  []string{"question", "share", "Observe", "investigate-ish"},
+			sampleBad: "question",
+		},
+		{
 			kind:      vocabulary.KindBeliefStance,
 			members:   strs(vocabulary.BeliefStances()),
 			parse:     asStringParser(vocabulary.ParseBeliefStance),

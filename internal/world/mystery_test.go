@@ -39,7 +39,7 @@ func completeMysteryLines() string {
 			status = "red-herring"
 		}
 		lines = append(lines, fmt.Sprintf(
-			`{"local_id":"evidence%d","type":"evidence","triples":[{"predicate":"world.entity.name","object":"Evidence %d"},{"predicate":"evidence.truth.status","object":"%s"}]}`,
+			`{"local_id":"evidence%d","type":"evidence","triples":[{"predicate":"world.entity.name","object":"Evidence %d"},{"predicate":"evidence.truth.status","object":"%s"},{"predicate":"evidence.reveal.phase","object":"discovery"},{"predicate":"evidence.reveal.kind","object":"investigate"},{"predicate":"evidence.reveal.target","object":"local:village"}]}`,
 			i, i, status))
 	}
 	for i := 1; i <= 3; i++ {
@@ -76,6 +76,50 @@ func completeMysteryLines() string {
 	lines = append(lines, fmt.Sprintf(
 		`{"local_id":"case1","type":"case","triples":[%s]}`, strings.Join(triples, ",")))
 	return strings.Join(lines, "\n") + "\n"
+}
+
+func TestLoadPackage_RequiresPrivateRevealEligibilityOnEveryCaseEvidence(t *testing.T) {
+	base := completeMysteryLines()
+	cases := map[string]struct {
+		old, replacement, field string
+	}{
+		"missing minimum phase": {
+			`{"predicate":"evidence.reveal.phase","object":"discovery"},`, "", "reveal phase",
+		},
+		"duplicate minimum phase": {
+			`{"predicate":"evidence.reveal.phase","object":"discovery"},`,
+			`{"predicate":"evidence.reveal.phase","object":"discovery"},{"predicate":"evidence.reveal.phase","object":"investigation"},`,
+			"reveal phase",
+		},
+		"missing reveal kind": {
+			`{"predicate":"evidence.reveal.kind","object":"investigate"},`, "", "reveal kind",
+		},
+		"missing reveal target": {
+			`,{"predicate":"evidence.reveal.target","object":"local:village"}`, "", "reveal target",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			lines := strings.Replace(base, tc.old, tc.replacement, 1)
+			_, err := world.LoadPackage(mysteryPackageFS(lines), world.LoadOptions{})
+			if err == nil {
+				t.Fatalf("LoadPackage accepted case evidence with %s", name)
+			}
+			if !strings.Contains(err.Error(), tc.field) {
+				t.Fatalf("LoadPackage error = %v, want %q", err, tc.field)
+			}
+		})
+	}
+}
+
+func TestLoadPackage_AllowsMultipleRevealKindsAndTargetsButOneMinimumPhase(t *testing.T) {
+	lines := strings.Replace(completeMysteryLines(),
+		`{"predicate":"evidence.reveal.kind","object":"investigate"},{"predicate":"evidence.reveal.target","object":"local:village"}`,
+		`{"predicate":"evidence.reveal.kind","object":"investigate"},{"predicate":"evidence.reveal.kind","object":"observe"},{"predicate":"evidence.reveal.target","object":"local:village"},{"predicate":"evidence.reveal.target","object":"local:method"}`,
+		1)
+	if _, err := world.LoadPackage(mysteryPackageFS(lines), world.LoadOptions{}); err != nil {
+		t.Fatalf("LoadPackage refused multi-valued reveal kinds/targets: %v", err)
+	}
 }
 
 func TestLoadPackage_ValidatesACompleteTypedMystery(t *testing.T) {

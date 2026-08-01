@@ -297,6 +297,20 @@ func parseFactObject(
 		}
 		return TemplateFact{Predicate: predicate, Literal: string(status)}, nil
 
+	case ShapeCasePhase:
+		text, err := decodeString(raw)
+		if err != nil {
+			return TemplateFact{}, err
+		}
+		phase, err := vocabulary.ParseCasePhase(text)
+		if err != nil {
+			return TemplateFact{}, err
+		}
+		return TemplateFact{Predicate: predicate, Literal: string(phase)}, nil
+
+	case ShapeEvidenceRevealKind:
+		return parseEvidenceRevealKind(predicate, raw)
+
 	case ShapeBeliefStance:
 		text, err := decodeString(raw)
 		if err != nil {
@@ -354,6 +368,18 @@ func parseFactObject(
 		// Unreachable: AuthorWritable already rejected anything without a shape.
 		return TemplateFact{}, fmt.Errorf("predicate %q has no registered object shape", predicate)
 	}
+}
+
+func parseEvidenceRevealKind(predicate vocabulary.Predicate, raw json.RawMessage) (TemplateFact, error) {
+	text, err := decodeString(raw)
+	if err != nil {
+		return TemplateFact{}, err
+	}
+	kind, err := vocabulary.ParseEvidenceRevealKind(text)
+	if err != nil {
+		return TemplateFact{}, err
+	}
+	return TemplateFact{Predicate: predicate, Literal: string(kind)}, nil
 }
 
 func decodeString(raw json.RawMessage) (string, error) {

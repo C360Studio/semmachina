@@ -148,9 +148,11 @@ const (
 	// SubjectTurn is one turn's own artifacts: the action, the verdict, the
 	// roll, the effect batch, the narration, the failure detail.
 	SubjectTurn SubjectKind = "turn"
+	// SubjectRevelation stores private testimony by deterministic testimony identity.
+	SubjectRevelation SubjectKind = "revelation"
 )
 
-var subjectKinds = []SubjectKind{SubjectTurn}
+var subjectKinds = []SubjectKind{SubjectTurn, SubjectRevelation}
 
 // SubjectKinds returns the closed subject-kind set.
 func SubjectKinds() []SubjectKind { return slices.Clone(subjectKinds) }

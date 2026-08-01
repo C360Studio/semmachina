@@ -56,13 +56,16 @@
 
 ## 5. Knowledge and Testimony
 
-- [ ] 5.1 Add failing authorization tests for eligible reveals, premature solution facts,
+- [x] 5.1 Add failing authorization tests for eligible reveals, premature solution facts,
   wrong actors, wrong questioned targets, and attributed false testimony
-- [ ] 5.2 Implement `KnowledgeGranter` with actor-scoped grants and committed turn
+- [x] 5.2 Implement `KnowledgeGranter` with actor-scoped grants and committed turn
   revelation receipts
 - [ ] 5.3 Add witnessed-discovery and explicit-share flows proving player and companion
   knowledge remain independent
-- [ ] 5.4 Keep testimony and narration prose in ObjectStore and graph/rule paths limited to
+  - Deterministic share/witness authorization seams exist, but production witnessed dual
+    grants and explicit sharing require Group 7's durable active companion bond plus
+    `WitnessAuthorizer` and `ShareAuthorizer`; 5.3 cannot close yet.
+- [x] 5.4 Keep testimony and narration prose in ObjectStore and graph/rule paths limited to
   structural references
 
 ## 6. Deterministic Accusation

@@ -258,6 +258,13 @@ func (q *WorkQueues) Pending(ctx context.Context) (map[string]int, error) {
 			return nil, fmt.Errorf("read the queued %s triggers: %w", phase, err)
 		}
 	}
+	knowledgeFloor, err := q.consumerAckFloor(ctx, rulepack.KnowledgeConsumerName, "knowledge")
+	if err != nil {
+		return nil, err
+	}
+	if err := readQueue(ctx, q.stages, rulepack.SubjectKnowledge, knowledgeFloor, triggerEntityID, pending); err != nil {
+		return nil, fmt.Errorf("read the queued knowledge triggers: %w", err)
+	}
 
 	floor, err := q.taskAckFloor(ctx)
 	if err != nil {
@@ -276,16 +283,20 @@ func (q *WorkQueues) Pending(ctx context.Context) (map[string]int, error) {
 // DeliverPolicy "all", so a trigger published while one was absent IS delivered
 // once it binds. Everything on the subject is therefore genuinely queued.
 func (q *WorkQueues) stageAckFloor(ctx context.Context, phase vocabulary.TurnPhase) (uint64, error) {
-	consumer, err := q.stages.Consumer(ctx, rulepack.StageConsumerName(phase))
+	return q.consumerAckFloor(ctx, rulepack.StageConsumerName(phase), string(phase)+" stage")
+}
+
+func (q *WorkQueues) consumerAckFloor(ctx context.Context, name, label string) (uint64, error) {
+	consumer, err := q.stages.Consumer(ctx, name)
 	if err != nil {
 		if errors.Is(err, jetstream.ErrConsumerNotFound) {
 			return 0, nil
 		}
-		return 0, fmt.Errorf("read the %s stage consumer: %w", phase, err)
+		return 0, fmt.Errorf("read the %s consumer: %w", label, err)
 	}
 	info, err := consumer.Info(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("read the %s stage consumer: %w", phase, err)
+		return 0, fmt.Errorf("read the %s consumer: %w", label, err)
 	}
 	// AckFloor rather than the delivered position, deliberately: a delivery that
 	// is out and unacknowledged is still queued work, and a turn whose trigger is

@@ -25,6 +25,32 @@ func ParseEvidenceTruthStatus(s string) (EvidenceTruthStatus, error) {
 	return evidenceTruthStatusEnum.parse(s)
 }
 
+// EvidenceRevealKind is an authored structural authorization mode. Question
+// testimony is intentionally absent: its authority is the belief record whose
+// holder was actually questioned, not an evidence-level permission.
+type EvidenceRevealKind string
+
+const (
+	// EvidenceRevealObserve admits evidence through an eligible observation.
+	EvidenceRevealObserve EvidenceRevealKind = "observe"
+	// EvidenceRevealInvestigate admits evidence through an eligible investigation.
+	EvidenceRevealInvestigate EvidenceRevealKind = "investigate"
+)
+
+var evidenceRevealKindEnum = newEnum(KindEvidenceRevealKind,
+	EvidenceRevealObserve, EvidenceRevealInvestigate)
+
+// EvidenceRevealKinds returns the closed authored reveal modes.
+func EvidenceRevealKinds() []EvidenceRevealKind { return evidenceRevealKindEnum.all() }
+
+// Valid reports whether k is an authored reveal mode.
+func (k EvidenceRevealKind) Valid() bool { return evidenceRevealKindEnum.valid(k) }
+
+// ParseEvidenceRevealKind accepts only declared reveal modes.
+func ParseEvidenceRevealKind(s string) (EvidenceRevealKind, error) {
+	return evidenceRevealKindEnum.parse(s)
+}
+
 // BeliefStance records what a named actor believes about referenced evidence.
 type BeliefStance string
 
