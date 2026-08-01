@@ -174,20 +174,30 @@ func AgentStreamConfig() jetstream.StreamConfig {
 // failure event carrying no engine identity is somebody else's loop and is
 // ignored.
 type LoopFailureWatcher struct {
-	consumer     Consumer
-	streams      StreamReader
-	decoder      *message.Decoder
-	failer       persona.TurnFailer
-	details      persona.DetailStore
-	subject      string
-	consumerName string
-	logger       *slog.Logger
-	heartbeat    time.Duration
-	ackWait      time.Duration
+	consumer         Consumer
+	streams          StreamReader
+	decoder          *message.Decoder
+	failer           persona.TurnFailer
+	details          persona.DetailStore
+	companionExhaust companionExhauster
+	subject          string
+	consumerName     string
+	logger           *slog.Logger
+	heartbeat        time.Duration
+	ackWait          time.Duration
+}
+
+type companionExhauster interface {
+	Exhaust(context.Context, persona.Identity) error
 }
 
 // LoopFailureOption configures a LoopFailureWatcher.
 type LoopFailureOption func(*LoopFailureWatcher)
+
+// WithCompanionExhauster installs the special non-failing companion cap commit.
+func WithCompanionExhauster(exhauster companionExhauster) LoopFailureOption {
+	return func(w *LoopFailureWatcher) { w.companionExhaust = exhauster }
+}
 
 // WithLoopFailureLogger sets the watcher's logger.
 func WithLoopFailureLogger(logger *slog.Logger) LoopFailureOption {
@@ -410,6 +420,17 @@ func (w *LoopFailureWatcher) Handle(ctx context.Context, data []byte) error {
 	}
 
 	if event.Reason == ReasonMaxIterations {
+		if role == persona.RoleCompanion {
+			if w.companionExhaust == nil {
+				return errors.New("companion cap exhaustion has no deterministic committer")
+			}
+			if err := w.companionExhaust.Exhaust(ctx, identity); err != nil {
+				return fmt.Errorf("commit exhausted companion result for turn %s: %w", identity.TurnEntityID, err)
+			}
+			w.logger.Warn("companion exhausted its one iteration; committed silent result and continued narration",
+				"turn", identity.TurnEntityID, "loop", event.LoopID)
+			return nil
+		}
 		return w.recordCapExhaustion(ctx, identity, role, event)
 	}
 	return w.recordLoopFailure(ctx, identity, role, event)

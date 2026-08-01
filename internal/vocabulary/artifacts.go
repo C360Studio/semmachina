@@ -48,6 +48,9 @@ var stageArtifacts = map[TurnPhase][]Predicate{
 	// The batch marker the applier lands LAST, after every per-entity merge
 	// succeeded, plus the pointer at the committed intent set.
 	PhaseApplying: append(slices.Clone(effectScalarPredicates), TurnEffectsRef),
+	// Every companion path, including exact no-op and exhausted outcomes, lands
+	// one stage record. A real or exhausted outcome may also land a decision.
+	PhaseCompanion: {TurnCompanionStageRef, TurnCompanionDecisionRef},
 	// The narrator's projection is deliberately scalar-less: everything
 	// structural was decided by an earlier stage, so its only mark is the
 	// pointer at its prose.
@@ -75,6 +78,7 @@ var stageWitness = map[TurnPhase]Predicate{
 	PhaseAdjudicating: TurnVerdictRef,
 	PhaseResolving:    TurnRollRef,
 	PhaseApplying:     TurnEffectsBatch,
+	PhaseCompanion:    TurnCompanionStageRef,
 	PhaseNarrating:    TurnNarrationRef,
 }
 

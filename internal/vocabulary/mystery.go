@@ -121,3 +121,49 @@ func (l HintLevel) Valid() bool { return hintLevelEnum.valid(l) }
 
 // ParseHintLevel accepts only registered hint levels.
 func ParseHintLevel(s string) (HintLevel, error) { return hintLevelEnum.parse(s) }
+
+// CompanionTriggerKind is the closed structural reason the companion stage may intervene.
+type CompanionTriggerKind string
+
+const (
+	// CompanionTriggerNone means the stage has no authorized intervention.
+	CompanionTriggerNone CompanionTriggerKind = "none"
+	// CompanionTriggerPlayerHint is an explicit closed request_hint case decision.
+	CompanionTriggerPlayerHint CompanionTriggerKind = "player-hint"
+	// CompanionTriggerWarning is a bounded-initiative high-risk resolved warning.
+	CompanionTriggerWarning CompanionTriggerKind = "warning"
+)
+
+var companionTriggerEnum = newEnum(KindCompanionTrigger,
+	CompanionTriggerNone, CompanionTriggerPlayerHint, CompanionTriggerWarning)
+
+// CompanionTriggers returns the closed trigger set in priority order.
+func CompanionTriggers() []CompanionTriggerKind { return companionTriggerEnum.all() }
+
+// ParseCompanionTrigger accepts only the closed trigger set.
+func ParseCompanionTrigger(s string) (CompanionTriggerKind, error) {
+	return companionTriggerEnum.parse(s)
+}
+
+// CompanionTriggerSource identifies the structural source of a trigger decision.
+type CompanionTriggerSource string
+
+const (
+	// CompanionTriggerSourceNone means no structural source authorized an intervention.
+	CompanionTriggerSourceNone CompanionTriggerSource = "none"
+	// CompanionTriggerSourceCaseDecision identifies an explicit request_hint decision.
+	CompanionTriggerSourceCaseDecision CompanionTriggerSource = "case-decision"
+	// CompanionTriggerSourceResolvedRisk identifies the bounded automatic warning policy.
+	CompanionTriggerSourceResolvedRisk CompanionTriggerSource = "resolved-risk"
+)
+
+var companionTriggerSourceEnum = newEnum(KindCompanionTriggerSource,
+	CompanionTriggerSourceNone, CompanionTriggerSourceCaseDecision, CompanionTriggerSourceResolvedRisk)
+
+// CompanionTriggerSources returns every structural trigger source.
+func CompanionTriggerSources() []CompanionTriggerSource { return companionTriggerSourceEnum.all() }
+
+// ParseCompanionTriggerSource accepts only the closed source set.
+func ParseCompanionTriggerSource(s string) (CompanionTriggerSource, error) {
+	return companionTriggerSourceEnum.parse(s)
+}

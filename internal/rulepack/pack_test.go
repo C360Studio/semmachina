@@ -216,6 +216,31 @@ func TestDefinitions_RefuseARuleWithNoRecoveryActions(t *testing.T) {
 	}
 }
 
+func TestDefinitions_AutomaticCompanionPathIsExplicitlyCappedAtOne(t *testing.T) {
+	declare(t)
+	definitions := mutable(t)
+	hop := hopForPhase(t, definitions, vocabulary.PhaseApplying)
+	for _, actions := range [][]rule.Action{hop.OnEnter, hop.OnRecovery} {
+		if len(actions) != 1 || actions[0].MaxIterations == nil || *actions[0].MaxIterations != 1 {
+			t.Fatalf("automatic companion action = %#v, want explicit max_iterations=1", actions)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		cap  *int
+	}{{"missing", nil}, {"unlimited", func() *int { v := 0; return &v }()},
+		{"widened", func() *int { v := 2; return &v }()}} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := mutable(t)
+			action := hopForPhase(t, candidate, vocabulary.PhaseApplying)
+			action.OnEnter[0].MaxIterations = tc.cap
+			if err := rulepack.Check(candidate); err == nil {
+				t.Fatalf("automatic companion action loaded with cap %v", tc.cap)
+			}
+		})
+	}
+}
+
 // Two gates that exist for 8.1b(d) rather than for anything running today.
 //
 // The FSM-edge check reads an `eq` condition's value at load to decide which

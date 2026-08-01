@@ -45,7 +45,7 @@ func TestAccusationUniversalBarrierIsRoutedAndRequiredBeforeNarration(t *testing
 					t.Fatalf("every committed interpretation does not publish accusation: %#v", actions)
 				}
 			}
-		case "turn-committed-effects-enter-narration":
+		case "turn-committed-effects-enter-companion":
 			applicationFound = true
 			fields := map[string]bool{}
 			for _, condition := range definition.Conditions {
@@ -75,7 +75,7 @@ func TestApplyingRuleDoesNotMatchUntilAccusationArtifactLands(t *testing.T) {
 	}
 	var applying rule.Definition
 	for _, definition := range definitions {
-		if definition.ID == "turn-committed-effects-enter-narration" {
+		if definition.ID == "turn-committed-effects-enter-companion" {
 			applying = definition
 		}
 	}

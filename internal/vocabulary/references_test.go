@@ -45,6 +45,7 @@ func TestStorageRefPredicates_CoverEveryTurnArtifact(t *testing.T) {
 		vocabulary.TurnActionRef:            "action",
 		vocabulary.TurnCaseDecisionRef:      "case-decision",
 		vocabulary.TurnCompanionDecisionRef: "companion-decision",
+		vocabulary.TurnCompanionStageRef:    "companion-stage",
 		vocabulary.TurnAccusationRef:        "accusation",
 		vocabulary.TurnKnowledgeRef:         "knowledge",
 		vocabulary.TurnVerdictRef:           "verdict",

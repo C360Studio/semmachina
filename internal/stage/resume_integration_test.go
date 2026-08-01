@@ -1111,6 +1111,7 @@ func TestTurnLoop_AStrandedTurnResumesAndCompletesAfterTheBootPass(t *testing.T)
 		t.Fatal("the persisted recovery attempt did not spawn a new adjudicator task")
 	}
 	state := world.awaitPhase(t, entityID, vocabulary.PhaseComplete)
+	world.assertNoBondCompanionWasZeroModel(t, state)
 	if got := testinfra.ObjectsFor(state, vocabulary.TurnResumeAttempts.String()); len(got) != 1 ||
 		fmt.Sprint(got[0]) != "1" {
 		t.Errorf("the resumed turn records attempts %v, want exactly [1]", got)

@@ -24,7 +24,7 @@ import (
 
 func TestMain(m *testing.M) { os.Exit(testinfra.RunTests(m)) }
 
-func TestIntegration_ArbitraryNonMysteryCompanionUsesImporterAudiencePromptAndExecutor(t *testing.T) {
+func TestIntegration_ArbitraryNonMysteryCompanionUsesImporterAudienceAndRejectsUntriggeredModelExit(t *testing.T) {
 	live := prepareLiveCompanion(t)
 	projection := awaitCompanionProjection(t, live)
 	if projection.ContextRef != live.ids.scene || projection.CompanionID != live.ids.companion || projection.HasSolution {
@@ -39,10 +39,10 @@ func TestIntegration_ArbitraryNonMysteryCompanionUsesImporterAudiencePromptAndEx
 		ID: "call-companion", Name: persona.CompanionDecisionToolName, Metadata: task.Metadata,
 		Arguments: map[string]any{"kind": "silent", "hint_level": "", "evidence_refs": []any{}, "target_ref": ""},
 	})
-	if err != nil || !result.StopLoop || result.ErrorKind != "" {
-		t.Fatalf("arbitrary companion execution result=%+v err=%v", result, err)
+	if err == nil || result.StopLoop || result.ErrorKind != agentic.ToolErrorInternal {
+		t.Fatalf("untriggered companion execution result=%+v err=%v", result, err)
 	}
-	assertCompanionDecisionReference(t, live)
+	assertNoCompanionDecisionReference(t, live)
 }
 
 type companionPlanIDs struct{ player, companion, bond, scene string }
@@ -257,13 +257,13 @@ func buildCompanionTask(
 	return task
 }
 
-func assertCompanionDecisionReference(t *testing.T, live *liveCompanion) {
+func assertNoCompanionDecisionReference(t *testing.T, live *liveCompanion) {
 	t.Helper()
 	turnState, err := live.graph.GetEntity(t.Context(), live.accepted.TurnEntityID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(testinfra.ObjectsFor(turnState, vocabulary.TurnCompanionDecisionRef.String())) != 1 {
-		t.Fatalf("turn did not receive exactly one companion decision reference: %+v", turnState.Triples)
+	if got := len(testinfra.ObjectsFor(turnState, vocabulary.TurnCompanionDecisionRef.String())); got != 0 {
+		t.Fatalf("untriggered turn received %d companion decision references: %+v", got, turnState.Triples)
 	}
 }

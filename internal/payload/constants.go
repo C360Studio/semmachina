@@ -127,6 +127,8 @@ const (
 	// CategoryCaseDecisionRecord is the entity-only interpretation artifact
 	// envelope stored behind the turn's case-decision reference.
 	CategoryCaseDecisionRecord = "case_decision_record"
+	// CategoryCompanionStageRecord is entity-only and is never bus-registered.
+	CategoryCompanionStageRecord = "companion_stage_record"
 
 	// CategoryCampaignEntity is the campaign entity's provenance envelope, and
 	// it is deliberately NOT registered: no message of this type is ever

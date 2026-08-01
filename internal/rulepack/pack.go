@@ -533,6 +533,10 @@ func checkAction(action rule.Action) error {
 				"spawn a persona is the unbounded-cognition failure this engine refuses by construction",
 			*action.MaxIterations)
 	}
+	if phase, ok := PhaseForSubject(action.Subject); ok && phase == vocabulary.PhaseCompanion && *action.MaxIterations != 1 {
+		return fmt.Errorf("declares max_iterations=%d for the automatic companion path; it must be exactly 1",
+			*action.MaxIterations)
+	}
 	return nil
 }
 

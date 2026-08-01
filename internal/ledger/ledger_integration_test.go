@@ -351,6 +351,7 @@ func (w *archiveWorld) resolvedTurn(t *testing.T, actionID string, verdict map[s
 	}
 
 	band := w.bandOf(t, entityID, rolls)
+	w.advance(t, turnID, entityID, vocabulary.PhaseCompanion)
 	w.advance(t, turnID, entityID, vocabulary.PhaseNarrating)
 	w.execute(t, w.narrationTool, agentic.ToolCall{
 		ID: "call-" + actionID, Name: persona.NarrationToolName,

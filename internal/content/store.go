@@ -460,6 +460,55 @@ func (s *Store) GetCompanionDecision(ctx context.Context, ref Ref) (*payload.Com
 	return decision, nil
 }
 
+// PutCompanionStageRecord claims the one exact prose-free stage outcome for a turn.
+func (s *Store) PutCompanionStageRecord(
+	ctx context.Context, turnEntityID string, record *payload.CompanionStageRecord,
+) (Ref, error) {
+	if record == nil {
+		return Ref{}, errors.New("storing a companion stage record requires a record")
+	}
+	if err := payload.RequireTurnEntityID(record.TurnID, turnEntityID); err != nil {
+		return Ref{}, err
+	}
+	if err := record.Validate(); err != nil {
+		return Ref{}, fmt.Errorf("refusing to store an invalid companion stage record: %w", err)
+	}
+	key, err := KeyFor(vocabulary.TurnCompanionStageRef, SubjectTurn, record.TurnID)
+	if err != nil {
+		return Ref{}, err
+	}
+	ref := Ref{Instance: s.backend.InstanceName(), Key: key}
+	if err := ref.Validate(); err != nil {
+		return Ref{}, err
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return Ref{}, fmt.Errorf("encode companion stage record: %w", err)
+	}
+	exact, ok := s.backend.(ExactResidentBackend)
+	if !ok {
+		return Ref{}, errors.New("content backend does not support exact-resident companion stage records")
+	}
+	winner, err := exact.ClaimExact(ctx, key, data)
+	if err != nil {
+		return Ref{}, fmt.Errorf("establish companion stage record at %s: %w", ref, err)
+	}
+	if !bytes.Equal(winner, data) {
+		return Ref{}, fmt.Errorf("%w: companion stage record for %s already carries different semantics",
+			ErrArtifactConflict, record.TurnID)
+	}
+	return ref, nil
+}
+
+// GetCompanionStageRecord reads one exact companion stage outcome.
+func (s *Store) GetCompanionStageRecord(ctx context.Context, ref Ref) (*payload.CompanionStageRecord, error) {
+	record := &payload.CompanionStageRecord{}
+	if err := s.get(ctx, vocabulary.TurnCompanionStageRef, ref, record); err != nil {
+		return nil, err
+	}
+	return record, nil
+}
+
 // PutAccusationRecord stores the universal barrier artifact before its
 // reference lands on the turn.
 func (s *Store) PutAccusationRecord(

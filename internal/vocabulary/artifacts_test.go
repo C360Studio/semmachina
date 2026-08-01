@@ -14,6 +14,7 @@ var stageOwnedPhases = []vocabulary.TurnPhase{
 	vocabulary.PhaseAdjudicating,
 	vocabulary.PhaseResolving,
 	vocabulary.PhaseApplying,
+	vocabulary.PhaseCompanion,
 	vocabulary.PhaseNarrating,
 }
 

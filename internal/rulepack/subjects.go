@@ -66,6 +66,7 @@ var stagePhases = []vocabulary.TurnPhase{
 	vocabulary.PhaseAdjudicating,
 	vocabulary.PhaseResolving,
 	vocabulary.PhaseApplying,
+	vocabulary.PhaseCompanion,
 	vocabulary.PhaseNarrating,
 	vocabulary.PhaseComplete,
 }

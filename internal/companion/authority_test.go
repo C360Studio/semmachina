@@ -3,6 +3,8 @@ package companion
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,9 +25,14 @@ const (
 	evidenceID  = "c360.semmachina.world1.starter.evidence.scrap"
 )
 
-type authorityGraph struct{ states map[string]*graph.EntityState }
+type authorityGraph struct {
+	mu     sync.Mutex
+	states map[string]*graph.EntityState
+}
 
 func (g *authorityGraph) GetEntity(_ context.Context, id string) (*graph.EntityState, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	state := g.states[id]
 	if state == nil {
 		return nil, graphio.ErrEntityNotFound
@@ -33,6 +40,8 @@ func (g *authorityGraph) GetEntity(_ context.Context, id string) (*graph.EntityS
 	return state.Clone(), nil
 }
 func (g *authorityGraph) EntitiesByPredicateValue(_ context.Context, predicate, value string, limit int) ([]string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	var ids []string
 	for id, state := range g.states {
 		for _, triple := range state.Triples {
@@ -46,6 +55,24 @@ func (g *authorityGraph) EntitiesByPredicateValue(_ context.Context, predicate, 
 		ids = ids[:limit]
 	}
 	return ids, nil
+}
+func (g *authorityGraph) MergeTriples(_ context.Context, id string, triples []message.Triple, _ ...graphio.MergeOption) (*graph.EntityState, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	state := g.states[id]
+	if state == nil {
+		return nil, graphio.ErrEntityNotFound
+	}
+	for _, incoming := range triples {
+		kept := state.Triples[:0]
+		for _, resident := range state.Triples {
+			if resident.Predicate != incoming.Predicate {
+				kept = append(kept, resident)
+			}
+		}
+		state.Triples = append(kept, incoming)
+	}
+	return state.Clone(), nil
 }
 
 func state(id string, kind vocabulary.EntityKind, facts ...message.Triple) *graph.EntityState {
@@ -145,5 +172,95 @@ func TestAuthority_RejectsFabricatedEntityStateWithoutImportProvenance(t *testin
 	graph.states[bondID].Triples[1].Source = "direct-entity-state-write"
 	if _, err := authority.ValidateBond(t.Context(), bondID, playerID, companionID); !errors.Is(err, ErrBondIntegrity) {
 		t.Fatalf("forged structural provenance error = %v", err)
+	}
+}
+
+func TestAuthority_BondTransactionSerializesTwoTurnsAcrossTheWholeLadderCommit(t *testing.T) {
+	authority, _, bondID := validAuthority(t)
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondStarted := make(chan struct{})
+	levels := make(chan vocabulary.HintLevel, 2)
+	errs := make(chan error, 2)
+
+	go func() {
+		err := authority.WithBondTransaction(t.Context(), bondID, playerID, companionID,
+			func(transaction *LadderTransaction) error {
+				bond := transaction.Bond()
+				levels <- bond.HintLevel
+				close(firstEntered)
+				<-releaseFirst
+				_, err := transaction.AdvanceHint(t.Context(), bond.HintLevel)
+				return err
+			})
+		errs <- err
+	}()
+	<-firstEntered
+	go func() {
+		close(secondStarted)
+		err := authority.WithBondTransaction(t.Context(), bondID, playerID, companionID,
+			func(transaction *LadderTransaction) error {
+				bond := transaction.Bond()
+				levels <- bond.HintLevel
+				_, err := transaction.AdvanceHint(t.Context(), bond.HintLevel)
+				return err
+			})
+		errs <- err
+	}()
+	<-secondStarted
+	close(releaseFirst)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, second := <-levels, <-levels
+	if first != vocabulary.HintLevelNudge || second != vocabulary.HintLevelConnect {
+		t.Fatalf("serialized emitted levels = %s then %s, want nudge then connect", first, second)
+	}
+	bond, err := authority.ValidateBond(t.Context(), bondID, playerID, companionID)
+	if err != nil || bond.HintLevel != vocabulary.HintLevelNextStep {
+		t.Fatalf("final bond = %+v err=%v", bond, err)
+	}
+}
+
+func TestAuthority_ResetSharesTheBondTransactionBoundary(t *testing.T) {
+	authority, _, bondID := validAuthority(t)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	transactionDone := make(chan error, 1)
+	resetStarted := make(chan struct{})
+	resetDone := make(chan error, 1)
+
+	go func() {
+		transactionDone <- authority.WithBondTransaction(t.Context(), bondID, playerID, companionID,
+			func(transaction *LadderTransaction) error {
+				bond := transaction.Bond()
+				close(entered)
+				<-release
+				_, err := transaction.AdvanceHint(t.Context(), bond.HintLevel)
+				return err
+			})
+	}()
+	<-entered
+	go func() {
+		close(resetStarted)
+		_, err := authority.ResetHint(t.Context(), bondID)
+		resetDone <- err
+	}()
+	<-resetStarted
+	close(release)
+	if err := <-transactionDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-resetDone; err != nil {
+		t.Fatal(err)
+	}
+	bond, err := authority.ValidateBond(t.Context(), bondID, playerID, companionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bond.HintLevel != vocabulary.HintLevelNudge {
+		t.Fatal(fmt.Sprintf("reset interleaving left hint level %s, want nudge", bond.HintLevel))
 	}
 }

@@ -43,6 +43,7 @@ func resolvedTurn(t *testing.T, store *fakeStore) *turn.Recorder {
 		vocabulary.PhaseAdjudicating,
 		vocabulary.PhaseResolving,
 		vocabulary.PhaseApplying,
+		vocabulary.PhaseCompanion,
 		vocabulary.PhaseNarrating,
 		vocabulary.PhaseComplete,
 	} {
@@ -106,6 +107,7 @@ func TestAdvance_ANonTerminalHopWritesNoResolvedPointer(t *testing.T) {
 		vocabulary.PhaseAdjudicating,
 		vocabulary.PhaseResolving,
 		vocabulary.PhaseApplying,
+		vocabulary.PhaseCompanion,
 		vocabulary.PhaseNarrating,
 	} {
 		if _, err := recorder.Advance(context.Background(), testTurnID, testTurnEntityID, phase); err != nil {

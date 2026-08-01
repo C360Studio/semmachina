@@ -412,6 +412,7 @@ func (w *egressWorld) resolvedTurn(
 		return turnID, entityID
 	}
 
+	w.advance(t, turnID, entityID, vocabulary.PhaseCompanion)
 	w.advance(t, turnID, entityID, vocabulary.PhaseNarrating)
 	w.execute(t, w.narrationTool, agentic.ToolCall{
 		ID: "call-" + actionID, Name: persona.NarrationToolName,

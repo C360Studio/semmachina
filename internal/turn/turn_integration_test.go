@@ -624,7 +624,7 @@ func TestIntegration_ACrashResumesFromTheRecordedPhaseWithoutRerunningAStage(t *
 	}
 
 	for _, phase := range []vocabulary.TurnPhase{
-		vocabulary.PhaseApplying, vocabulary.PhaseNarrating, vocabulary.PhaseComplete,
+		vocabulary.PhaseApplying, vocabulary.PhaseCompanion, vocabulary.PhaseNarrating, vocabulary.PhaseComplete,
 	} {
 		transition, err := restarted.Advance(t.Context(), acceptance.TurnID, acceptance.TurnEntityID, phase)
 		if err != nil {

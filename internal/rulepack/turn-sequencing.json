@@ -98,9 +98,9 @@
     ]
   },
   {
-    "id": "turn-committed-effects-enter-narration",
+    "id": "turn-committed-effects-enter-companion",
     "type": "expression",
-    "name": "Committed effects enter narration",
+    "name": "Committed effects enter the companion stage",
     "description": "The applier lands the batch marker LAST, after every per-entity merge succeeded, so its presence is what says the world actually changed. A batch that was refused fails the turn instead, and a failed turn is terminal — it never reaches narration.",
     "enabled": true,
     "logic": "and",
@@ -110,6 +110,25 @@
       { "field": "turn.effects.batch", "operator": "ne", "value": "", "required": false },
       { "field": "turn.knowledge.ref", "operator": "ne", "value": "", "required": false },
       { "field": "turn.accusation.ref", "operator": "ne", "value": "", "required": false }
+    ],
+    "on_enter": [
+      { "type": "publish", "subject": "semmachina.turn.companion", "max_iterations": 1 }
+    ],
+    "on_recovery": [
+      { "type": "publish", "subject": "semmachina.turn.companion", "max_iterations": 1 }
+    ]
+  },
+  {
+    "id": "turn-companion-stage-enters-narration",
+    "type": "expression",
+    "name": "A companion stage result enters narration",
+    "description": "Every companion path lands one exact structural stage record, including no bond, no trigger, and exhausted outcomes. Narration waits on that record and never on companion prose.",
+    "enabled": true,
+    "logic": "and",
+    "entity": { "pattern": "*.semmachina.*.*.turn.*" },
+    "conditions": [
+      { "field": "turn.phase.current", "operator": "eq", "value": "companion", "required": false },
+      { "field": "turn.companion-stage.ref", "operator": "ne", "value": "", "required": false }
     ],
     "on_enter": [
       { "type": "publish", "subject": "semmachina.turn.narrating", "max_iterations": 3 }
@@ -173,7 +192,7 @@
       {
         "field": "turn.phase.current",
         "operator": "transition",
-        "from": ["accepted", "interpreting", "adjudicating", "resolving", "applying", "narrating"],
+        "from": ["accepted", "interpreting", "adjudicating", "resolving", "applying", "companion", "narrating"],
         "value": "failed",
         "required": false
       }

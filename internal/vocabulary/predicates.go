@@ -40,6 +40,12 @@ const (
 	TurnCaseDecisionKind Predicate = "turn.case-decision.kind"
 	// TurnCompanionDecisionRef references the prose-free companion decision artifact.
 	TurnCompanionDecisionRef Predicate = "turn.companion-decision.ref"
+	// TurnCompanionStageRef references the exact entity-only companion stage record.
+	TurnCompanionStageRef Predicate = "turn.companion-stage.ref"
+	// TurnCompanionTriggerKind records the closed selected trigger before work begins.
+	TurnCompanionTriggerKind Predicate = "turn.companion.trigger-kind"
+	// TurnCompanionTriggerSource records which structural fact selected the trigger.
+	TurnCompanionTriggerSource Predicate = "turn.companion.trigger-source"
 	// TurnKnowledgeRef witnesses the deterministic knowledge batch committed for the turn.
 	TurnKnowledgeRef Predicate = "turn.knowledge.ref"
 	// TurnAccusationRef references the complete universal accusation record.
@@ -365,6 +371,9 @@ var allPredicates = []Predicate{
 	TurnCaseDecisionRef,
 	TurnCaseDecisionKind,
 	TurnCompanionDecisionRef,
+	TurnCompanionStageRef,
+	TurnCompanionTriggerKind,
+	TurnCompanionTriggerSource,
 	TurnKnowledgeRef,
 	TurnAccusationRef,
 	TurnVerdictPlausibility,

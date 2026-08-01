@@ -374,6 +374,7 @@ func TestReconcile_RetriggersAStrandedStageAndCountsTheAttempt(t *testing.T) {
 		vocabulary.PhaseAdjudicating,
 		vocabulary.PhaseResolving,
 		vocabulary.PhaseApplying,
+		vocabulary.PhaseCompanion,
 		vocabulary.PhaseNarrating,
 	} {
 		t.Run(string(phase), func(t *testing.T) {

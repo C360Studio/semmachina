@@ -246,6 +246,8 @@ const (
 	PhaseResolving TurnPhase = "resolving"
 	// PhaseApplying means the effect applier is running.
 	PhaseApplying TurnPhase = "applying"
+	// PhaseCompanion is the bounded structural companion intervention stage.
+	PhaseCompanion TurnPhase = "companion"
 	// PhaseNarrating means the narrator persona is running.
 	PhaseNarrating TurnPhase = "narrating"
 	// PhaseComplete is a terminal success.
@@ -257,7 +259,7 @@ const (
 
 var turnPhaseEnum = newEnum(KindTurnPhase,
 	PhaseAccepted, PhaseInterpreting, PhaseAdjudicating, PhaseResolving, PhaseApplying,
-	PhaseNarrating, PhaseComplete, PhaseFailed)
+	PhaseCompanion, PhaseNarrating, PhaseComplete, PhaseFailed)
 
 // TurnPhases returns the closed turn-phase set.
 func TurnPhases() []TurnPhase { return turnPhaseEnum.all() }

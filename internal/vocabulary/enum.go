@@ -62,6 +62,10 @@ const (
 	KindCompanionPolicy Kind = "companion_policy"
 	// KindHintLevel is the bounded companion hint ladder.
 	KindHintLevel Kind = "hint_level"
+	// KindCompanionTrigger is the closed reason the companion stage may act.
+	KindCompanionTrigger Kind = "companion_trigger"
+	// KindCompanionTriggerSource identifies the structural fact that selected a trigger.
+	KindCompanionTriggerSource Kind = "companion_trigger_source"
 	// KindCasePhase is the durable mystery-case lifecycle phase.
 	KindCasePhase Kind = "case_phase"
 	// KindCaseLifecycleEventKind is the closed receipt vocabulary that advances a case.
@@ -152,6 +156,8 @@ var registeredEnums = []enumSet{
 	beliefStanceEnum,
 	companionPolicyEnum,
 	hintLevelEnum,
+	companionTriggerEnum,
+	companionTriggerSourceEnum,
 	casePhaseEnum,
 	caseLifecycleEventKindEnum,
 }

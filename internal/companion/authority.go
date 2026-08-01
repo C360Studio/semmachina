@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
@@ -28,6 +30,10 @@ type Graph interface {
 	EntitiesByPredicateValue(context.Context, string, string, int) ([]string, error)
 }
 
+type graphWriter interface {
+	MergeTriples(context.Context, string, []message.Triple, ...graphio.MergeOption) (*graph.EntityState, error)
+}
+
 var _ Graph = (*graphio.Store)(nil)
 
 // Bond is the verified structural relationship used by every authorization path.
@@ -37,8 +43,34 @@ type Bond struct {
 	HintLevel                 vocabulary.HintLevel
 }
 
+// LadderTransaction is the single process-local critical section for one
+// bond's read/decide/commit sequence. Callers must not retain it after the
+// callback passed to WithBondTransaction returns.
+type LadderTransaction struct {
+	authority *Authority
+	bond      *Bond
+}
+
+// Bond returns the freshly validated bond snapshot owned by this transaction.
+func (t *LadderTransaction) Bond() Bond { return *t.bond }
+
+// AdvanceHint advances the ladder without trying to acquire the bond lock a
+// second time.
+func (t *LadderTransaction) AdvanceHint(
+	ctx context.Context, emitted vocabulary.HintLevel,
+) (*Bond, error) {
+	return t.authority.advanceHintLocked(ctx, t.bond, emitted)
+}
+
 // Authority is the one graph-backed interpreter of companion bonds.
 type Authority struct{ graph Graph }
+
+var bondLocks sync.Map
+
+func lockForBond(id string) *sync.Mutex {
+	lock, _ := bondLocks.LoadOrStore(id, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
 
 // NewAuthority builds the bond authority.
 func NewAuthority(reader Graph) (*Authority, error) {
@@ -46,6 +78,27 @@ func NewAuthority(reader Graph) (*Authority, error) {
 		return nil, errors.New("companion authority requires a graph reader")
 	}
 	return &Authority{graph: reader}, nil
+}
+
+// WithBondTransaction serializes the complete process-local transaction for a
+// bond. The callback begins with a fresh authoritative validation and remains
+// mutually exclusive with hint advances and resets until it returns. This
+// relies on one process per world; it is not an active-active CAS claim.
+func (a *Authority) WithBondTransaction(
+	ctx context.Context, bondID, expectedPlayerID, expectedCompanionID string,
+	fn func(*LadderTransaction) error,
+) error {
+	if fn == nil {
+		return errors.New("companion bond transaction requires a callback")
+	}
+	lock := lockForBond(bondID)
+	lock.Lock()
+	defer lock.Unlock()
+	bond, err := a.ValidateBond(ctx, bondID, expectedPlayerID, expectedCompanionID)
+	if err != nil {
+		return err
+	}
+	return fn(&LadderTransaction{authority: a, bond: bond})
 }
 
 // ValidateCompanionBond implements epistemic.CompanionBondValidator using the
@@ -184,6 +237,66 @@ func (a *Authority) ValidateBond(
 		return nil, integrity("bond id %s does not match deterministic identity %s", bondID, expectedID)
 	}
 	return &Bond{ID: bondID, PlayerID: playerID, CharacterID: companionID, Policy: policy, HintLevel: hint}, nil
+}
+
+func (a *Authority) advanceHintLocked(
+	ctx context.Context, bond *Bond, emitted vocabulary.HintLevel,
+) (*Bond, error) {
+	_, next, err := NextHintLevel(emitted)
+	if err != nil {
+		return nil, err
+	}
+	if bond.HintLevel != emitted {
+		return nil, integrity("bond %s hint level is %s while committing decision at %s",
+			bond.ID, bond.HintLevel, emitted)
+	}
+	if next == emitted {
+		return bond, nil
+	}
+	writer, ok := a.graph.(graphWriter)
+	if !ok {
+		return nil, errors.New("companion authority graph is read-only; hint level cannot advance")
+	}
+	_, err = writer.MergeTriples(ctx, bond.ID, []message.Triple{{
+		Subject: bond.ID, Predicate: vocabulary.CompanionBondHintLevel.String(), Object: string(next),
+		Source: "companion-hint-ladder", Timestamp: time.Now().UTC(), Confidence: 1, Context: bond.ID,
+	}})
+	if err != nil {
+		return nil, fmt.Errorf("advance companion hint level: %w", err)
+	}
+	bond.HintLevel = next
+	return bond, nil
+}
+
+// ResetHint returns the ladder to nudge. It shares the transaction's keyed critical section.
+func (a *Authority) ResetHint(ctx context.Context, bondID string) (*Bond, error) {
+	lock := lockForBond(bondID)
+	lock.Lock()
+	defer lock.Unlock()
+	bond, err := a.ValidateBond(ctx, bondID, "", "")
+	if err != nil {
+		return nil, err
+	}
+	return a.resetHintLocked(ctx, bond)
+}
+
+func (a *Authority) resetHintLocked(ctx context.Context, bond *Bond) (*Bond, error) {
+	if bond.HintLevel == vocabulary.HintLevelNudge {
+		return bond, nil
+	}
+	writer, ok := a.graph.(graphWriter)
+	if !ok {
+		return nil, errors.New("companion authority graph is read-only; hint level cannot reset")
+	}
+	_, err := writer.MergeTriples(ctx, bond.ID, []message.Triple{{
+		Subject: bond.ID, Predicate: vocabulary.CompanionBondHintLevel.String(), Object: string(vocabulary.HintLevelNudge),
+		Source: "companion-hint-ladder", Timestamp: time.Now().UTC(), Confidence: 1, Context: bond.ID,
+	}})
+	if err != nil {
+		return nil, fmt.Errorf("reset companion hint level: %w", err)
+	}
+	bond.HintLevel = vocabulary.HintLevelNudge
+	return bond, nil
 }
 
 // Authorized implements knowledge.ShareAuthorizer. The evidence parameter is

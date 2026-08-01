@@ -85,7 +85,7 @@ func TestTurnState_AnAcceptedRecordWithNoActionReferenceIsRefused(t *testing.T) 
 func TestTurnState_OrdinaryTransitionWritesOnlyThePhase(t *testing.T) {
 	for _, phase := range []vocabulary.TurnPhase{
 		vocabulary.PhaseAdjudicating, vocabulary.PhaseResolving,
-		vocabulary.PhaseApplying, vocabulary.PhaseNarrating, vocabulary.PhaseComplete,
+		vocabulary.PhaseApplying, vocabulary.PhaseCompanion, vocabulary.PhaseNarrating, vocabulary.PhaseComplete,
 	} {
 		t.Run(string(phase), func(t *testing.T) {
 			triples, err := phaseState(phase).Triples(testTurnEntity, "turn-recorder", testTime)

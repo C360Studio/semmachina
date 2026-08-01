@@ -317,7 +317,7 @@ func (l *liveGateway) advanceToComplete(t *testing.T, turnID, turnEntityID strin
 	t.Helper()
 	for _, phase := range []vocabulary.TurnPhase{
 		vocabulary.PhaseResolving, vocabulary.PhaseApplying,
-		vocabulary.PhaseNarrating, vocabulary.PhaseComplete,
+		vocabulary.PhaseCompanion, vocabulary.PhaseNarrating, vocabulary.PhaseComplete,
 	} {
 		transition, err := l.recorder.Advance(t.Context(), turnID, turnEntityID, phase)
 		if err != nil {
@@ -398,7 +398,7 @@ func (l *liveGateway) advanceToCompleteFrom(t *testing.T, turnID, turnEntityID s
 	for _, phase := range []vocabulary.TurnPhase{
 		vocabulary.PhaseInterpreting, vocabulary.PhaseAdjudicating,
 		vocabulary.PhaseResolving, vocabulary.PhaseApplying,
-		vocabulary.PhaseNarrating, vocabulary.PhaseComplete,
+		vocabulary.PhaseCompanion, vocabulary.PhaseNarrating, vocabulary.PhaseComplete,
 	} {
 		if _, err := l.recorder.Advance(t.Context(), turnID, turnEntityID, phase); err != nil {
 			t.Fatalf("Advance to %q: %v", phase, err)

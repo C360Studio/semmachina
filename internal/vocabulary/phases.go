@@ -33,9 +33,10 @@ var (
 		PhaseAdjudicating: 2,
 		PhaseResolving:    3,
 		PhaseApplying:     4,
-		PhaseNarrating:    5,
-		PhaseComplete:     6,
-		PhaseFailed:       6,
+		PhaseCompanion:    5,
+		PhaseNarrating:    6,
+		PhaseComplete:     7,
+		PhaseFailed:       7,
 	}
 
 	// phasePredecessors is the legal from-set for each phase.
@@ -57,11 +58,12 @@ var (
 		PhaseAdjudicating: {PhaseInterpreting},
 		PhaseResolving:    {PhaseAdjudicating},
 		PhaseApplying:     {PhaseAdjudicating, PhaseResolving},
-		PhaseNarrating:    {PhaseApplying},
+		PhaseCompanion:    {PhaseApplying},
+		PhaseNarrating:    {PhaseCompanion},
 		PhaseComplete:     {PhaseNarrating},
 		PhaseFailed: {
 			PhaseAccepted, PhaseInterpreting, PhaseAdjudicating, PhaseResolving,
-			PhaseApplying, PhaseNarrating,
+			PhaseApplying, PhaseCompanion, PhaseNarrating,
 		},
 	}
 )

@@ -758,7 +758,7 @@ func TestAdvance_WalksTheWholeTurnAndLeavesOnePhase(t *testing.T) {
 
 	advanceTo(t, recorder, acceptance,
 		vocabulary.PhaseAdjudicating, vocabulary.PhaseResolving,
-		vocabulary.PhaseApplying, vocabulary.PhaseNarrating, vocabulary.PhaseComplete)
+		vocabulary.PhaseApplying, vocabulary.PhaseCompanion, vocabulary.PhaseNarrating, vocabulary.PhaseComplete)
 
 	stored, _ := store.GetEntity(t.Context(), acceptance.TurnEntityID)
 	phases := objectsFor(stored, vocabulary.TurnPhaseCurrent)
@@ -859,7 +859,7 @@ func TestAdvance_ATerminalTurnDeclinesEverything(t *testing.T) {
 			store, recorder, acceptance := acceptedTurn(t)
 			advanceTo(t, recorder, acceptance,
 				vocabulary.PhaseAdjudicating, vocabulary.PhaseResolving,
-				vocabulary.PhaseApplying, vocabulary.PhaseNarrating)
+				vocabulary.PhaseApplying, vocabulary.PhaseCompanion, vocabulary.PhaseNarrating)
 			if ending == vocabulary.PhaseComplete {
 				advanceTo(t, recorder, acceptance, vocabulary.PhaseComplete)
 			} else if _, err := recorder.Fail(t.Context(), acceptance.TurnID, acceptance.TurnEntityID,
@@ -870,7 +870,7 @@ func TestAdvance_ATerminalTurnDeclinesEverything(t *testing.T) {
 			before := store.merges
 			for _, to := range []vocabulary.TurnPhase{
 				vocabulary.PhaseAdjudicating, vocabulary.PhaseResolving,
-				vocabulary.PhaseApplying, vocabulary.PhaseNarrating,
+				vocabulary.PhaseApplying, vocabulary.PhaseCompanion, vocabulary.PhaseNarrating,
 			} {
 				transition, err := recorder.Advance(t.Context(), acceptance.TurnID, acceptance.TurnEntityID, to)
 				if err != nil {
@@ -970,7 +970,7 @@ func TestAdvance_AnUnknownPhaseIsLoudEvenOnATerminalTurn(t *testing.T) {
 	_, recorder, acceptance := acceptedTurn(t)
 	advanceTo(t, recorder, acceptance,
 		vocabulary.PhaseAdjudicating, vocabulary.PhaseResolving,
-		vocabulary.PhaseApplying, vocabulary.PhaseNarrating, vocabulary.PhaseComplete)
+		vocabulary.PhaseApplying, vocabulary.PhaseCompanion, vocabulary.PhaseNarrating, vocabulary.PhaseComplete)
 
 	// Anti-vacuity: a real phase at this point is genuinely declined, so the
 	// difference below is membership and nothing else.
@@ -1133,7 +1133,7 @@ func TestFail_ATerminalTurnKeepsItsFirstOutcome(t *testing.T) {
 func TestFail_IsReachableFromEveryNonTerminalPhase(t *testing.T) {
 	walk := []vocabulary.TurnPhase{
 		vocabulary.PhaseAdjudicating, vocabulary.PhaseResolving,
-		vocabulary.PhaseApplying, vocabulary.PhaseNarrating,
+		vocabulary.PhaseApplying, vocabulary.PhaseCompanion, vocabulary.PhaseNarrating,
 	}
 	for idx := range append([]vocabulary.TurnPhase{vocabulary.PhaseAccepted}, walk...) {
 		_, recorder, acceptance := acceptedTurn(t)

@@ -195,6 +195,20 @@ func closedSets() []closedSet {
 			sampleBad: "solution",
 		},
 		{
+			kind:      vocabulary.KindCompanionTrigger,
+			members:   strs(vocabulary.CompanionTriggers()),
+			parse:     asStringParser(vocabulary.ParseCompanionTrigger),
+			nearMiss:  []string{"hint", "player_hint", "Warning"},
+			sampleBad: "hint",
+		},
+		{
+			kind:      vocabulary.KindCompanionTriggerSource,
+			members:   strs(vocabulary.CompanionTriggerSources()),
+			parse:     asStringParser(vocabulary.ParseCompanionTriggerSource),
+			nearMiss:  []string{"case_decision", "risk", "Resolved-Risk"},
+			sampleBad: "risk",
+		},
+		{
 			kind:      vocabulary.KindCasePhase,
 			members:   strs(vocabulary.CasePhases()),
 			parse:     asStringParser(vocabulary.ParseCasePhase),

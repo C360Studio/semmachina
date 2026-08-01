@@ -26,7 +26,14 @@ const (
 type decisionStore struct {
 	puts     int
 	decision *payload.CompanionDecision
+	record   *payload.CompanionStageRecord
 	err      error
+}
+
+func (s *decisionStore) PutCompanionStageRecord(_ context.Context, _ string, r *payload.CompanionStageRecord) (content.Ref, error) {
+	stored := *r
+	s.record = &stored
+	return content.Ref{Instance: "TEST", Key: "turn/turn-act-1/companion-stage"}, nil
 }
 
 func (s *decisionStore) PutCompanionDecision(_ context.Context, _ string, d *payload.CompanionDecision) (content.Ref, error) {
@@ -79,7 +86,15 @@ func companionMetadata(t *testing.T, bondID string) map[string]any {
 
 func newDecisionExecutor(t *testing.T, projection decisionProjector) (*Executor, *decisionStore, *decisionWriter, string) {
 	t.Helper()
-	authority, _, bondID := validAuthority(t)
+	authority, graphStore, bondID := validAuthority(t)
+	graphStore.states[bondID].Triples[3].Object = string(vocabulary.CompanionPolicyBoundedInitiative)
+	graphStore.states[turnEntityID] = &graph.EntityState{ID: turnEntityID, Triples: []message.Triple{
+		{Subject: turnEntityID, Predicate: vocabulary.TurnRollBand.String(), Object: string(vocabulary.BandMiss)},
+		{Subject: turnEntityID, Predicate: vocabulary.TurnVerdictRisk.String(), Object: string(vocabulary.RiskHigh)},
+		{Subject: turnEntityID, Predicate: vocabulary.TurnVerdictConsequence.String(), Object: string(vocabulary.ConsequenceHarm)},
+		{Subject: turnEntityID, Predicate: vocabulary.TurnCompanionTriggerKind.String(), Object: string(vocabulary.CompanionTriggerWarning)},
+		{Subject: turnEntityID, Predicate: vocabulary.TurnCompanionTriggerSource.String(), Object: string(vocabulary.CompanionTriggerSourceResolvedRisk)},
+	}}
 	store := &decisionStore{}
 	writer := &decisionWriter{}
 	executor, err := NewExecutor(store, writer, authority, projection)
@@ -110,7 +125,7 @@ func TestExecutor_InjectsIdentityStoresThenWritesReference(t *testing.T) {
 	executor, store, writer, bondID := newDecisionExecutor(t, decisionProjector{evidence: evidenceID})
 	result, err := executor.Execute(t.Context(), agentic.ToolCall{
 		ID: "call-1", Name: persona.CompanionDecisionToolName, Metadata: companionMetadata(t, bondID),
-		Arguments: map[string]any{"kind": "hint", "hint_level": "nudge", "evidence_refs": []any{evidenceID}, "target_ref": locationID},
+		Arguments: map[string]any{"kind": "warning", "hint_level": "", "evidence_refs": []any{evidenceID}, "target_ref": locationID},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -163,5 +178,20 @@ func TestExecutor_ResidentDecisionCorruptionIsPermanent(t *testing.T) {
 	})
 	if err == nil || result.ErrorKind != agentic.ToolErrorInternal || writer.merges != 0 {
 		t.Fatalf("resident corruption result=%+v err=%v merges=%d", result, err, writer.merges)
+	}
+}
+
+func TestExecutor_ExhaustionCommitsSilentStageResultInsteadOfFailingTurn(t *testing.T) {
+	executor, store, writer, bondID := newDecisionExecutor(t, decisionProjector{})
+	identity, err := persona.CompanionIdentityFrom(companionMetadata(t, bondID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := executor.Exhaust(t.Context(), identity); err != nil {
+		t.Fatal(err)
+	}
+	if store.decision == nil || store.decision.Kind != payload.CompanionDecisionSilent ||
+		store.record == nil || store.record.Status != payload.CompanionStageExhausted || writer.merges != 1 {
+		t.Fatalf("decision=%+v record=%+v merges=%d", store.decision, store.record, writer.merges)
 	}
 }

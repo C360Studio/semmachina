@@ -116,14 +116,33 @@
 - [ ] 8.1 Add failing tests for `nudge → connect → next-step`, final-level bounding, exact
   reset on a newly committed companion knowledge grant, and no reset on duplicate or
   rejected grants
-- [ ] 8.2 Implement deterministic `HintLadder` selection using companion-known evidence
-- [ ] 8.3 Add structured automatic-intervention triggers whose rule-owned nonzero cap is
+  - Ladder progression, final-level saturation, deterministic projection-bounded evidence
+    selection, and serialized advances are implemented. The knowledge-driven reset remains
+    blocked: it requires a revision-bearing authoritative entity read plus
+    expected-revision/conditional graph mutation. This reset gap belongs to 8.1, not 8.5,
+    and no external SemStreams issue has been filed for it.
+  - The current keyed bond lock is process-local and assumes one process per world;
+    active-active ladder compare-and-swap is unsupported.
+- [x] 8.2 Implement deterministic `HintLadder` selection using companion-known evidence
+  - Selection intersects exact companion knowledge records with the authorized companion
+    projection, sorts and deduplicates evidence, and applies the fixed per-level bound.
+- [x] 8.3 Add structured automatic-intervention triggers whose rule-owned nonzero cap is
   the hard ceiling, with bond/component policy allowed only to tighten admission and a
   silent exhaust path
-- [ ] 8.4 Add the durable `companion` turn stage and deterministic no-model-call artifact
+  - Closed player-hint and resolved-risk triggers are implemented; the automatic rule and
+    companion persona are capped at one, and cap exhaustion commits a terminal silent
+    outcome.
+- [x] 8.4 Add the durable `companion` turn stage and deterministic no-model-call artifact
   when no active bond or trigger applies
+  - Applying now crosses an artifact-gated companion stage before narration. No-bond and
+    no-trigger paths commit exact-resident structural no-op records without a model task.
 - [ ] 8.5 Add restart and duplicate-delivery tests proving one companion call and one
   resolution at most per triggering turn
+  - One logical task publication is identified deterministically per turn, and one
+    exact-resident companion stage outcome plus graph reference is proven across retries.
+    Literal at-most-one provider call across a process crash remains blocked: it requires
+    a durable atomic `TaskID → LoopID → initial RequestID` claim and idempotent request
+    publication. No external SemStreams issue has been filed for this gap.
 
 ## 9. Narration and Player Protocol
 

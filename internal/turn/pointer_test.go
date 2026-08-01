@@ -74,7 +74,7 @@ func TestAccept_TheSecondTurnReplacesThePointerRatherThanAddingOne(t *testing.T)
 	store, recorder, first := acceptedTurn(t)
 	advanceTo(t, recorder, first,
 		vocabulary.PhaseAdjudicating, vocabulary.PhaseResolving,
-		vocabulary.PhaseApplying, vocabulary.PhaseNarrating, vocabulary.PhaseComplete)
+		vocabulary.PhaseApplying, vocabulary.PhaseCompanion, vocabulary.PhaseNarrating, vocabulary.PhaseComplete)
 
 	second := testAction()
 	second.ActionID = "act-2"
@@ -152,7 +152,7 @@ func TestAccept_ARedeliveryOfAFinishedTurnDoesNotRunThePointerBackwards(t *testi
 	store, recorder, first := acceptedTurn(t)
 	advanceTo(t, recorder, first,
 		vocabulary.PhaseAdjudicating, vocabulary.PhaseResolving,
-		vocabulary.PhaseApplying, vocabulary.PhaseNarrating, vocabulary.PhaseComplete)
+		vocabulary.PhaseApplying, vocabulary.PhaseCompanion, vocabulary.PhaseNarrating, vocabulary.PhaseComplete)
 
 	second := testAction()
 	second.ActionID = "act-2"
@@ -275,7 +275,7 @@ func TestAccept_TheBackwardsGuardStillLetsTheCrashGapHeal(t *testing.T) {
 	store, recorder, first := acceptedTurn(t)
 	advanceTo(t, recorder, first,
 		vocabulary.PhaseAdjudicating, vocabulary.PhaseResolving,
-		vocabulary.PhaseApplying, vocabulary.PhaseNarrating, vocabulary.PhaseComplete)
+		vocabulary.PhaseApplying, vocabulary.PhaseCompanion, vocabulary.PhaseNarrating, vocabulary.PhaseComplete)
 
 	// The next turn's pointer write fails, leaving the player pointing at the
 	// finished one.

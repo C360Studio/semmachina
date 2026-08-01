@@ -125,9 +125,10 @@ type Engine struct {
 
 	instantiation campaign.Instantiation
 
-	tools     *agentictools.ExecutorRegistry
-	gatewaySv *gateway.Gateway
-	listener  net.Listener
+	tools            *agentictools.ExecutorRegistry
+	companionExhaust *companion.Executor
+	gatewaySv        *gateway.Gateway
+	listener         net.Listener
 
 	// components are stopped in reverse start order.
 	components []namedComponent
@@ -713,6 +714,7 @@ func (e *Engine) startAgenticLoop(ctx context.Context) error {
 	if err := registry.RegisterExecutor(companionExecutor); err != nil {
 		return fmt.Errorf("register the %s tool: %w", persona.CompanionDecisionToolName, err)
 	}
+	e.companionExhaust = companionExecutor
 	e.tools = registry
 
 	// The tool executor, bound before anything can publish a call for it.
@@ -846,11 +848,11 @@ func (e *Engine) startKnowledge(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	granter, err := knowledge.NewGranter(e.graph, e.content)
+	authority, err := companion.NewAuthority(e.graph)
 	if err != nil {
 		return err
 	}
-	authority, err := companion.NewAuthority(e.graph)
+	granter, err := knowledge.NewGranter(e.graph, e.content)
 	if err != nil {
 		return err
 	}
@@ -970,8 +972,13 @@ func (e *Engine) startStages(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	authority, err := companion.NewAuthority(e.graph)
+	if err != nil {
+		return err
+	}
 	projector, err := epistemic.NewProjector(assembler, e.graph, scope,
-		epistemic.WithDenouementAuthorizer(denouement))
+		epistemic.WithDenouementAuthorizer(denouement),
+		epistemic.WithCompanionBondValidator(authority))
 	if err != nil {
 		return err
 	}
@@ -1011,6 +1018,11 @@ func (e *Engine) startStages(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	companionStage, err := stage.NewCompanionStage(
+		e.recorder, e.graph, e.content, authority, projector, builder, e.client)
+	if err != nil {
+		return err
+	}
 
 	roller, err := dice.NewRoller(vocabulary.Mechanic2d6PbtaV1)
 	if err != nil {
@@ -1043,7 +1055,7 @@ func (e *Engine) startStages(ctx context.Context) error {
 	}
 
 	runner, err := stage.NewRunner(e.client, e.client,
-		[]stage.Stage{casekeeper, adjudicator, diceStage, effector, narrator, completer},
+		[]stage.Stage{casekeeper, adjudicator, diceStage, effector, companionStage, narrator, completer},
 		stage.WithLogger(e.log()))
 	if err != nil {
 		return err
@@ -1092,7 +1104,7 @@ func (e *Engine) epistemicScope() (epistemic.Scope, error) {
 func (e *Engine) startLoopFailures(ctx context.Context) error {
 	watcher, err := stage.NewLoopFailureWatcher(
 		e.client, e.client, message.NewDecoder(e.cfg.Registry), e.recorder, e.content,
-		stage.WithLoopFailureLogger(e.log()))
+		stage.WithLoopFailureLogger(e.log()), stage.WithCompanionExhauster(e.companionExhaust))
 	if err != nil {
 		return err
 	}

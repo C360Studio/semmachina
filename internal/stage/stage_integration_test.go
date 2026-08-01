@@ -24,6 +24,7 @@ import (
 	"github.com/c360studio/semmachina/internal/accusation"
 	"github.com/c360studio/semmachina/internal/campaign"
 	"github.com/c360studio/semmachina/internal/caseflow"
+	"github.com/c360studio/semmachina/internal/companion"
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/dice"
 	"github.com/c360studio/semmachina/internal/effect"
@@ -334,7 +335,12 @@ func (l *loop) startStages(t *testing.T, artifacts *content.Store) {
 	if err != nil {
 		t.Fatalf("NewScope: %v", err)
 	}
-	projector, err := epistemic.NewProjector(assembler, l.graph, scope)
+	authority, err := companion.NewAuthority(l.graph)
+	if err != nil {
+		t.Fatalf("NewAuthority(companion): %v", err)
+	}
+	projector, err := epistemic.NewProjector(assembler, l.graph, scope,
+		epistemic.WithCompanionBondValidator(authority))
 	if err != nil {
 		t.Fatalf("NewProjector: %v", err)
 	}
@@ -393,6 +399,11 @@ func (l *loop) startStages(t *testing.T, artifacts *content.Store) {
 	if err != nil {
 		t.Fatalf("NewEffector: %v", err)
 	}
+	companionStage, err := stage.NewCompanionStage(
+		l.recorder, l.graph, artifacts, authority, projector, builder, l.harness.Client)
+	if err != nil {
+		t.Fatalf("NewCompanionStage: %v", err)
+	}
 	completer, err := stage.NewCompleter(l.recorder)
 	if err != nil {
 		t.Fatalf("NewCompleter: %v", err)
@@ -400,7 +411,7 @@ func (l *loop) startStages(t *testing.T, artifacts *content.Store) {
 
 	runner, err := stage.NewRunner(
 		l.harness.Client, l.harness.Client,
-		l.runs.wrap(casekeeper, adjudicator, diceStage, effectStage, narrator, completer),
+		l.runs.wrap(casekeeper, adjudicator, diceStage, effectStage, companionStage, narrator, completer),
 		stage.WithAckTimings(20*time.Second, 5*time.Second),
 	)
 	if err != nil {
@@ -704,6 +715,38 @@ func (l *loop) awaitApplyingBarrierInputs(t *testing.T, entityID string) *graph.
 	return nil
 }
 
+func (l *loop) assertNoBondCompanionWasZeroModel(t *testing.T, state *graph.EntityState) {
+	t.Helper()
+	refs := testinfra.ObjectsFor(state, vocabulary.TurnCompanionStageRef.String())
+	if len(refs) != 1 {
+		t.Fatalf("completed turn holds companion stage refs %v, want exactly one", refs)
+	}
+	ref, err := content.ParseRef(fmt.Sprint(refs[0]))
+	if err != nil {
+		t.Fatalf("parse companion stage ref: %v", err)
+	}
+	record, err := l.content.GetCompanionStageRecord(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("read companion stage record: %v", err)
+	}
+	if record.Status != payload.CompanionStageNoActiveBond || record.DecisionRef != "" {
+		t.Fatalf("unbonded companion stage = %+v, want exact no-active-bond without a decision", record)
+	}
+	if count := l.runs.snapshot()[vocabulary.PhaseCompanion]; count != 1 {
+		t.Fatalf("companion stage ran %d times, want exactly one", count)
+	}
+	for {
+		select {
+		case task := <-l.spawned:
+			if task.Role == string(persona.RoleCompanion) {
+				t.Fatalf("unbonded companion path spawned model task %s", task.TaskID)
+			}
+		default:
+			return
+		}
+	}
+}
+
 func TestTurnLoop_AccusationConsumerCompletesUniversalBarrierOutsideStagePhases(t *testing.T) {
 	gate := newGatedDecisionStore()
 	world := startLoopWithAccusationGate(t, gate)
@@ -730,6 +773,7 @@ func TestTurnLoop_AccusationConsumerCompletesUniversalBarrierOutsideStagePhases(
 
 	gate.open()
 	state = world.awaitPhase(t, entityID, vocabulary.PhaseComplete)
+	world.assertNoBondCompanionWasZeroModel(t, state)
 	refs := testinfra.ObjectsFor(state, vocabulary.TurnAccusationRef.String())
 	if len(refs) != 1 {
 		t.Fatalf("ordinary turn holds accusation refs %v, want exactly one", refs)

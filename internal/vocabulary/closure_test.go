@@ -132,6 +132,8 @@ func enumerations() map[string][]string {
 		"BeliefStance":           sets[vocabulary.KindBeliefStance],
 		"CompanionPolicy":        sets[vocabulary.KindCompanionPolicy],
 		"HintLevel":              sets[vocabulary.KindHintLevel],
+		"CompanionTriggerKind":   sets[vocabulary.KindCompanionTrigger],
+		"CompanionTriggerSource": sets[vocabulary.KindCompanionTriggerSource],
 		"CasePhase":              sets[vocabulary.KindCasePhase],
 		"CaseLifecycleEventKind": sets[vocabulary.KindCaseLifecycleEventKind],
 		"Predicate":              strs(vocabulary.AllPredicates()),

@@ -92,7 +92,9 @@ const (
 	NarratorMaxIterations = 2
 	// CasekeeperMaxIterations permits one exit and two correction rounds.
 	CasekeeperMaxIterations = 3
-	CompanionMaxIterations  = 3
+	// CompanionMaxIterations is exactly one for automatic warnings. Explicit
+	// player hints bypass the model entirely.
+	CompanionMaxIterations = 1
 
 	// AdjudicatorTimeout bounds one adjudication's model calls.
 	AdjudicatorTimeout = 90 * time.Second
