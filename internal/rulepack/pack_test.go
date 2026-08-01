@@ -362,6 +362,7 @@ func TestPack_InterpretationFansOutToAdjudicationAndKnowledge(t *testing.T) {
 		for _, subject := range []string{
 			rulepack.StageSubjectPrefix + string(vocabulary.PhaseAdjudicating),
 			rulepack.SubjectKnowledge,
+			rulepack.SubjectAccusation,
 		} {
 			if !published[subject] {
 				t.Errorf("interpretation does not publish %s in both entry and recovery", subject)
@@ -370,7 +371,7 @@ func TestPack_InterpretationFansOutToAdjudicationAndKnowledge(t *testing.T) {
 	}
 }
 
-func TestPack_ApplicationFansInEffectsAndKnowledgeBeforeNarration(t *testing.T) {
+func TestPack_ApplicationFansInEffectsKnowledgeAndAccusationBeforeNarration(t *testing.T) {
 	declare(t)
 	definitions, err := rulepack.Definitions()
 	if err != nil {
@@ -384,7 +385,7 @@ func TestPack_ApplicationFansInEffectsAndKnowledgeBeforeNarration(t *testing.T) 
 		}
 	}
 	for _, predicate := range []vocabulary.Predicate{
-		vocabulary.TurnEffectsBatch, vocabulary.TurnKnowledgeRef,
+		vocabulary.TurnEffectsBatch, vocabulary.TurnKnowledgeRef, vocabulary.TurnAccusationRef,
 	} {
 		if !conditions[predicate.String()] {
 			t.Errorf("narration is not gated on %s", predicate)
@@ -403,6 +404,21 @@ func TestSubjectKnowledgeIsAuxiliaryRatherThanAStagePhase(t *testing.T) {
 		}
 		if subject == rulepack.SubjectKnowledge {
 			t.Fatalf("knowledge appears in StagePhases as %s", phase)
+		}
+	}
+}
+
+func TestSubjectAccusationIsAuxiliaryRatherThanAStagePhase(t *testing.T) {
+	if phase, ok := rulepack.PhaseForSubject(rulepack.SubjectAccusation); ok {
+		t.Fatalf("accusation subject maps to stage phase %q", phase)
+	}
+	for _, phase := range rulepack.StagePhases() {
+		subject, err := rulepack.SubjectForPhase(phase)
+		if err != nil {
+			t.Fatalf("SubjectForPhase(%s): %v", phase, err)
+		}
+		if subject == rulepack.SubjectAccusation {
+			t.Fatalf("accusation appears in StagePhases as %s", phase)
 		}
 	}
 }

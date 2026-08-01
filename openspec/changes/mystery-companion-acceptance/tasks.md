@@ -70,16 +70,19 @@
 
 ## 6. Deterministic Accusation
 
-- [ ] 6.1 Add failing exact-ID tests for wrong culprit, method, motive, mixed failures, and
+- [x] 6.1 Add failing exact-ID tests for wrong culprit, method, motive, mixed failures, and
   a complete correct accusation
-- [ ] 6.2 Add schema, strict validation, deterministic-ID, closed-vocabulary, alias-only
+- [x] 6.2 Add schema, strict validation, deterministic-ID, closed-vocabulary, alias-only
   JSON, registry-bootstrap, and production-decoder tests for `AccusationResult`
-- [ ] 6.3 Implement `AccusationVerifier` without model calls or fuzzy comparison and emit
+- [x] 6.3 Implement `AccusationVerifier` without model calls or fuzzy comparison and emit
   the registered closed `AccusationResult` payload
-- [ ] 6.4 Add rules that enter `accusation`, retain that phase after a wrong result, and
+- [x] 6.4 Add rules that enter `accusation`, retain that phase after a wrong result, and
   request `denouement` only after a correct result
-- [ ] 6.5 Prove wrong results disclose no failed dimension and correct results alone unlock
+- [x] 6.5 Prove wrong results disclose no failed dimension and correct results alone unlock
   canonical solution context for denouement narration
+  - Every turn crosses the durable accusation artifact barrier so narration cannot race
+    verification; only an identity-bound correct result authorizes denouement context and
+    transition.
 
 ## 7. Companion Decisions and Bond
 

@@ -265,6 +265,13 @@ func (q *WorkQueues) Pending(ctx context.Context) (map[string]int, error) {
 	if err := readQueue(ctx, q.stages, rulepack.SubjectKnowledge, knowledgeFloor, triggerEntityID, pending); err != nil {
 		return nil, fmt.Errorf("read the queued knowledge triggers: %w", err)
 	}
+	accusationFloor, err := q.consumerAckFloor(ctx, rulepack.AccusationConsumerName, "accusation")
+	if err != nil {
+		return nil, err
+	}
+	if err := readQueue(ctx, q.stages, rulepack.SubjectAccusation, accusationFloor, triggerEntityID, pending); err != nil {
+		return nil, fmt.Errorf("read the queued accusation triggers: %w", err)
+	}
 
 	floor, err := q.taskAckFloor(ctx)
 	if err != nil {

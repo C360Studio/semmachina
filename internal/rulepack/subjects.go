@@ -44,8 +44,15 @@ const SubjectResolved = StageSubjectPrefix + "resolved"
 // TURN_STAGES durability but enters no phase and is never part of StagePhases.
 const SubjectKnowledge = StageSubjectPrefix + "knowledge"
 
+// SubjectAccusation requests deterministic verification. It shares
+// TURN_STAGES durability but is not a turn StagePhase.
+const SubjectAccusation = StageSubjectPrefix + "accusation"
+
 // KnowledgeConsumerName is the separate durable bound by KnowledgeGranter.
 const KnowledgeConsumerName = "semmachina-knowledge-granter"
+
+// AccusationConsumerName is the verifier's separate durable.
+const AccusationConsumerName = "semmachina-accusation-verifier"
 
 // stagePhases are the phases a stage runner ENTERS, in turn order.
 //

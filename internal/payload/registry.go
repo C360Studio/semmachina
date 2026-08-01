@@ -39,6 +39,11 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 			Factory:     func() any { return &CaseDecision{} },
 		},
 		{
+			Domain: Domain, Category: CategoryAccusationResult, Version: SchemaVersion,
+			Description: "Deterministic non-revealing accusation verification result",
+			Factory:     func() any { return &AccusationResult{} },
+		},
+		{
 			Domain: Domain, Category: CategoryRollResult, Version: SchemaVersion,
 			Description: "Seeded deterministic resolution result",
 			Factory:     func() any { return &RollResult{} },

@@ -185,6 +185,13 @@ func (w *parkedWorld) drainStageTriggers(t *testing.T) {
 	}, 5*time.Second, func(context.Context, []byte) error { return nil }); err != nil {
 		t.Fatalf("start the draining knowledge consumer: %v", err)
 	}
+	if err := w.harness.Client.ConsumeDurable(context.Background(), natsclient.StreamConsumerConfig{
+		StreamName: rulepack.StageStream, ConsumerName: rulepack.AccusationConsumerName,
+		FilterSubject: rulepack.SubjectAccusation, DeliverPolicy: "all", AckPolicy: "explicit",
+		MaxDeliver: 0, AckWait: 20 * time.Second,
+	}, 5*time.Second, func(context.Context, []byte) error { return nil }); err != nil {
+		t.Fatalf("start the draining accusation consumer: %v", err)
+	}
 	defer w.harness.Client.StopAllConsumers()
 
 	deadline := time.Now().Add(30 * time.Second)
@@ -218,16 +225,21 @@ func (w *parkedWorld) stageConsumersIdle(t *testing.T) bool {
 			return false
 		}
 	}
-	consumer, err := w.stream.Consumer(ctx, rulepack.KnowledgeConsumerName)
-	if err != nil {
-		t.Fatalf("read the knowledge consumer: %v", err)
-	}
-	info, err := consumer.Info(ctx)
-	if err != nil {
-		t.Fatalf("read the knowledge consumer info: %v", err)
-	}
-	if info.NumPending != 0 || info.NumAckPending != 0 {
-		return false
+	for label, name := range map[string]string{
+		"knowledge":  rulepack.KnowledgeConsumerName,
+		"accusation": rulepack.AccusationConsumerName,
+	} {
+		consumer, err := w.stream.Consumer(ctx, name)
+		if err != nil {
+			t.Fatalf("read the %s consumer: %v", label, err)
+		}
+		info, err := consumer.Info(ctx)
+		if err != nil {
+			t.Fatalf("read the %s consumer info: %v", label, err)
+		}
+		if info.NumPending != 0 || info.NumAckPending != 0 {
+			return false
+		}
 	}
 	return true
 }

@@ -1106,6 +1106,25 @@ func requireStagesIdle(t *testing.T, js jetstream.JetStream) {
 				phase, info.NumAckPending)
 		}
 	}
+	for label, name := range map[string]string{
+		"knowledge":  rulepack.KnowledgeConsumerName,
+		"accusation": rulepack.AccusationConsumerName,
+	} {
+		consumer, err := js.Consumer(t.Context(), rulepack.StageStream, name)
+		if err != nil {
+			t.Errorf("the %s auxiliary path bound no consumer: %v", label, err)
+			continue
+		}
+		info, err := consumer.Info(t.Context())
+		if err != nil {
+			t.Errorf("read the %s auxiliary consumer: %v", label, err)
+			continue
+		}
+		if info.NumAckPending != 0 {
+			t.Errorf("the %s auxiliary path holds %d unacknowledged trigger(s) on a boot that ran no turn",
+				label, info.NumAckPending)
+		}
+	}
 }
 
 func consumerExistsOn(t *testing.T, js jetstream.JetStream, stream, filter string) bool {

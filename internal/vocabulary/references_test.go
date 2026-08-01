@@ -44,6 +44,7 @@ func TestStorageRefPredicates_CoverEveryTurnArtifact(t *testing.T) {
 	want := map[vocabulary.Predicate]string{
 		vocabulary.TurnActionRef:          "action",
 		vocabulary.TurnCaseDecisionRef:    "case-decision",
+		vocabulary.TurnAccusationRef:      "accusation",
 		vocabulary.TurnKnowledgeRef:       "knowledge",
 		vocabulary.TurnVerdictRef:         "verdict",
 		vocabulary.TurnRollRef:            "roll",

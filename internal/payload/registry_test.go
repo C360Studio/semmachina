@@ -25,6 +25,7 @@ func roundTripCases() []roundTripCase {
 	return []roundTripCase{
 		{name: "player_action", payload: validPlayerAction()},
 		{name: "case_decision", payload: validAccusationDecision()},
+		{name: "accusation_result", payload: validAccusationResult()},
 		{name: "verdict", payload: validVerdict()},
 		{name: "roll_result", payload: validRollResult()},
 		{name: "effect_batch", payload: validEffectBatch()},

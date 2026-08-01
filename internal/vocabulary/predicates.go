@@ -40,6 +40,8 @@ const (
 	TurnCaseDecisionKind Predicate = "turn.case-decision.kind"
 	// TurnKnowledgeRef witnesses the deterministic knowledge batch committed for the turn.
 	TurnKnowledgeRef Predicate = "turn.knowledge.ref"
+	// TurnAccusationRef references the complete universal accusation record.
+	TurnAccusationRef Predicate = "turn.accusation.ref"
 
 	// TurnVerdictPlausibility is the rule-matched plausibility scalar.
 	TurnVerdictPlausibility Predicate = "turn.verdict.plausibility"
@@ -361,6 +363,7 @@ var allPredicates = []Predicate{
 	TurnCaseDecisionRef,
 	TurnCaseDecisionKind,
 	TurnKnowledgeRef,
+	TurnAccusationRef,
 	TurnVerdictPlausibility,
 	TurnVerdictRisk,
 	TurnVerdictConsequence,

@@ -45,6 +45,14 @@ const (
 // is a retry. A caller that cannot tell them apart retries the bug forever.
 var ErrArtifactNotFound = errors.New("stored artifact not found")
 
+// ErrArtifactReference reports a malformed, foreign-instance, or wrong-slot
+// reference. Retrying the same reference cannot repair it.
+var ErrArtifactReference = errors.New("invalid stored artifact reference")
+
+// ErrArtifactCorrupt reports bytes that cannot decode or validate as the
+// artifact named by their slot. Retrying cannot change resident bytes.
+var ErrArtifactCorrupt = errors.New("stored artifact is corrupt")
+
 // Backend is the storage surface this package needs.
 //
 // It is deliberately three methods. The engine stores whole artifacts under
@@ -263,6 +271,29 @@ func (s *Store) PutCaseDecisionRecord(
 func (s *Store) GetCaseDecisionRecord(ctx context.Context, ref Ref) (*payload.CaseDecisionRecord, error) {
 	record := &payload.CaseDecisionRecord{}
 	if err := s.get(ctx, vocabulary.TurnCaseDecisionRef, ref, record); err != nil {
+		return nil, err
+	}
+	return record, nil
+}
+
+// PutAccusationRecord stores the universal barrier artifact before its
+// reference lands on the turn.
+func (s *Store) PutAccusationRecord(
+	ctx context.Context, turnEntityID string, record *AccusationRecord,
+) (Ref, error) {
+	if record == nil {
+		return Ref{}, errors.New("storing an accusation record requires a record")
+	}
+	if err := payload.RequireTurnEntityID(record.TurnID, turnEntityID); err != nil {
+		return Ref{}, err
+	}
+	return s.put(ctx, vocabulary.TurnAccusationRef, SubjectTurn, record.TurnID, record)
+}
+
+// GetAccusationRecord reads one universal barrier artifact.
+func (s *Store) GetAccusationRecord(ctx context.Context, ref Ref) (*AccusationRecord, error) {
+	record := &AccusationRecord{}
+	if err := s.get(ctx, vocabulary.TurnAccusationRef, ref, record); err != nil {
 		return nil, err
 	}
 	return record, nil
@@ -493,13 +524,13 @@ func (s *Store) get(
 	into artifact,
 ) error {
 	if err := ref.Validate(); err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrArtifactReference, err)
 	}
 	if ref.Instance != s.backend.InstanceName() {
 		return fmt.Errorf(
-			"reference %s names storage instance %q; this store is %q. A reference resolves through the "+
+			"%w: reference %s names storage instance %q; this store is %q. A reference resolves through the "+
 				"instance that wrote it, so reading it here would read a different object or none",
-			ref, ref.Instance, s.backend.InstanceName())
+			ErrArtifactReference, ref, ref.Instance, s.backend.InstanceName())
 	}
 	// The slot is the artifact's type discriminator — it is what the stored
 	// bytes have instead of an envelope — so a reference addressing another
@@ -507,12 +538,13 @@ func (s *Store) get(
 	// it as a validation error against fields the artifact never had.
 	slot, err := vocabulary.ArtifactSlot(refPredicate)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrArtifactReference, err)
 	}
 	if !strings.HasSuffix(ref.Key, refSeparator+slot) {
 		return fmt.Errorf(
-			"reference %s does not address a %q artifact; the key's last segment is the artifact kind, and "+
-				"decoding one kind's bytes as another's is how a persona reads the wrong turn's record", ref, slot)
+			"%w: reference %s does not address a %q artifact; the key's last segment is the artifact kind, and "+
+				"decoding one kind's bytes as another's is how a persona reads the wrong turn's record",
+			ErrArtifactReference, ref, slot)
 	}
 
 	data, err := s.backend.Get(ctx, ref.Key)
@@ -523,10 +555,10 @@ func (s *Store) get(
 		return fmt.Errorf("resolve %s: %w", ref, err)
 	}
 	if err := json.Unmarshal(data, into); err != nil {
-		return fmt.Errorf("decode artifact at %s: %w", ref, err)
+		return fmt.Errorf("%w: decode artifact at %s: %v", ErrArtifactCorrupt, ref, err)
 	}
 	if err := into.Validate(); err != nil {
-		return fmt.Errorf("stored artifact at %s does not satisfy its own contract: %w", ref, err)
+		return fmt.Errorf("%w: stored artifact at %s does not satisfy its own contract: %v", ErrArtifactCorrupt, ref, err)
 	}
 	return nil
 }

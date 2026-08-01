@@ -31,11 +31,13 @@
     ],
     "on_enter": [
       { "type": "publish", "subject": "semmachina.turn.adjudicating", "max_iterations": 3 },
-      { "type": "publish", "subject": "semmachina.turn.knowledge", "max_iterations": 3 }
+      { "type": "publish", "subject": "semmachina.turn.knowledge", "max_iterations": 3 },
+      { "type": "publish", "subject": "semmachina.turn.accusation", "max_iterations": 3 }
     ],
     "on_recovery": [
       { "type": "publish", "subject": "semmachina.turn.adjudicating", "max_iterations": 3 },
-      { "type": "publish", "subject": "semmachina.turn.knowledge", "max_iterations": 3 }
+      { "type": "publish", "subject": "semmachina.turn.knowledge", "max_iterations": 3 },
+      { "type": "publish", "subject": "semmachina.turn.accusation", "max_iterations": 3 }
     ]
   },
   {
@@ -106,7 +108,8 @@
     "conditions": [
       { "field": "turn.phase.current", "operator": "eq", "value": "applying", "required": false },
       { "field": "turn.effects.batch", "operator": "ne", "value": "", "required": false },
-      { "field": "turn.knowledge.ref", "operator": "ne", "value": "", "required": false }
+      { "field": "turn.knowledge.ref", "operator": "ne", "value": "", "required": false },
+      { "field": "turn.accusation.ref", "operator": "ne", "value": "", "required": false }
     ],
     "on_enter": [
       { "type": "publish", "subject": "semmachina.turn.narrating", "max_iterations": 3 }

@@ -75,13 +75,15 @@ const (
 	FailureTurnStranded FailureReason = "turn-stranded"
 	// FailureKnowledgeUnauthorized reports a permanently refused reveal batch.
 	FailureKnowledgeUnauthorized FailureReason = "knowledge-unauthorized"
+	// FailureAccusationInvalid reports foreign, malformed, or colliding accusation state.
+	FailureAccusationInvalid FailureReason = "accusation-invalid"
 )
 
 var failureReasonEnum = newEnum(KindFailureReason,
 	FailureEffectInvalid, FailureEffectEntityMissing,
 	FailureEffectEntityKind, FailureEffectCommitIncomplete,
 	FailurePersonaCapExhausted, FailurePersonaLoopFailed, FailureTurnStranded,
-	FailureKnowledgeUnauthorized)
+	FailureKnowledgeUnauthorized, FailureAccusationInvalid)
 
 // FailureReasons returns the closed failure-reason set.
 func FailureReasons() []FailureReason { return failureReasonEnum.all() }

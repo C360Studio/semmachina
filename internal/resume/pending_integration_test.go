@@ -161,16 +161,24 @@ func (w *pendingWorld) publish(t *testing.T, phase vocabulary.TurnPhase, turnID 
 }
 
 func (w *pendingWorld) publishKnowledge(t *testing.T, turnID string) string {
+	return w.publishAuxiliary(t, turnID, rulepack.SubjectKnowledge, "knowledge")
+}
+
+func (w *pendingWorld) publishAccusation(t *testing.T, turnID string) string {
+	return w.publishAuxiliary(t, turnID, rulepack.SubjectAccusation, "accusation")
+}
+
+func (w *pendingWorld) publishAuxiliary(t *testing.T, turnID, subject, label string) string {
 	t.Helper()
 	entityID := w.prefix + turnID
 	body, err := json.Marshal(map[string]any{
-		"entity_id": entityID, "subject": rulepack.SubjectKnowledge, "source": "rule_engine",
+		"entity_id": entityID, "subject": subject, "source": "rule_engine",
 	})
 	if err != nil {
-		t.Fatalf("encode knowledge trigger: %v", err)
+		t.Fatalf("encode %s trigger: %v", label, err)
 	}
-	if err := w.client.PublishToStream(t.Context(), rulepack.SubjectKnowledge, body); err != nil {
-		t.Fatalf("publish knowledge trigger: %v", err)
+	if err := w.client.PublishToStream(t.Context(), subject, body); err != nil {
+		t.Fatalf("publish %s trigger: %v", label, err)
 	}
 	return entityID
 }
@@ -231,11 +239,19 @@ func (w *pendingWorld) consume(t *testing.T, phase vocabulary.TurnPhase, want in
 }
 
 func (w *pendingWorld) consumeKnowledge(t *testing.T, want int) {
+	w.consumeAuxiliary(t, rulepack.KnowledgeConsumerName, rulepack.SubjectKnowledge, "knowledge", want)
+}
+
+func (w *pendingWorld) consumeAccusation(t *testing.T, want int) {
+	w.consumeAuxiliary(t, rulepack.AccusationConsumerName, rulepack.SubjectAccusation, "accusation", want)
+}
+
+func (w *pendingWorld) consumeAuxiliary(t *testing.T, consumerName, subject, label string, want int) {
 	t.Helper()
 	got := make(chan struct{}, want+4)
 	if err := w.client.ConsumeDurable(context.Background(), natsclient.StreamConsumerConfig{
-		StreamName: rulepack.StageStream, ConsumerName: rulepack.KnowledgeConsumerName,
-		FilterSubject: rulepack.SubjectKnowledge, DeliverPolicy: "all", AckPolicy: "explicit",
+		StreamName: rulepack.StageStream, ConsumerName: consumerName,
+		FilterSubject: subject, DeliverPolicy: "all", AckPolicy: "explicit",
 		MaxDeliver: 0, AckWait: 20 * time.Second,
 	}, 5*time.Second, func(context.Context, []byte) error {
 		select {
@@ -244,7 +260,7 @@ func (w *pendingWorld) consumeKnowledge(t *testing.T, want int) {
 		}
 		return nil
 	}); err != nil {
-		t.Fatalf("bind the knowledge consumer: %v", err)
+		t.Fatalf("bind the %s consumer: %v", label, err)
 	}
 	defer w.client.StopAllConsumers()
 
@@ -252,25 +268,25 @@ func (w *pendingWorld) consumeKnowledge(t *testing.T, want int) {
 		select {
 		case <-got:
 		case <-time.After(30 * time.Second):
-			t.Fatalf("the knowledge consumer received %d of %d triggers", i, want)
+			t.Fatalf("the %s consumer received %d of %d triggers", label, i, want)
 		}
 	}
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		consumer, err := w.stream.Consumer(t.Context(), rulepack.KnowledgeConsumerName)
+		consumer, err := w.stream.Consumer(t.Context(), consumerName)
 		if err != nil {
-			t.Fatalf("read the knowledge consumer: %v", err)
+			t.Fatalf("read the %s consumer: %v", label, err)
 		}
 		info, err := consumer.Info(t.Context())
 		if err != nil {
-			t.Fatalf("read the knowledge consumer info: %v", err)
+			t.Fatalf("read the %s consumer info: %v", label, err)
 		}
 		if info.NumPending == 0 && info.NumAckPending == 0 {
 			return
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatal("the knowledge consumer never settled")
+	t.Fatalf("the %s consumer never settled", label)
 }
 
 // consumeTasks binds the stand-in loop consumer and acknowledges want tasks.
@@ -392,6 +408,37 @@ func TestWorkQueues_ReportsOnlyKnowledgeNoGranterHasFinished(t *testing.T) {
 	}
 	if pending[done] != 0 {
 		t.Errorf("acknowledged knowledge trigger for %s reported %d times", done, pending[done])
+	}
+}
+
+func TestWorkQueues_AccusationAckFloorCoversAbsentUnackedAckedAndCombined(t *testing.T) {
+	world := startPendingWorld(t)
+	_ = world.stream.DeleteConsumer(t.Context(), rulepack.AccusationConsumerName)
+	absent := world.publishAccusation(t, "accusation-absent")
+
+	view := world.view(t)
+	if err := view.Settle(t.Context()); err != nil {
+		t.Fatalf("Settle absent: %v", err)
+	}
+	pending, err := view.Pending(t.Context())
+	if err != nil || pending[absent] != 1 {
+		t.Fatalf("absent accusation consumer pending=%v err=%v", pending[absent], err)
+	}
+
+	world.consumeAccusation(t, 1)
+	unacked := world.publishAccusation(t, "accusation-unacked")
+	combined := world.publishAccusation(t, "accusation-combined")
+	world.publishKnowledge(t, "accusation-combined")
+	if err := view.Settle(t.Context()); err != nil {
+		t.Fatalf("Settle queued: %v", err)
+	}
+	pending, err = view.Pending(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending[absent] != 0 || pending[unacked] != 1 || pending[combined] != 2 {
+		t.Fatalf("accusation ack accounting: absent=%d unacked=%d combined=%d",
+			pending[absent], pending[unacked], pending[combined])
 	}
 }
 

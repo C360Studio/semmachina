@@ -24,6 +24,8 @@ const (
 	// CategoryCaseDecision is the casekeeper's structured interpretation of a
 	// mystery action.
 	CategoryCaseDecision = "case_decision"
+	// CategoryAccusationResult is the deterministic non-revealing verification result.
+	CategoryAccusationResult = "accusation_result"
 	// CategoryRollResult is the dice component's resolution record.
 	CategoryRollResult = "roll_result"
 	// CategoryEffectBatch is the applier's validated, committed intent set.

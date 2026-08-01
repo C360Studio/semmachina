@@ -515,7 +515,7 @@ func checkAction(action rule.Action) error {
 			action.Type)
 	}
 	if !knownSubject(action.Subject) {
-		return fmt.Errorf("publishes to %q, which no stage consumes", action.Subject)
+		return fmt.Errorf("publishes to %q, which no declared durable path consumes", action.Subject)
 	}
 	if len(action.Properties) > 0 {
 		return fmt.Errorf(
@@ -539,7 +539,7 @@ func checkAction(action rule.Action) error {
 // knownSubject reports whether a subject drives a stage or announces a resolved
 // turn.
 func knownSubject(subject string) bool {
-	if subject == SubjectResolved || subject == SubjectKnowledge {
+	if subject == SubjectResolved || subject == SubjectKnowledge || subject == SubjectAccusation {
 		return true
 	}
 	_, isStage := PhaseForSubject(subject)

@@ -23,6 +23,7 @@ import (
 	"github.com/c360studio/semstreams/processor/rule"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/c360studio/semmachina/internal/accusation"
 	"github.com/c360studio/semmachina/internal/campaign"
 	"github.com/c360studio/semmachina/internal/caseflow"
 	"github.com/c360studio/semmachina/internal/content"
@@ -73,6 +74,8 @@ const (
 	StepStageStream StepID = "stage-stream"
 	// StepKnowledge binds the deterministic grant consumer before rules can publish to it.
 	StepKnowledge StepID = "knowledge"
+	// StepAccusation binds the deterministic verifier consumer before rules can publish to it.
+	StepAccusation StepID = "accusation"
 	// StepRules starts the rule processor that IS the turn's state machine.
 	StepRules StepID = "rules"
 	// StepResume runs the boot-time stranded-turn pass.
@@ -355,13 +358,18 @@ func (e *Engine) steps() []Step {
 		{ID: StepStageStream, Needs: []StepID{StepStreams}, Run: e.ensureStageStream},
 		{ID: StepKnowledge, Needs: []StepID{StepStageStream, StepGraph, StepWorld}, Run: e.startKnowledge},
 		{
+			ID:    StepAccusation,
+			Needs: []StepID{StepStageStream, StepGraph, StepWorld, StepLifecycle},
+			Run:   e.startAccusation,
+		},
+		{
 			ID: StepRules,
 			// The stage stream must exist before a rule can fire: the pack's
 			// actions publish stage triggers, and a JetStream publish into a
 			// subject no stream captures reaches no durable consumer while
 			// reporting success. The world must be instantiated because the pack
 			// matches turn entities against a world the stages will read.
-			Needs: []StepID{StepStageStream, StepGraph, StepWorld, StepLifecycle, StepKnowledge},
+			Needs: []StepID{StepStageStream, StepGraph, StepWorld, StepLifecycle, StepKnowledge, StepAccusation},
 			Run:   e.startRules,
 		},
 		{
@@ -372,7 +380,7 @@ func (e *Engine) steps() []Step {
 			// rather than read "nothing in flight" and re-trigger every turn whose
 			// persona is mid-flight. And the rule processor must have STARTED:
 			// its bootstrap replay publishes into the set the pass reads.
-			Needs: []StepID{StepRules, StepStageStream, StepAgentStream, StepAgentic, StepWorld, StepKnowledge},
+			Needs: []StepID{StepRules, StepStageStream, StepAgentStream, StepAgentic, StepWorld, StepKnowledge, StepAccusation},
 			Check: e.checkResumePreconditions,
 			Run:   e.reconcileStrandedTurns,
 		},
@@ -824,6 +832,38 @@ func (e *Engine) startKnowledge(ctx context.Context) error {
 	return consumer.Start(ctx)
 }
 
+func (e *Engine) startAccusation(ctx context.Context) error {
+	scope, err := e.epistemicScope()
+	if err != nil {
+		return err
+	}
+	assembler, err := scene.NewAssembler(e.graph)
+	if err != nil {
+		return err
+	}
+	projector, err := epistemic.NewProjector(assembler, e.graph, scope)
+	if err != nil {
+		return err
+	}
+	loader, err := accusation.NewLoader(e.graph, e.content, projector, scope.CaseID())
+	if err != nil {
+		return err
+	}
+	committer, err := accusation.NewCommitter(e.graph, e.content)
+	if err != nil {
+		return err
+	}
+	lifecycleRecorder, err := caseflow.NewRecorder(e.graph)
+	if err != nil {
+		return err
+	}
+	consumer, err := accusation.NewConsumer(e.client, loader, committer, lifecycleRecorder, e.recorder)
+	if err != nil {
+		return err
+	}
+	return consumer.Start(ctx)
+}
+
 // checkResumePreconditions is every external fact the stranded-turn pass needs
 // that this boot can actually read.
 func (e *Engine) checkResumePreconditions(ctx context.Context) error {
@@ -897,9 +937,22 @@ func (e *Engine) startStages(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	projector, err := epistemic.NewProjector(assembler, e.graph, scope)
+	denouement, err := accusation.NewDenouementAuthorizer(e.graph, e.content)
 	if err != nil {
 		return err
+	}
+	projector, err := epistemic.NewProjector(assembler, e.graph, scope,
+		epistemic.WithDenouementAuthorizer(denouement))
+	if err != nil {
+		return err
+	}
+	var stageProjector stage.ContextProjector = projector
+	if scope.CaseID() != "" {
+		router, routerErr := accusation.NewNarrationRouter(e.graph, e.content, projector, scope.CaseID())
+		if routerErr != nil {
+			return routerErr
+		}
+		stageProjector = router
 	}
 	guard, err := persona.NewGuard(e.graph)
 	if err != nil {
@@ -911,20 +964,20 @@ func (e *Engine) startStages(ctx context.Context) error {
 	}
 
 	adjudicator, err := stage.NewSpawner(
-		persona.Adjudicator(), e.recorder, guard, projector, builder, e.client,
+		persona.Adjudicator(), e.recorder, guard, stageProjector, builder, e.client,
 		stage.WithSpawnerLogger(e.log()))
 	if err != nil {
 		return err
 	}
 	casekeeper, err := stage.NewSpawner(
-		persona.Casekeeper(), e.recorder, guard, projector, builder, e.client,
+		persona.Casekeeper(), e.recorder, guard, stageProjector, builder, e.client,
 		stage.WithSpawnerLogger(e.log()),
 		stage.WithCaseInterpretation(scope, e.content, e.graph))
 	if err != nil {
 		return err
 	}
 	narrator, err := stage.NewSpawner(
-		persona.Narrator(), e.recorder, guard, projector, builder, e.client,
+		persona.Narrator(), e.recorder, guard, stageProjector, builder, e.client,
 		stage.WithSpawnerLogger(e.log()))
 	if err != nil {
 		return err

@@ -21,7 +21,9 @@ import (
 	ssvocab "github.com/c360studio/semstreams/vocabulary"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/c360studio/semmachina/internal/accusation"
 	"github.com/c360studio/semmachina/internal/campaign"
+	"github.com/c360studio/semmachina/internal/caseflow"
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/dice"
 	"github.com/c360studio/semmachina/internal/effect"
@@ -110,6 +112,10 @@ type loop struct {
 }
 
 func startLoop(t *testing.T) *loop {
+	return startLoopWithAccusationGate(t, nil)
+}
+
+func startLoopWithAccusationGate(t *testing.T, gate *gatedDecisionStore) *loop {
 	t.Helper()
 	harness := testinfra.Require(t)
 	harness.RequireIndex(t)
@@ -147,11 +153,42 @@ func startLoop(t *testing.T) *loop {
 	}
 	world.verdict = world.rollingVerdict
 	world.seedWorld(t)
+	world.startAuxiliaryConsumers(t, artifacts, gate)
 	world.startRules(t)
 	world.startStages(t, artifacts)
 	world.startPersonaBridge(t, artifacts)
 	return world
 }
+
+// gatedDecisionStore holds the accusation consumer after its real loader has
+// received work but before the private decision artifact is returned. The test
+// can therefore observe the production rule barrier without replacing the
+// loader, committer, durable consumer, or content store.
+type gatedDecisionStore struct {
+	delegate accusation.DecisionStore
+	reached  chan struct{}
+	release  chan struct{}
+	reach    sync.Once
+	unblock  sync.Once
+}
+
+func newGatedDecisionStore() *gatedDecisionStore {
+	return &gatedDecisionStore{reached: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (g *gatedDecisionStore) GetCaseDecisionRecord(
+	ctx context.Context, ref content.Ref,
+) (*payload.CaseDecisionRecord, error) {
+	g.reach.Do(func() { close(g.reached) })
+	select {
+	case <-g.release:
+		return g.delegate.GetCaseDecisionRecord(ctx, ref)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (g *gatedDecisionStore) open() { g.unblock.Do(func() { close(g.release) }) }
 
 func composeID(t *testing.T, namespace, kind, instance string) string {
 	t.Helper()
@@ -233,8 +270,12 @@ func (l *loop) startRules(t *testing.T) {
 	t.Cleanup(func() { _ = processor.Stop(5 * time.Second) })
 }
 
-// startStages binds every stage to the stage stream.
-func (l *loop) startStages(t *testing.T, artifacts *content.Store) {
+// startAuxiliaryConsumers mirrors production boot: both universal-barrier
+// consumers bind before the rule processor is allowed to publish their work.
+// Neither consumer is a turn stage or a member of rulepack.StagePhases.
+func (l *loop) startAuxiliaryConsumers(
+	t *testing.T, artifacts *content.Store, gate *gatedDecisionStore,
+) {
 	t.Helper()
 	loader, err := knowledge.NewLoader(l.graph, artifacts, "")
 	if err != nil {
@@ -252,6 +293,38 @@ func (l *loop) startStages(t *testing.T, artifacts *content.Store) {
 	if err := granterConsumer.Start(context.Background()); err != nil {
 		t.Fatalf("start knowledge consumer: %v", err)
 	}
+
+	var decisions accusation.DecisionStore = artifacts
+	if gate != nil {
+		gate.delegate = artifacts
+		decisions = gate
+		t.Cleanup(gate.open)
+	}
+	accusationLoader, err := accusation.NewLoader(l.graph, decisions, nil, "")
+	if err != nil {
+		t.Fatalf("NewLoader(accusation): %v", err)
+	}
+	accusationCommitter, err := accusation.NewCommitter(l.graph, artifacts)
+	if err != nil {
+		t.Fatalf("NewCommitter(accusation): %v", err)
+	}
+	lifecycleRecorder, err := caseflow.NewRecorder(l.graph)
+	if err != nil {
+		t.Fatalf("NewRecorder(caseflow): %v", err)
+	}
+	accusationConsumer, err := accusation.NewConsumer(
+		l.harness.Client, accusationLoader, accusationCommitter, lifecycleRecorder, l.recorder)
+	if err != nil {
+		t.Fatalf("NewConsumer(accusation): %v", err)
+	}
+	if err := accusationConsumer.Start(context.Background()); err != nil {
+		t.Fatalf("start accusation consumer: %v", err)
+	}
+}
+
+// startStages binds every actual turn stage to the stage stream.
+func (l *loop) startStages(t *testing.T, artifacts *content.Store) {
+	t.Helper()
 
 	assembler, err := scene.NewAssembler(l.graph)
 	if err != nil {
@@ -612,6 +685,72 @@ func (l *loop) awaitPhase(t *testing.T, entityID string, want vocabulary.TurnPha
 	}
 	t.Fatalf("turn %s never reached phase %q (last seen %q)", entityID, want, last)
 	return nil
+}
+
+func (l *loop) awaitApplyingBarrierInputs(t *testing.T, entityID string) *graph.EntityState {
+	t.Helper()
+	deadline := time.Now().Add(45 * time.Second)
+	for time.Now().Before(deadline) {
+		state, err := l.harness.QueryEntity(t.Context(), entityID)
+		if err == nil && fmt.Sprint(testinfra.FirstObject(
+			state, vocabulary.TurnPhaseCurrent.String())) == string(vocabulary.PhaseApplying) &&
+			len(testinfra.ObjectsFor(state, vocabulary.TurnEffectsRef.String())) == 1 &&
+			len(testinfra.ObjectsFor(state, vocabulary.TurnKnowledgeRef.String())) == 1 {
+			return state
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("turn %s never reached applying with effects and knowledge committed", entityID)
+	return nil
+}
+
+func TestTurnLoop_AccusationConsumerCompletesUniversalBarrierOutsideStagePhases(t *testing.T) {
+	gate := newGatedDecisionStore()
+	world := startLoopWithAccusationGate(t, gate)
+	turnID, entityID := world.submit(t, "act-accusation-barrier", "I inspect the ordinary gate.")
+
+	select {
+	case <-gate.reached:
+	case <-time.After(45 * time.Second):
+		t.Fatal("the real accusation consumer never reached its decision-store read")
+	}
+	state := world.awaitApplyingBarrierInputs(t, entityID)
+	if refs := testinfra.ObjectsFor(state, vocabulary.TurnAccusationRef.String()); len(refs) != 0 {
+		t.Fatalf("blocked accusation consumer already committed refs %v", refs)
+	}
+	if refs := testinfra.ObjectsFor(state, vocabulary.TurnNarrationRef.String()); len(refs) != 0 {
+		t.Fatalf("applying turn narrated before accusation barrier: %v", refs)
+	}
+	drain(world.spawned)
+	select {
+	case task := <-world.spawned:
+		t.Fatalf("applying turn spawned %s before accusation ref landed", task.Role)
+	case <-time.After(time.Second):
+	}
+
+	gate.open()
+	state = world.awaitPhase(t, entityID, vocabulary.PhaseComplete)
+	refs := testinfra.ObjectsFor(state, vocabulary.TurnAccusationRef.String())
+	if len(refs) != 1 {
+		t.Fatalf("ordinary turn holds accusation refs %v, want exactly one", refs)
+	}
+	ref, err := content.ParseRef(fmt.Sprint(refs[0]))
+	if err != nil {
+		t.Fatalf("parse accusation ref: %v", err)
+	}
+	record, err := world.content.GetAccusationRecord(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("read accusation record: %v", err)
+	}
+	if record.TurnID != turnID || record.Status != content.AccusationNotApplicable || record.Result != nil {
+		t.Fatalf("ordinary accusation record = %+v", record)
+	}
+	for _, phase := range rulepack.StagePhases() {
+		if phase == vocabulary.TurnPhase("accusation") {
+			t.Fatal("accusation auxiliary consumer leaked into StagePhases")
+		}
+	}
+	world.requireEveryTriggerAcknowledged(t)
 }
 
 // The whole point. Nothing below calls a stage: a player action becomes a turn
@@ -1014,7 +1153,7 @@ func (l *loop) requireEveryTriggerAcknowledged(t *testing.T) {
 		t.Fatalf("jetstream: %v", err)
 	}
 	for _, phase := range rulepack.StagePhases() {
-		consumer, err := js.Consumer(t.Context(), rulepack.StageStream, "semmachina-stage-"+string(phase))
+		consumer, err := js.Consumer(t.Context(), rulepack.StageStream, rulepack.StageConsumerName(phase))
 		if err != nil {
 			t.Fatalf("read the %s consumer: %v", phase, err)
 		}
@@ -1025,6 +1164,23 @@ func (l *loop) requireEveryTriggerAcknowledged(t *testing.T) {
 		if info.NumAckPending != 0 || info.NumPending != 0 {
 			t.Errorf("the %s stage left %d unacknowledged and %d unread trigger(s); the turn completed anyway, "+
 				"which is how a failing stage hides", phase, info.NumAckPending, info.NumPending)
+		}
+	}
+	for label, name := range map[string]string{
+		"knowledge auxiliary":  rulepack.KnowledgeConsumerName,
+		"accusation auxiliary": rulepack.AccusationConsumerName,
+	} {
+		consumer, err := js.Consumer(t.Context(), rulepack.StageStream, name)
+		if err != nil {
+			t.Fatalf("read the %s consumer: %v", label, err)
+		}
+		info, err := consumer.Info(t.Context())
+		if err != nil {
+			t.Fatalf("read the %s consumer info: %v", label, err)
+		}
+		if info.NumAckPending != 0 || info.NumPending != 0 {
+			t.Errorf("the %s left %d unacknowledged and %d unread trigger(s)",
+				label, info.NumAckPending, info.NumPending)
 		}
 	}
 }
