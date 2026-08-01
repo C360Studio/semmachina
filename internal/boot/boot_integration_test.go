@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	sspersona "github.com/c360studio/semstreams/persona"
+	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/gorilla/websocket"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/testcontainers/testcontainers-go"
@@ -26,6 +28,7 @@ import (
 	"github.com/c360studio/semmachina/fixtures"
 	"github.com/c360studio/semmachina/internal/boot"
 	"github.com/c360studio/semmachina/internal/campaign"
+	"github.com/c360studio/semmachina/internal/caseflow"
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
@@ -198,6 +201,55 @@ func TestBoot_StartsTheWholeEngineOnABareBroker(t *testing.T) {
 	// rather than guessing, which means this is also why the boot got this far.
 	if !consumerExistsOn(t, js, persona.TaskStream, persona.TaskSubjectFilter) {
 		t.Error("no consumer filters " + persona.TaskSubjectFilter + "; no persona could ever run")
+	}
+}
+
+// Lifecycle attachment happens after world import and is attach-only: a restart
+// may register the workflow again, but it must never reset the case's phase.
+func TestBoot_CaseLifecycleAttachesAfterImportAndPreservesPhaseOnRestart(t *testing.T) {
+	worldFS, err := fs.Sub(fixtures.Worlds(), "worlds/bellweather-maze")
+	if err != nil {
+		t.Fatalf("Bellweather fixture: %v", err)
+	}
+	cfg := bootConfig(t)
+	cfg.World = worldFS
+	cfg.SceneLocalID = "fete-green"
+	cfg.Player.Character = "local:rowan-vale"
+
+	first := newTestEngine(t, cfg)
+	if err := first.StartThrough(t.Context(), boot.StepLifecycle); err != nil {
+		t.Fatalf("first boot through lifecycle: %v", err)
+	}
+	caseID := fmt.Sprintf("%s.semmachina.%s.bellweather-maze.case.bellweather-case", cfg.Org, cfg.WorldNS)
+
+	manager := lifecycle.NewManager(requireBroker(t).Client, nil)
+	if err := manager.Register(caseflow.Workflow()); err != nil {
+		t.Fatalf("register independent lifecycle reader: %v", err)
+	}
+	state, err := manager.Get(t.Context(), caseflow.WorkflowName, caseID)
+	if err != nil {
+		t.Fatalf("read attached case: %v", err)
+	}
+	if state.Phase() != string(vocabulary.CasePhaseColdOpen) {
+		t.Fatalf("initial phase = %q", state.Phase())
+	}
+	if err := manager.Transition(t.Context(), caseflow.WorkflowName, caseID,
+		string(vocabulary.CasePhaseDiscovery), lifecycle.TransitionSourceComponent, "restart proof"); err != nil {
+		t.Fatalf("advance case before restart: %v", err)
+	}
+	first.Stop()
+
+	second := newTestEngine(t, cfg)
+	t.Cleanup(second.Stop)
+	if err := second.StartThrough(t.Context(), boot.StepLifecycle); err != nil {
+		t.Fatalf("restart through lifecycle: %v", err)
+	}
+	state, err = manager.Get(t.Context(), caseflow.WorkflowName, caseID)
+	if err != nil {
+		t.Fatalf("read case after restart: %v", err)
+	}
+	if state.Phase() != string(vocabulary.CasePhaseDiscovery) {
+		t.Fatalf("phase after restart = %q, want discovery", state.Phase())
 	}
 }
 

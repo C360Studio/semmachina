@@ -338,13 +338,21 @@ func TestAuthorWritablePredicates_AreWorldFactsMinusEngineOwnedState(t *testing.
 	}
 
 	engineOwned := map[vocabulary.Predicate]bool{
-		vocabulary.WorldEntityKind:        true,
-		vocabulary.PlayerCharacterCurrent: true,
-		vocabulary.RevelationEvidenceRef:  true,
-		vocabulary.CompanionBondPlayer:    true,
-		vocabulary.CompanionBondCharacter: true,
-		vocabulary.CompanionBondPolicy:    true,
-		vocabulary.CompanionBondHintLevel: true,
+		vocabulary.WorldEntityKind:                 true,
+		vocabulary.PlayerCharacterCurrent:          true,
+		vocabulary.RevelationEvidenceRef:           true,
+		vocabulary.CompanionBondPlayer:             true,
+		vocabulary.CompanionBondCharacter:          true,
+		vocabulary.CompanionBondPolicy:             true,
+		vocabulary.CompanionBondHintLevel:          true,
+		vocabulary.CaseLifecyclePhase:              true,
+		vocabulary.CaseLifecycleEventID:            true,
+		vocabulary.CaseLifecycleEventKindPredicate: true,
+		vocabulary.CaseLifecycleFromPhase:          true,
+		vocabulary.CaseLifecycleToPhase:            true,
+		vocabulary.CaseTransitionSource:            true,
+		vocabulary.CaseTransitionAt:                true,
+		vocabulary.CaseTransitionFrom:              true,
 	}
 	for predicate := range engineOwned {
 		if writable[predicate] {

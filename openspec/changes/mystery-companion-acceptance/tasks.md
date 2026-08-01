@@ -15,12 +15,15 @@
 
 ## 2. Case Lifecycle
 
-- [ ] 2.1 Add failing tests for the
+- [x] 2.1 Add failing tests for the
   `cold_open → discovery → investigation → accusation → denouement` phase graph
-- [ ] 2.2 Implement and register `CaseState` as a SemStreams lifecycle participant with
+- [x] 2.2 Implement and register `CaseState` as a SemStreams lifecycle participant with
   lifecycle-manager-exclusive phase writes
 - [ ] 2.3 Add recovery and duplicate-event tests proving one legal transition per
   structured case event
+  - Local duplicate/stale receipt no-op and built-in rule recovery parity are covered;
+    production duplicate delivery awaits the event producers and durable delivery path in
+    groups 4 and 6.
 
 ## 3. Epistemic Projection Safety
 

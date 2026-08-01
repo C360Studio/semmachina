@@ -187,6 +187,20 @@ func closedSets() []closedSet {
 			nearMiss:  []string{"answer", "solution", "next_step", "Nudge"},
 			sampleBad: "solution",
 		},
+		{
+			kind:      vocabulary.KindCasePhase,
+			members:   strs(vocabulary.CasePhases()),
+			parse:     asStringParser(vocabulary.ParseCasePhase),
+			nearMiss:  []string{"cold-open", "investigating", "resolved", "Discovery"},
+			sampleBad: "resolved",
+		},
+		{
+			kind:      vocabulary.KindCaseLifecycleEventKind,
+			members:   strs(vocabulary.CaseLifecycleEventKinds()),
+			parse:     asStringParser(vocabulary.ParseCaseLifecycleEventKind),
+			nearMiss:  []string{"body_observed", "accusation", "case-solved", "Body-Observed"},
+			sampleBad: "case-solved",
+		},
 	}
 }
 

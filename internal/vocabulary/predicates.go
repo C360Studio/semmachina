@@ -309,7 +309,17 @@ const (
 	CaseMemberSuspect       Predicate = "case.member.suspect"
 	CaseMemberEvidence      Predicate = "case.member.evidence"
 	CaseMemberTimeline      Predicate = "case.member.timeline"
+	CaseMemberVictim        Predicate = "case.member.victim"
 	CaseTimelineOrder       Predicate = "case.timeline.order"
+
+	CaseLifecyclePhase              Predicate = "case.lifecycle.phase"
+	CaseLifecycleEventID            Predicate = "case.lifecycle.event-id"
+	CaseLifecycleEventKindPredicate Predicate = "case.lifecycle.event-kind"
+	CaseLifecycleFromPhase          Predicate = "case.lifecycle.from-phase"
+	CaseLifecycleToPhase            Predicate = "case.lifecycle.to-phase"
+	CaseTransitionSource            Predicate = "case.transition.source"
+	CaseTransitionAt                Predicate = "case.transition.at"
+	CaseTransitionFrom              Predicate = "case.transition.from"
 
 	EvidenceTruthStatusCurrent Predicate = "evidence.truth.status"
 
@@ -376,7 +386,16 @@ var allPredicates = []Predicate{
 	CaseMemberSuspect,
 	CaseMemberEvidence,
 	CaseMemberTimeline,
+	CaseMemberVictim,
 	CaseTimelineOrder,
+	CaseLifecyclePhase,
+	CaseLifecycleEventID,
+	CaseLifecycleEventKindPredicate,
+	CaseLifecycleFromPhase,
+	CaseLifecycleToPhase,
+	CaseTransitionSource,
+	CaseTransitionAt,
+	CaseTransitionFrom,
 	EvidenceTruthStatusCurrent,
 	BeliefActorHolder,
 	BeliefEvidenceRef,

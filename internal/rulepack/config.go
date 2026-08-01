@@ -34,6 +34,11 @@ func ProcessorConfig() (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	caseDefinitions, err := CaseLifecycleDefinitions()
+	if err != nil {
+		return nil, err
+	}
+	definitions = append(definitions, caseDefinitions...)
 
 	outputs := make([]component.PortDefinition, 0, len(stagePhases)+1)
 	for _, phase := range stagePhases {
@@ -49,7 +54,7 @@ func ProcessorConfig() (json.RawMessage, error) {
 		PackID:      PackID,
 		InlineRules: definitions,
 		EntityWatchBuckets: map[string][]string{
-			EntityStatesBucket: {EntityPattern},
+			EntityStatesBucket: {EntityPattern, CaseEntityPattern},
 		},
 		Ports: &component.PortConfig{Outputs: outputs},
 	}

@@ -40,6 +40,7 @@ type MysteryKnowledgeSeed struct {
 // MysteryCase is the typed projection of one fully validated authored case.
 type MysteryCase struct {
 	ID                  string
+	Victim              string
 	Solution            MysterySolution
 	Suspects            []string
 	Evidence            []string
@@ -93,6 +94,10 @@ func validateMysteryCase(
 	if err != nil {
 		return nil, err
 	}
+	victim, err := exactlyOneRef(caseEntity, vocabulary.CaseMemberVictim, "victim")
+	if err != nil {
+		return nil, err
+	}
 	suspectCount, err := exactlyOneInt(caseEntity, vocabulary.CaseRequirementSuspects, "required suspects")
 	if err != nil {
 		return nil, err
@@ -136,6 +141,9 @@ func validateMysteryCase(
 	if err := requireRef(byID, culprit, vocabulary.EntityKindCharacter, "culprit"); err != nil {
 		return nil, err
 	}
+	if err := requireRef(byID, victim, vocabulary.EntityKindCharacter, "victim"); err != nil {
+		return nil, err
+	}
 	if !slices.Contains(suspects, culprit) {
 		return nil, fmt.Errorf("solution culprit %q is not a declared suspect", culprit)
 	}
@@ -175,6 +183,7 @@ func validateMysteryCase(
 
 	return &MysteryCase{
 		ID:                  caseEntity.LocalID,
+		Victim:              victim,
 		Solution:            MysterySolution{Culprit: culprit, Method: method, Motive: motive},
 		Suspects:            suspects,
 		Evidence:            evidence,

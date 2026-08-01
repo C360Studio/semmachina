@@ -191,6 +191,12 @@ func enginePredicateNamespaces() ([]reservedDomain, error) {
 			why: "evidence truth status is immutable authored seed truth; a world rule that reads it reveals " +
 				"whether evidence is a clue or red herring, and one that writes it rewrites the case",
 		},
+		{
+			predicate: vocabulary.CaseLifecyclePhase,
+			width:     domainAndCategory,
+			why: "case lifecycle phase and event receipts are structural engine state; downloadable world rules " +
+				"must not spoof or branch on the case state machine",
+		},
 	}
 
 	domains := make([]reservedDomain, 0, len(sources))
@@ -451,13 +457,10 @@ func checkActionScope(
 		return nil
 
 	case rule.ActionTypeLifecycleTransition, rule.ActionTypeLifecycleComplete, rule.ActionTypeLifecycleFail:
-		// Cannot reach the turn loop: these move a lifecycle-managed
-		// Participant through a registered workflow, and SemMachina registers
-		// none — the turn's phase is a graph triple written by the turn
-		// recorder (design D1), not a lifecycle phase. If a campaign or scene
-		// lifecycle is registered later, this arm is where the boundary has to
-		// be re-decided rather than rediscovered.
-		return nil
+		return fmt.Errorf(
+			"rule %q %s uses %q, but downloadable worlds may not drive lifecycle workflows; "+
+				"case transitions are owned by the engine's built-in receipt rules",
+			ruleID, where, action.Type)
 
 	default:
 		return fmt.Errorf(
@@ -472,6 +475,13 @@ func checkActionScope(
 func checkConditionScope(
 	ruleID, where string, condition expression.ConditionExpression, domains []reservedDomain,
 ) error {
+	if strings.HasPrefix(condition.Field, "$entity.lifecycle.") {
+		return fmt.Errorf(
+			"rule %q %s matches %q, which reads lifecycle-managed state; downloadable world rules may use "+
+				"$state.*, $prev.*, and $message.* runtime projections, but the engine's built-in rules alone "+
+				"may branch on $entity.lifecycle.*",
+			ruleID, where, condition.Field)
+	}
 	domain, reserved := reservedDomainFor(condition.Field, domains)
 	if !reserved {
 		return nil
@@ -565,14 +575,12 @@ func checkNameIsLiteral(ruleID, where, field, value string) error {
 // is what keeps the match on segment boundaries: `campaign.seed.` cannot match
 // `campaign.seedling.growth`.
 //
-// Names beginning with `$` are skipped, and that is safe rather than merely
-// conventional: a condition field resolves through exactly four namespaces
-// (processor/rule/expression/evaluator.go evaluateConditionWithStateAndMessage)
-// — `$state.*`/`$prev.*` are the rule's own match bookkeeping,
-// `$entity.lifecycle.*` reads the lifecycle harness this engine registers no
-// workflows with, `$message.*` walks the triggering message payload, and a BARE
-// name is the only one that reads graph triples. So a `$` field cannot name an
-// engine fact, and skipping it does not leave a hole for one.
+// Names beginning with `$` are skipped here because they are projections, not
+// graph predicate names. checkConditionScope handles the one protected
+// projection first: `$entity.lifecycle.*` reads lifecycle-managed state and is
+// refused for downloaded worlds. `$state.*` and `$prev.*` are rule match
+// bookkeeping, while `$message.*` walks the triggering payload; those remain
+// legitimate world-rule inputs and do not belong in this predicate-prefix gate.
 func reservedDomainFor(field string, domains []reservedDomain) (reservedDomain, bool) {
 	if field == "" || strings.HasPrefix(field, "$") {
 		return reservedDomain{}, false

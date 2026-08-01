@@ -27,6 +27,25 @@ func ruleJSON(id, conditions, actionList, actions string) string {
 		id, conditions, actionList, actions)
 }
 
+func TestWorldRuleScopeRejectsLifecycleActions(t *testing.T) {
+	for _, tc := range []struct {
+		actionType string
+		fields     string
+	}{
+		{rule.ActionTypeLifecycleTransition, `,"workflow":"mystery-case","phase":"discovery"`},
+		{rule.ActionTypeLifecycleComplete, `,"workflow":"mystery-case"`},
+		{rule.ActionTypeLifecycleFail, `,"workflow":"mystery-case","reason":"authored"`},
+	} {
+		t.Run(tc.actionType, func(t *testing.T) {
+			action := fmt.Sprintf(`{"type":%q%s}`, tc.actionType, tc.fields)
+			err := loadWithRule(t, ruleJSON("downloaded-lifecycle", "", "on_enter", action))
+			if err == nil {
+				t.Fatalf("downloadable rule using %s was accepted", tc.actionType)
+			}
+		})
+	}
+}
+
 // loadWithRule loads a minimal package whose only rule is the supplied JSON.
 func loadWithRule(t *testing.T, ruleFile string) error {
 	t.Helper()
@@ -34,6 +53,58 @@ func loadWithRule(t *testing.T, ruleFile string) error {
 	fsys["rules/00-stub.json"] = &fstest.MapFile{Data: []byte(ruleFile)}
 	_, err := world.LoadPackage(fsys, world.LoadOptions{})
 	return err
+}
+
+func TestLoadPackage_RefusesLifecycleProjectionInConditionsAndActionGuards(t *testing.T) {
+	lifecycleCondition := `{"field":"$entity.lifecycle.phase","operator":"eq","value":"discovery"}`
+	cases := map[string]string{
+		"top-level condition": ruleJSON("reads-lifecycle-phase", lifecycleCondition, "on_enter",
+			`{"type":"publish","subject":"world.bell.ring","max_iterations":1}`),
+		"action when guard": ruleJSON("guards-on-lifecycle-phase", "", "on_enter",
+			`{"type":"publish","subject":"world.bell.ring","max_iterations":1,"when":[`+lifecycleCondition+`]}`),
+	}
+	for name, definition := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := loadWithRule(t, definition)
+			if err == nil {
+				t.Fatal("LoadPackage accepted a downloadable rule reading $entity.lifecycle.phase")
+			}
+			if !strings.Contains(err.Error(), "$entity.lifecycle.phase") {
+				t.Fatalf("refusal %q does not name the protected projection", err)
+			}
+		})
+	}
+}
+
+func TestLoadPackage_AllowsNonLifecycleRuntimeProjections(t *testing.T) {
+	conditions := []string{
+		`{"field":"$state.iteration","operator":"gte","value":0}`,
+		`{"field":"$prev.scene.attribute.tension","operator":"gte","value":0}`,
+		`{"field":"$message.kind","operator":"eq","value":"bell"}`,
+	}
+	for _, condition := range conditions {
+		var decoded struct {
+			Field string `json:"field"`
+		}
+		if err := json.Unmarshal([]byte(condition), &decoded); err != nil {
+			t.Fatal(err)
+		}
+		for _, position := range []string{"top-level", "action-when"} {
+			t.Run(decoded.Field+"/"+position, func(t *testing.T) {
+				var definition string
+				if position == "top-level" {
+					definition = ruleJSON("allowed-runtime-projection", condition, "on_enter",
+						`{"type":"publish","subject":"world.bell.ring","max_iterations":1}`)
+				} else {
+					definition = ruleJSON("allowed-runtime-projection", "", "on_enter",
+						`{"type":"publish","subject":"world.bell.ring","max_iterations":1,"when":[`+condition+`]}`)
+				}
+				if err := loadWithRule(t, definition); err != nil {
+					t.Fatalf("LoadPackage rejected %s in %s: %v", decoded.Field, position, err)
+				}
+			})
+		}
+	}
 }
 
 // A world package may not author the turn loop. The turn's facts are the

@@ -100,6 +100,16 @@ var engineOwnedFacts = []vocabulary.Predicate{
 	vocabulary.CompanionBondCharacter,
 	vocabulary.CompanionBondPolicy,
 	vocabulary.CompanionBondHintLevel,
+	// Case lifecycle state and transition receipts are owned by the lifecycle
+	// manager and the in-process receipt seam, never by downloaded packages.
+	vocabulary.CaseLifecyclePhase,
+	vocabulary.CaseLifecycleEventID,
+	vocabulary.CaseLifecycleEventKindPredicate,
+	vocabulary.CaseLifecycleFromPhase,
+	vocabulary.CaseLifecycleToPhase,
+	vocabulary.CaseTransitionSource,
+	vocabulary.CaseTransitionAt,
+	vocabulary.CaseTransitionFrom,
 }
 
 // AuthorWritable reports whether a template package may declare p.

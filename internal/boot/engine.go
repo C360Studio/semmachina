@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	sspersona "github.com/c360studio/semstreams/persona"
+	"github.com/c360studio/semstreams/pkg/lifecycle"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
 	agenticmodel "github.com/c360studio/semstreams/processor/agentic-model"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
@@ -23,6 +24,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semmachina/internal/campaign"
+	"github.com/c360studio/semmachina/internal/caseflow"
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/dice"
 	"github.com/c360studio/semmachina/internal/effect"
@@ -63,6 +65,8 @@ const (
 	StepAgentic StepID = "agentic"
 	// StepWorld claims the campaign and instantiates the world.
 	StepWorld StepID = "world"
+	// StepLifecycle registers and attaches case lifecycle after world import.
+	StepLifecycle StepID = "lifecycle"
 	// StepStageStream creates the stage-trigger stream.
 	StepStageStream StepID = "stage-stream"
 	// StepRules starts the rule processor that IS the turn's state machine.
@@ -96,14 +100,15 @@ type streamReader interface {
 type Engine struct {
 	cfg Config
 
-	client   *natsclient.Client
-	graph    *graphio.Store
-	content  *content.Store
-	backend  interface{ Close() error }
-	recorder *turn.Recorder
-	gate     *campaign.Gate
-	importer *world.Importer
-	results  *egress.Results
+	client    *natsclient.Client
+	graph     *graphio.Store
+	content   *content.Store
+	backend   interface{ Close() error }
+	recorder  *turn.Recorder
+	gate      *campaign.Gate
+	importer  *world.Importer
+	results   *egress.Results
+	lifecycle *lifecycle.Manager
 
 	pkg      *world.Package
 	plan     *world.Plan
@@ -188,7 +193,7 @@ func (e *Engine) Steps() []Step { return e.seq.Steps() }
 // # The order, and what each position is protecting
 //
 // It is stated once, here, because the order IS the correctness argument and a
-// reader should not have to reassemble it from fifteen step declarations:
+// reader should not have to reassemble it from the individual step declarations:
 //
 //  1. connect, provision every stream, then graph-ingest and graph-index — nothing else can read or
 //     write authoritative state until the sole writer is running.
@@ -197,21 +202,24 @@ func (e *Engine) Steps() []Step { return e.seq.Steps() }
 //     must exist first; and it must be RUNNING before any persona stage can be
 //     triggered, or every stage publishes a task nothing consumes and nak-loops.
 //  3. the world: claim, import (or skip, or refuse), read it back, mark it.
-//  4. the stage-trigger stream, BEFORE the rule processor — a rule that fires
+//  4. attach the case lifecycle after the imported case is queryable. This
+//     registers the shared manager before any lifecycle-transition rule loads,
+//     while attach-on-existing preserves an earlier boot's phase.
+//  5. the stage-trigger stream, BEFORE the rule processor — a rule that fires
 //     while the stream does not exist publishes into nothing, and a stage that
 //     was never triggered looks exactly like a stage that ran and did nothing.
-//  5. the rule processor.
-//  6. the stranded-turn pass. This is the position that ends live turns when it
+//  6. the rule processor.
+//  7. the stranded-turn pass. This is the position that ends live turns when it
 //     is wrong: the pass reads which turns the substrate still holds work for
 //     and acts on what is MISSING from that set, and the processor's bootstrap
 //     replay publishes into that very set. Run before the processor, the pass
 //     reads an empty set for a turn about to receive a trigger and FAILS it —
 //     terminally, after which the replayed trigger is declined.
-//  7. the stage runners and the egress notifier. The notifier's durable is
+//  8. the stage runners and the egress notifier. The notifier's durable is
 //     DeliverPolicy "new", so a turn that resolves before it binds stays
 //     retrievable and is not pushed; binding it here rather than after intake is
 //     what keeps that window empty.
-//  8. the ledger, then intake, then ingress. Ingress opens last because it is
+//  9. the ledger, then intake, then ingress. Ingress opens last because it is
 //     the only step that lets a stranger add work.
 //
 // Every one of those is a Needs declaration on the step, so a reordering is
@@ -335,6 +343,11 @@ func (e *Engine) steps() []Step {
 			Needs: []StepID{StepGraph},
 			Run:   e.instantiate,
 		},
+		{
+			ID:    StepLifecycle,
+			Needs: []StepID{StepWorld, StepGraph},
+			Run:   e.attachCaseLifecycle,
+		},
 		{ID: StepStageStream, Needs: []StepID{StepStreams}, Run: e.ensureStageStream},
 		{
 			ID: StepRules,
@@ -343,7 +356,7 @@ func (e *Engine) steps() []Step {
 			// subject no stream captures reaches no durable consumer while
 			// reporting success. The world must be instantiated because the pack
 			// matches turn entities against a world the stages will read.
-			Needs: []StepID{StepStageStream, StepGraph, StepWorld},
+			Needs: []StepID{StepStageStream, StepGraph, StepWorld, StepLifecycle},
 			Run:   e.startRules,
 		},
 		{
@@ -527,12 +540,41 @@ func (e *Engine) startComponent(ctx context.Context, name string, create factory
 
 func (e *Engine) deps() component.Dependencies {
 	return component.Dependencies{
-		NATSClient:      e.client,
-		PayloadRegistry: e.cfg.Registry,
-		Logger:          e.log(),
-		ModelRegistry:   e.cfg.Models,
-		ToolRegistry:    e.tools,
+		NATSClient:       e.client,
+		PayloadRegistry:  e.cfg.Registry,
+		Logger:           e.log(),
+		ModelRegistry:    e.cfg.Models,
+		ToolRegistry:     e.tools,
+		LifecycleManager: e.lifecycle,
 	}
+}
+
+// attachCaseLifecycle registers the workflow and adds its initial phase to an
+// imported case. Manager.Create is attach-on-existing and returns AlreadyExists
+// on restart, so an existing phase is preserved rather than reset.
+func (e *Engine) attachCaseLifecycle(ctx context.Context) error {
+	e.lifecycle = lifecycle.NewManager(e.client, e.log())
+	if err := e.lifecycle.Register(caseflow.Workflow()); err != nil {
+		return fmt.Errorf("register case lifecycle: %w", err)
+	}
+	if e.pkg.Mystery == nil {
+		return nil
+	}
+	var caseID string
+	for _, entity := range e.plan.Entities {
+		if entity.Kind == vocabulary.EntityKindCase && entity.Template.LocalID == e.pkg.Mystery.ID {
+			caseID = entity.ID
+			break
+		}
+	}
+	if caseID == "" {
+		return fmt.Errorf("attach case lifecycle: resolved plan has no case %q", e.pkg.Mystery.ID)
+	}
+	initial := &caseflow.CaseState{ID: caseID, CurrentPhase: vocabulary.CasePhaseColdOpen}
+	if err := e.lifecycle.Create(ctx, initial); err != nil && !errors.Is(err, lifecycle.ErrAlreadyExists) {
+		return fmt.Errorf("attach case lifecycle to %s: %w", caseID, err)
+	}
+	return nil
 }
 
 // ensureAgentStream creates the stream the agentic loop's ports bind.

@@ -59,6 +59,10 @@ const (
 	KindCompanionPolicy Kind = "companion_policy"
 	// KindHintLevel is the bounded companion hint ladder.
 	KindHintLevel Kind = "hint_level"
+	// KindCasePhase is the durable mystery-case lifecycle phase.
+	KindCasePhase Kind = "case_phase"
+	// KindCaseLifecycleEventKind is the closed receipt vocabulary that advances a case.
+	KindCaseLifecycleEventKind Kind = "case_lifecycle_event_kind"
 )
 
 // UnknownValueError reports a value outside a closed set. Every Parse* helper
@@ -144,6 +148,8 @@ var registeredEnums = []enumSet{
 	beliefStanceEnum,
 	companionPolicyEnum,
 	hintLevelEnum,
+	casePhaseEnum,
+	caseLifecycleEventKindEnum,
 }
 
 // Sets returns every closed value set keyed by kind. This is the projection

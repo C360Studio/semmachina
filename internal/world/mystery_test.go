@@ -26,6 +26,7 @@ func completeMysteryLines() string {
 		`{"local_id":"village","type":"scene","triples":[{"predicate":"world.entity.name","object":"Village"}]}`,
 		`{"local_id":"method","type":"item","triples":[{"predicate":"world.entity.name","object":"The method"}]}`,
 		`{"local_id":"kit","type":"character","triples":[{"predicate":"world.entity.name","object":"Kit Finch"},{"predicate":"companion.candidate.policy","object":"bounded-initiative"}]}`,
+		`{"local_id":"victim","type":"character","triples":[{"predicate":"world.entity.name","object":"The victim"}]}`,
 	)
 	for i := 1; i <= 6; i++ {
 		lines = append(lines, fmt.Sprintf(
@@ -56,6 +57,7 @@ func completeMysteryLines() string {
 		`{"predicate":"case.solution.culprit","object":"local:suspect1"}`,
 		`{"predicate":"case.solution.method","object":"local:method"}`,
 		`{"predicate":"case.solution.motive","object":"local:evidence2"}`,
+		`{"predicate":"case.member.victim","object":"local:victim"}`,
 		`{"predicate":"case.requirement.suspects","object":6}`,
 		`{"predicate":"case.requirement.evidence","object":12}`,
 	}
@@ -90,6 +92,9 @@ func TestLoadPackage_ValidatesACompleteTypedMystery(t *testing.T) {
 	if pkg.Mystery.Solution.Culprit != "suspect1" || pkg.Mystery.Solution.Method != "method" ||
 		pkg.Mystery.Solution.Motive != "evidence2" {
 		t.Fatalf("solution = %+v", pkg.Mystery.Solution)
+	}
+	if pkg.Mystery.Victim != "victim" {
+		t.Fatalf("victim = %q, want victim", pkg.Mystery.Victim)
 	}
 	for index, event := range pkg.Mystery.Timeline {
 		if event.Order != index+1 {

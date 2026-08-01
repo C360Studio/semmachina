@@ -378,6 +378,9 @@ func TestProcessorConfig_DeclaresEveryStageSubjectAsAJetStreamPort(t *testing.T)
 	}
 	for _, definition := range config.InlineRules {
 		for _, action := range definition.OnEnter {
+			if action.Type != rule.ActionTypePublish {
+				continue
+			}
 			portType, ok := declared[action.Subject]
 			if !ok {
 				t.Errorf("rule %q publishes to %q, which no output port declares; the rule engine matches the "+
