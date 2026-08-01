@@ -185,6 +185,12 @@ func TestE2E_ACrashInEachStageLaneIsResumedByTheNextBoot(t *testing.T) {
 			}
 			band := vocabulary.OutcomeBand(stringObject(t, state, vocabulary.TurnRollBand))
 			requireCrashResumeBandCommitted(t, w, band)
+
+			// Turn completion and archive append are two different consumers of
+			// the resolved notification. The graph may become terminal before the
+			// ledger consumer has appended its manifest, so wait on the archive's
+			// authoritative subject before asserting its cardinality.
+			manifest := awaitManifest(t, response.TurnID)
 			if count := manifestsFor(t, response.TurnID); count != 1 {
 				t.Errorf("the archive holds %d manifests for turn %s, want exactly 1", count, response.TurnID)
 			}
@@ -192,7 +198,6 @@ func TestE2E_ACrashInEachStageLaneIsResumedByTheNextBoot(t *testing.T) {
 			// And the replay reader agrees the recorded roll is still the roll its
 			// own inputs produce. A resumed turn that had re-rolled would fail here
 			// rather than merely look complete.
-			manifest := awaitManifest(t, response.TurnID)
 			replay, err := w.replayReader(t).Replay(t.Context(), manifest)
 			if err != nil {
 				t.Fatalf("replay the resumed turn: %v", err)
