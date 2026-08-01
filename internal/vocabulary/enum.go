@@ -49,6 +49,16 @@ const (
 	// KindRollGateMapping is the versioned advisory (plausibility, risk) → roll
 	// mapping a recorded expectation was computed under.
 	KindRollGateMapping Kind = "roll_gate_mapping"
+	// KindEvidenceTruthStatus classifies authored evidence without exposing an
+	// open-ended truth label to rules or personas.
+	KindEvidenceTruthStatus Kind = "evidence_truth_status"
+	// KindBeliefStance is the closed stance a named actor holds toward evidence.
+	KindBeliefStance Kind = "belief_stance"
+	// KindCompanionPolicy is the package-authored admission policy for a
+	// character-backed companion candidate.
+	KindCompanionPolicy Kind = "companion_policy"
+	// KindHintLevel is the bounded companion hint ladder.
+	KindHintLevel Kind = "hint_level"
 )
 
 // UnknownValueError reports a value outside a closed set. Every Parse* helper
@@ -130,6 +140,10 @@ var registeredEnums = []enumSet{
 	rngEnum,
 	failureReasonEnum,
 	rollGateMappingEnum,
+	evidenceTruthStatusEnum,
+	beliefStanceEnum,
+	companionPolicyEnum,
+	hintLevelEnum,
 }
 
 // Sets returns every closed value set keyed by kind. This is the projection

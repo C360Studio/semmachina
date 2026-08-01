@@ -319,9 +319,9 @@ func TestParseEntities_HonorsCallerSuppliedAttributeBounds(t *testing.T) {
 }
 
 // AuthorWritable is the closure boundary a world author actually faces. It has
-// to be exactly the world facts minus the engine-owned two, or the error
+// to be exactly the world facts minus engine-owned runtime state, or the error
 // message listing "what you may declare" is lying.
-func TestAuthorWritablePredicates_AreWorldFactsMinusTheEngineOwnedOnes(t *testing.T) {
+func TestAuthorWritablePredicates_AreWorldFactsMinusEngineOwnedState(t *testing.T) {
 	writable := make(map[vocabulary.Predicate]bool)
 	for _, p := range world.AuthorWritablePredicates() {
 		writable[p] = true
@@ -337,9 +337,23 @@ func TestAuthorWritablePredicates_AreWorldFactsMinusTheEngineOwnedOnes(t *testin
 		t.Fatal("player.character.current is author-writable; the template could only be instantiated once")
 	}
 
+	engineOwned := map[vocabulary.Predicate]bool{
+		vocabulary.WorldEntityKind:        true,
+		vocabulary.PlayerCharacterCurrent: true,
+		vocabulary.RevelationEvidenceRef:  true,
+		vocabulary.CompanionBondPlayer:    true,
+		vocabulary.CompanionBondCharacter: true,
+		vocabulary.CompanionBondPolicy:    true,
+		vocabulary.CompanionBondHintLevel: true,
+	}
+	for predicate := range engineOwned {
+		if writable[predicate] {
+			t.Fatalf("engine-owned predicate %q is author-writable", predicate)
+		}
+	}
+
 	for _, p := range vocabulary.WorldFactPredicates() {
-		engineOwned := p == vocabulary.WorldEntityKind || p == vocabulary.PlayerCharacterCurrent
-		if !engineOwned && !writable[p] {
+		if !engineOwned[p] && !writable[p] {
 			t.Fatalf("world fact %q is neither engine-owned nor author-writable; nothing can ever set it", p)
 		}
 	}

@@ -179,6 +179,18 @@ func enginePredicateNamespaces() ([]reservedDomain, error) {
 				"of their own campaign (the rest of the player domain, the played-character binding " +
 				"included, is world content and stays authorable)",
 		},
+		{
+			predicate: vocabulary.CaseSolutionCulprit,
+			width:     domainAndCategory,
+			why: "the canonical culprit, method, and motive are immutable authored seed truth; a world rule " +
+				"that reads them bypasses epistemic projection, and one that writes them changes the answer",
+		},
+		{
+			predicate: vocabulary.EvidenceTruthStatusCurrent,
+			width:     domainAndCategory,
+			why: "evidence truth status is immutable authored seed truth; a world rule that reads it reveals " +
+				"whether evidence is a clue or red herring, and one that writes it rewrites the case",
+		},
 	}
 
 	domains := make([]reservedDomain, 0, len(sources))

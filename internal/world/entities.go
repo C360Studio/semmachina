@@ -276,6 +276,60 @@ func parseFactObject(
 		}
 		return TemplateFact{Predicate: predicate, Literal: value}, nil
 
+	case ShapeOrdinal:
+		value, err := decodeInt(raw)
+		if err != nil {
+			return TemplateFact{}, err
+		}
+		if value < 1 {
+			return TemplateFact{}, fmt.Errorf("predicate %q must be a positive whole number", predicate)
+		}
+		return TemplateFact{Predicate: predicate, Literal: value}, nil
+
+	case ShapeEvidenceTruthStatus:
+		text, err := decodeString(raw)
+		if err != nil {
+			return TemplateFact{}, err
+		}
+		status, err := vocabulary.ParseEvidenceTruthStatus(text)
+		if err != nil {
+			return TemplateFact{}, err
+		}
+		return TemplateFact{Predicate: predicate, Literal: string(status)}, nil
+
+	case ShapeBeliefStance:
+		text, err := decodeString(raw)
+		if err != nil {
+			return TemplateFact{}, err
+		}
+		stance, err := vocabulary.ParseBeliefStance(text)
+		if err != nil {
+			return TemplateFact{}, err
+		}
+		return TemplateFact{Predicate: predicate, Literal: string(stance)}, nil
+
+	case ShapeCompanionPolicy:
+		text, err := decodeString(raw)
+		if err != nil {
+			return TemplateFact{}, err
+		}
+		policy, err := vocabulary.ParseCompanionPolicy(text)
+		if err != nil {
+			return TemplateFact{}, err
+		}
+		return TemplateFact{Predicate: predicate, Literal: string(policy)}, nil
+
+	case ShapeHintLevel:
+		text, err := decodeString(raw)
+		if err != nil {
+			return TemplateFact{}, err
+		}
+		level, err := vocabulary.ParseHintLevel(text)
+		if err != nil {
+			return TemplateFact{}, err
+		}
+		return TemplateFact{Predicate: predicate, Literal: string(level)}, nil
+
 	case ShapeText:
 		text, err := decodeString(raw)
 		if err != nil {

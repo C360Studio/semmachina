@@ -385,10 +385,17 @@ func TestAllowsObjectKind_EnforcesTheRegisteredRule(t *testing.T) {
 // styled: the merge lane replaces a predicate's WHOLE value set, so a writer
 // that treats `carries` as single-valued deletes every other carried item and
 // reports success. One home for the answer, or the callers disagree.
-func TestIsMultiValued_IsExactlyTheRelationPredicates(t *testing.T) {
+func TestIsMultiValued_CoversRelationsAndCaseMemberships(t *testing.T) {
 	multi := make(map[vocabulary.Predicate]bool)
 	for _, r := range vocabulary.Relations() {
 		p, _ := vocabulary.RelationPredicate(r)
+		multi[p] = true
+	}
+	for _, p := range []vocabulary.Predicate{
+		vocabulary.CaseMemberSuspect,
+		vocabulary.CaseMemberEvidence,
+		vocabulary.CaseMemberTimeline,
+	} {
 		multi[p] = true
 	}
 	for _, p := range vocabulary.AllPredicates() {

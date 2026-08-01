@@ -7,39 +7,63 @@ import (
 	ssvocab "github.com/c360studio/semstreams/vocabulary"
 )
 
-// ruleOpaquePredicates are the predicates whose OBJECT IS FICTION.
+// ruleOpaquePredicates are predicates rules must never use as conditions.
 //
-// The membership rule is exactly that and nothing wider. A predicate belongs
-// here when the value sitting in the triple is prose a human or a model wrote —
-// not a code, not a number, not an identifier, and not a pointer at prose stored
-// somewhere else. Everything the engine writes at runtime is a closed-vocabulary
-// code, a bounded number, a six-part entity ID, or a storage reference, so the
-// only members are the two predicates a WORLD PACKAGE authors as free text.
+// There are two reasons for membership. WorldEntityName and
+// WorldEntityDescription carry author-written fiction, which rules may not
+// parse. The mystery solution, evidence classification, and targeted belief
+// predicates are structurally private authored facts: their objects are IDs or
+// closed values, but branching on them would bypass epistemic projection and
+// reveal private truth. RuleOpaque is therefore an authorization boundary as
+// well as the fiction boundary.
 //
-// Reference predicates are deliberately NOT here, and that exclusion is
-// load-bearing rather than an oversight. A `*.ref` object is a structural
-// pointer: matching one tells a rule that a stage finished, and tells it nothing
-// about what the stage said. Turn sequencing closes a turn by matching the
-// arrival of turn.narration.ref — so flagging a reference rule-opaque would not
-// tighten the fiction boundary, it would fail the whole rule pack at load.
+// Storage-reference predicates are deliberately not opaque merely because
+// they end in `*.ref`. A storage pointer tells a rule that a stage finished and
+// nothing about the content behind it. Turn sequencing closes a turn by
+// matching turn.narration.ref, so classifying all references as opaque would
+// fail the engine's own rule pack. Mystery solution and belief references are
+// opaque for their private meaning, not their wire shape.
 // TestRegisterPredicates_LeavesEveryStorageReferenceRuleMatchable holds that
 // line from the other side.
 //
 // What the flag buys is M1 enforced by the SUBSTRATE. Upstream's rule-config
 // validator rejects any rule whose condition field names a rule-opaque
-// predicate, on both the file-load and the hot-reload path, so "no rule branches
-// on prose" stops being a review convention and becomes a rule pack that will
-// not start.
+// predicate, on both the file-load and the hot-reload path, so neither prose
+// nor structurally private authored facts can become rule conditions.
 var ruleOpaquePredicates = []Predicate{
 	// The display name a persona speaks. Author-written text, and a rule
 	// branching on a character's name would be a rule reading the fiction.
 	WorldEntityName,
 	// Author-written flavor text, fed to personas verbatim.
 	WorldEntityDescription,
+	// Authored canonical truth and private belief state are never legitimate
+	// rule conditions. Structural revelation and knowledge references remain
+	// matchable for the authorization workflows that commit them.
+	CaseSolutionCulprit,
+	CaseSolutionMethod,
+	CaseSolutionMotive,
+	EvidenceTruthStatusCurrent,
+	BeliefActorHolder,
+	BeliefEvidenceRef,
+	BeliefStanceCurrent,
 }
 
-// RuleOpaquePredicates returns the predicates whose object is fiction and which
-// therefore may never appear in a rule condition.
+var immutablePredicates = []Predicate{
+	CaseSolutionCulprit,
+	CaseSolutionMethod,
+	CaseSolutionMotive,
+	EvidenceTruthStatusCurrent,
+}
+
+// ImmutablePredicates returns canonical mystery truth predicates that only a
+// fully validated package seed may author.
+func ImmutablePredicates() []Predicate { return slices.Clone(immutablePredicates) }
+
+// IsProtectedPredicate reports whether p is immutable authored truth.
+func IsProtectedPredicate(p Predicate) bool { return slices.Contains(immutablePredicates, p) }
+
+// RuleOpaquePredicates returns prose-bearing and structurally private authored
+// predicates that may never appear in a rule condition.
 func RuleOpaquePredicates() []Predicate { return slices.Clone(ruleOpaquePredicates) }
 
 // RegisterPredicates declares every predicate this engine writes in the

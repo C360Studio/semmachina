@@ -1,15 +1,17 @@
 ## 1. Vocabulary and Bellweather Package
 
-- [ ] 1.1 Add failing tests for case, evidence, belief, knowledge, revelation, and
+- [x] 1.1 Add failing tests for case, evidence, belief, knowledge, revelation, and
   companion-bond vocabulary, including immutable and rule-opaque classifications
-- [ ] 1.2 Add failing package-validation tests for one complete case, six suspects,
+- [x] 1.2 Add failing package-validation tests for one complete case, six suspects,
   exactly twelve clues/red herrings, ordered timeline, and complete solution references
-- [ ] 1.3 Implement the registered vocabulary and typed authoring records required by
+- [x] 1.3 Implement the registered vocabulary and typed authoring records required by
   those tests
-- [ ] 1.4 Author `fixtures/worlds/bellweather-maze/` with Kit Finch as a character-backed
+- [x] 1.4 Author `fixtures/worlds/bellweather-maze/` with Kit Finch as a character-backed
   companion candidate and no engine-hardcoded world content
 - [ ] 1.5 Reject import, effect, world-rule, and operator-write attempts that mutate or
   branch on canonical solution and truth-status predicates
+  - Local package, rule, and effect gates are complete; full graph-ingest/operator
+    enforcement is blocked by `C360Studio/semstreams#818`.
 
 ## 2. Case Lifecycle
 

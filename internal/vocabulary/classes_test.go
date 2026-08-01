@@ -159,6 +159,34 @@ func closedSets() []closedSet {
 			nearMiss:  []string{"roll-gate", "roll-gate/v2", "v1", "ROLL-GATE/V1", "requires_roll"},
 			sampleBad: "roll-gate/v2",
 		},
+		{
+			kind:      vocabulary.KindEvidenceTruthStatus,
+			members:   strs(vocabulary.EvidenceTruthStatuses()),
+			parse:     asStringParser(vocabulary.ParseEvidenceTruthStatus),
+			nearMiss:  []string{"true", "false", "red_herring", "Red-Herring", "probably"},
+			sampleBad: "probably",
+		},
+		{
+			kind:      vocabulary.KindBeliefStance,
+			members:   strs(vocabulary.BeliefStances()),
+			parse:     asStringParser(vocabulary.ParseBeliefStance),
+			nearMiss:  []string{"believes", "rejects", "guilty", "Affirms", "not-sure"},
+			sampleBad: "guilty",
+		},
+		{
+			kind:      vocabulary.KindCompanionPolicy,
+			members:   strs(vocabulary.CompanionPolicies()),
+			parse:     asStringParser(vocabulary.ParseCompanionPolicy),
+			nearMiss:  []string{"proactive", "always", "bounded_initiative", "Reactive"},
+			sampleBad: "always",
+		},
+		{
+			kind:      vocabulary.KindHintLevel,
+			members:   strs(vocabulary.HintLevels()),
+			parse:     asStringParser(vocabulary.ParseHintLevel),
+			nearMiss:  []string{"answer", "solution", "next_step", "Nudge"},
+			sampleBad: "solution",
+		},
 	}
 }
 

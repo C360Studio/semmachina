@@ -107,6 +107,10 @@ type Plan struct {
 	// Entities are the entities to materialize, in template file order with
 	// the instance-configured player entity last.
 	Entities []PlannedEntity
+	// seal binds the import plan to the exact result Package.Resolve validated.
+	// It is deliberately unexported: callers may inspect a plan, but cannot
+	// construct or alter one and still present it as validated seed data.
+	seal [32]byte
 }
 
 // IDs returns every entity ID the plan materializes, in plan order.
@@ -126,6 +130,9 @@ func (p *Plan) IDs() []string {
 // same order — which is what makes re-import a no-op rather than a second
 // world. Nothing here reads a clock, a random source, or the environment.
 func (p *Package) Resolve(inst InstanceConfig) (*Plan, error) {
+	if _, err := validateMysteryEntities(p.Entities); err != nil {
+		return nil, fmt.Errorf("validate mystery package: %w", err)
+	}
 	if err := inst.Validate(); err != nil {
 		return nil, err
 	}
@@ -173,13 +180,17 @@ func (p *Package) Resolve(inst InstanceConfig) (*Plan, error) {
 	}
 	planned = append(planned, player)
 
-	return &Plan{
+	plan := &Plan{
 		Org:             inst.Org,
 		WorldNS:         inst.WorldNS,
 		TemplateID:      p.Manifest.ID,
 		TemplateVersion: p.Manifest.Version,
 		Entities:        planned,
-	}, nil
+	}
+	if err := plan.sealResolved(); err != nil {
+		return nil, err
+	}
+	return plan, nil
 }
 
 // resolveFact rewrites one authored fact into instance identity.

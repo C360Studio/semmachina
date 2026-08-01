@@ -177,6 +177,9 @@ func (i *Importer) Import(ctx context.Context, plan *Plan) (ImportResult, error)
 	if len(plan.Entities) == 0 {
 		return ImportResult{}, errors.New("world plan materializes no entities")
 	}
+	if err := plan.requireResolvedSeal(); err != nil {
+		return ImportResult{}, err
+	}
 
 	recordedAt := i.now().UTC()
 	result := ImportResult{
@@ -185,6 +188,16 @@ func (i *Importer) Import(ctx context.Context, plan *Plan) (ImportResult, error)
 		RecordedAt: recordedAt,
 	}
 
+	// Preflight every payload before the first irreversible publish. Package
+	// validation catches authoring mistakes, but this is the final production
+	// boundary over the exact materialized WorldEntity bytes graph-ingest will
+	// receive. Finding poison in entity N after publishing entities 1..N-1
+	// would turn a locally decidable validation error into a partial world.
+	type preparedEntity struct {
+		id   string
+		wire []byte
+	}
+	prepared := make([]preparedEntity, 0, len(plan.Entities))
 	for index, planned := range plan.Entities {
 		entity := planned.Payload(recordedAt)
 		wire, err := i.encode(entity)
@@ -192,14 +205,17 @@ func (i *Importer) Import(ctx context.Context, plan *Plan) (ImportResult, error)
 			return result, fmt.Errorf("entity %d of %d (%s): %w",
 				index+1, len(plan.Entities), entity.ID, err)
 		}
+		prepared = append(prepared, preparedEntity{id: entity.ID, wire: wire})
+	}
 
-		ack, err := i.publisher.PublishToStreamWithAck(ctx, i.subject, wire)
+	for index, entity := range prepared {
+		ack, err := i.publisher.PublishToStreamWithAck(ctx, i.subject, entity.wire)
 		if err != nil {
 			return result, fmt.Errorf("publish entity %d of %d (%s) to %s: %w",
-				index+1, len(plan.Entities), entity.ID, i.subject, err)
+				index+1, len(prepared), entity.id, i.subject, err)
 		}
 
-		result.Entities = append(result.Entities, entity.ID)
+		result.Entities = append(result.Entities, entity.id)
 		// Appended unconditionally, including the zero for a publisher that
 		// returned no ack and no error: Sequences promises positional
 		// correspondence with Entities, and a skipped append would silently

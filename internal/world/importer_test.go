@@ -306,3 +306,38 @@ func TestImport_RejectsAnEmptyPlan(t *testing.T) {
 		t.Fatal("Import accepted a plan that materializes nothing")
 	}
 }
+
+func TestImport_RejectsAnUnvalidatedOrAlteredSeedPlan(t *testing.T) {
+	publisher := &recordingPublisher{}
+	importer, err := world.NewImporter(publisher)
+	if err != nil {
+		t.Fatalf("NewImporter: %v", err)
+	}
+
+	fabricated := &world.Plan{Entities: []world.PlannedEntity{{
+		ID:   "c360.semmachina.world1.mystery.case.case1",
+		Kind: vocabulary.EntityKindCase,
+		Facts: []payload.WorldFact{{
+			Predicate: vocabulary.CaseSolutionCulprit,
+			Object:    "c360.semmachina.world1.mystery.character.suspect1",
+			Reference: true,
+		}},
+	}}}
+	if _, err := importer.Import(t.Context(), fabricated); err == nil {
+		t.Fatal("Import accepted fabricated protected seed data")
+	} else if !strings.Contains(err.Error(), "Package.Resolve") {
+		t.Fatalf("fabricated plan refusal %q does not name the validated path", err)
+	}
+
+	altered := importedPlan(t)
+	altered.Entities[0].Facts = append(altered.Entities[0].Facts, payload.WorldFact{
+		Predicate: vocabulary.WorldEntityDescription,
+		Object:    "changed after validation",
+	})
+	if _, err := importer.Import(t.Context(), altered); err == nil {
+		t.Fatal("Import accepted a plan altered after package validation")
+	}
+	if len(publisher.messages) != 0 {
+		t.Fatalf("import published %d messages before refusing unvalidated seed data", len(publisher.messages))
+	}
+}

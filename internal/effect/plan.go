@@ -305,6 +305,9 @@ func foldIntent(
 	if err != nil {
 		return &violation{code: vocabulary.FailureEffectInvalid, err: err}
 	}
+	if violated := validateEffectPredicate(predicate); violated != nil {
+		return violated
+	}
 	if violated := checkBounds(specs, predicate, object); violated != nil {
 		return violated
 	}
@@ -325,6 +328,18 @@ func foldIntent(
 		}
 	}
 	return foldValue(built.target(intent.Target), target, predicate, object, intent.Type)
+}
+
+// validateEffectPredicate is the last write-independent guard before an
+// effect's mutation is type-checked against a target. Current effect types do
+// not map to protected mystery truth, but keeping the refusal at the derived
+// predicate means adding a future effect mapping cannot silently make the
+// authored solution mutable.
+func validateEffectPredicate(predicate vocabulary.Predicate) *violation {
+	if vocabulary.IsProtectedPredicate(predicate) {
+		return invalid("%s is immutable authored truth and cannot be written by an effect", predicate)
+	}
+	return nil
 }
 
 // checkBounds applies THIS applier's attribute bounds to a numeric write.

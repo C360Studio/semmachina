@@ -37,11 +37,20 @@ const (
 	// EntityKindPlayer is the human at the table, as a durable graph entity.
 	// Player identity is never a connection ID, so it needs a home in the
 	// graph; the binding to a played character is PlayerCharacterCurrent.
-	EntityKindPlayer EntityKind = "player"
+	EntityKindPlayer        EntityKind = "player"
+	EntityKindCase          EntityKind = "case"
+	EntityKindEvidence      EntityKind = "evidence"
+	EntityKindEvent         EntityKind = "event"
+	EntityKindBelief        EntityKind = "belief"
+	EntityKindKnowledge     EntityKind = "knowledge"
+	EntityKindRevelation    EntityKind = "revelation"
+	EntityKindCompanionBond EntityKind = "companion-bond"
 )
 
 var entityKindEnum = newEnum(KindEntityKind,
-	EntityKindCharacter, EntityKindItem, EntityKindScene, EntityKindPlayer)
+	EntityKindCharacter, EntityKindItem, EntityKindScene, EntityKindPlayer,
+	EntityKindCase, EntityKindEvidence, EntityKindEvent, EntityKindBelief,
+	EntityKindKnowledge, EntityKindRevelation, EntityKindCompanionBond)
 
 // EntityKinds returns the closed entity-kind set.
 func EntityKinds() []EntityKind { return entityKindEnum.all() }
@@ -66,9 +75,13 @@ func ParseEntityKind(s string) (EntityKind, error) { return entityKindEnum.parse
 // turn.phase.current is a category error, and SubjectKindsFor says so by
 // returning false rather than an empty list.
 var worldFactSubjectKinds = map[Predicate][]EntityKind{
-	WorldEntityName:        {EntityKindCharacter, EntityKindItem, EntityKindScene, EntityKindPlayer},
-	WorldEntityKind:        {EntityKindCharacter, EntityKindItem, EntityKindScene, EntityKindPlayer},
-	WorldEntityDescription: {EntityKindCharacter, EntityKindItem, EntityKindScene, EntityKindPlayer},
+	WorldEntityName: {EntityKindCharacter, EntityKindItem, EntityKindScene, EntityKindPlayer,
+		EntityKindCase, EntityKindEvidence, EntityKindEvent},
+	WorldEntityKind: {EntityKindCharacter, EntityKindItem, EntityKindScene, EntityKindPlayer,
+		EntityKindCase, EntityKindEvidence, EntityKindEvent, EntityKindBelief, EntityKindKnowledge,
+		EntityKindRevelation, EntityKindCompanionBond},
+	WorldEntityDescription: {EntityKindCharacter, EntityKindItem, EntityKindScene, EntityKindPlayer,
+		EntityKindCase, EntityKindEvidence, EntityKindEvent},
 
 	PlayerCharacterCurrent: {EntityKindPlayer},
 
@@ -91,6 +104,28 @@ var worldFactSubjectKinds = map[Predicate][]EntityKind{
 	WorldRelationKnows:      {EntityKindCharacter},
 	WorldRelationCarries:    {EntityKindCharacter},
 	WorldRelationOwesDebt:   {EntityKindCharacter},
+
+	CaseSolutionCulprit:        {EntityKindCase},
+	CaseSolutionMethod:         {EntityKindCase},
+	CaseSolutionMotive:         {EntityKindCase},
+	CaseRequirementSuspects:    {EntityKindCase},
+	CaseRequirementEvidence:    {EntityKindCase},
+	CaseMemberSuspect:          {EntityKindCase},
+	CaseMemberEvidence:         {EntityKindCase},
+	CaseMemberTimeline:         {EntityKindCase},
+	CaseTimelineOrder:          {EntityKindEvent},
+	EvidenceTruthStatusCurrent: {EntityKindEvidence},
+	BeliefActorHolder:          {EntityKindBelief},
+	BeliefEvidenceRef:          {EntityKindBelief},
+	BeliefStanceCurrent:        {EntityKindBelief},
+	KnowledgeActorHolder:       {EntityKindKnowledge},
+	KnowledgeEvidenceRef:       {EntityKindKnowledge},
+	RevelationEvidenceRef:      {EntityKindRevelation},
+	CompanionCandidatePolicy:   {EntityKindCharacter},
+	CompanionBondPlayer:        {EntityKindCompanionBond},
+	CompanionBondCharacter:     {EntityKindCompanionBond},
+	CompanionBondPolicy:        {EntityKindCompanionBond},
+	CompanionBondHintLevel:     {EntityKindCompanionBond},
 }
 
 // referenceObjectKinds records which entity kinds may be the OBJECT of each
@@ -121,6 +156,19 @@ var referenceObjectKinds = map[Predicate][]EntityKind{
 	WorldRelationKnows:      {EntityKindCharacter},
 	WorldRelationCarries:    {EntityKindItem},
 	WorldRelationOwesDebt:   {EntityKindCharacter},
+	CaseSolutionCulprit:     {EntityKindCharacter},
+	CaseSolutionMethod:      {EntityKindItem},
+	CaseSolutionMotive:      {EntityKindEvidence},
+	CaseMemberSuspect:       {EntityKindCharacter},
+	CaseMemberEvidence:      {EntityKindEvidence},
+	CaseMemberTimeline:      {EntityKindEvent},
+	BeliefActorHolder:       {EntityKindCharacter},
+	BeliefEvidenceRef:       {EntityKindEvidence},
+	KnowledgeActorHolder:    {EntityKindCharacter},
+	KnowledgeEvidenceRef:    {EntityKindEvidence},
+	RevelationEvidenceRef:   {EntityKindEvidence},
+	CompanionBondPlayer:     {EntityKindPlayer},
+	CompanionBondCharacter:  {EntityKindCharacter},
 }
 
 // sceneMembershipPredicates is the closed set of edges that put an entity IN a
@@ -198,6 +246,9 @@ func IsEntityReference(p Predicate) bool {
 // carries several things and knows several people, while health, status, and
 // location each hold one value by definition.
 func IsMultiValued(p Predicate) bool {
+	if slices.Contains([]Predicate{CaseMemberSuspect, CaseMemberEvidence, CaseMemberTimeline}, p) {
+		return true
+	}
 	_, ok := RelationForPredicate(p)
 	return ok
 }

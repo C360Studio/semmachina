@@ -35,6 +35,9 @@ type Package struct {
 	Manifest Manifest
 	// Entities are the template entities in file order.
 	Entities []TemplateEntity
+	// Mystery is the typed, validated projection of mystery authoring records.
+	// It is nil for worlds that declare no case.
+	Mystery *MysteryCase
 	// RuleFiles and PersonaFiles are the package-relative paths of the world's
 	// reactions and persona configurations, sorted. RuleFiles may be empty: a
 	// world that reacts to nothing is a legitimate world (see optionalDir).
@@ -101,6 +104,10 @@ func LoadPackage(fsys fs.FS, opts LoadOptions) (*Package, error) {
 	if err != nil {
 		return nil, err
 	}
+	mystery, err := validateMysteryEntities(entities)
+	if err != nil {
+		return nil, fmt.Errorf("validate mystery package: %w", err)
+	}
 
 	ruleFiles, err := loadJSONDir(fsys, RulesDir, optionalDir, checkRuleFile)
 	if err != nil {
@@ -114,6 +121,7 @@ func LoadPackage(fsys fs.FS, opts LoadOptions) (*Package, error) {
 	return &Package{
 		Manifest:     manifest,
 		Entities:     entities,
+		Mystery:      mystery,
 		RuleFiles:    ruleFiles,
 		PersonaFiles: personaFiles,
 	}, nil

@@ -27,6 +27,16 @@ const (
 	ShapeAttribute
 	// ShapeStatus is a member of the closed status set.
 	ShapeStatus
+	// ShapeOrdinal is a positive authored sequence position or cardinality.
+	ShapeOrdinal
+	// ShapeEvidenceTruthStatus is the closed evidence classification.
+	ShapeEvidenceTruthStatus
+	// ShapeBeliefStance is the closed actor-belief stance.
+	ShapeBeliefStance
+	// ShapeCompanionPolicy is the closed companion admission policy.
+	ShapeCompanionPolicy
+	// ShapeHintLevel is the closed bounded hint level.
+	ShapeHintLevel
 )
 
 // ObjectShapeFor returns the object shape a template author must write for p,
@@ -47,6 +57,20 @@ func ObjectShapeFor(p vocabulary.Predicate) ObjectShape {
 	switch p {
 	case vocabulary.CharacterStatusCurrent:
 		return ShapeStatus
+	case vocabulary.CaseRequirementSuspects,
+		vocabulary.CaseRequirementEvidence,
+		vocabulary.CaseTimelineOrder:
+		return ShapeOrdinal
+	case vocabulary.CompanionCandidatePolicy:
+		return ShapeCompanionPolicy
+	case vocabulary.EvidenceTruthStatusCurrent:
+		return ShapeEvidenceTruthStatus
+	case vocabulary.BeliefStanceCurrent:
+		return ShapeBeliefStance
+	case vocabulary.CompanionBondPolicy:
+		return ShapeCompanionPolicy
+	case vocabulary.CompanionBondHintLevel:
+		return ShapeHintLevel
 	case vocabulary.WorldEntityName, vocabulary.WorldEntityDescription:
 		return ShapeText
 	default:
@@ -68,6 +92,14 @@ func ObjectShapeFor(p vocabulary.Predicate) ObjectShape {
 var engineOwnedFacts = []vocabulary.Predicate{
 	vocabulary.WorldEntityKind,
 	vocabulary.PlayerCharacterCurrent,
+	// Revelations are committed turn receipts, never package seeds.
+	vocabulary.RevelationEvidenceRef,
+	// A bond names an instance-configured player, so the template can only mark
+	// a character as eligible; the durable bond itself is runtime state.
+	vocabulary.CompanionBondPlayer,
+	vocabulary.CompanionBondCharacter,
+	vocabulary.CompanionBondPolicy,
+	vocabulary.CompanionBondHintLevel,
 }
 
 // AuthorWritable reports whether a template package may declare p.

@@ -296,6 +296,37 @@ const (
 	WorldRelationOwesDebt Predicate = "world.relation.owes-debt"
 )
 
+// Mystery authoring predicates. Canonical solution and evidence-truth facts
+// are protected seed data; the remaining predicates are structural records
+// used by the later lifecycle and epistemic capabilities.
+const (
+	CaseSolutionCulprit Predicate = "case.solution.culprit"
+	CaseSolutionMethod  Predicate = "case.solution.method"
+	CaseSolutionMotive  Predicate = "case.solution.motive"
+
+	CaseRequirementSuspects Predicate = "case.requirement.suspects"
+	CaseRequirementEvidence Predicate = "case.requirement.evidence"
+	CaseMemberSuspect       Predicate = "case.member.suspect"
+	CaseMemberEvidence      Predicate = "case.member.evidence"
+	CaseMemberTimeline      Predicate = "case.member.timeline"
+	CaseTimelineOrder       Predicate = "case.timeline.order"
+
+	EvidenceTruthStatusCurrent Predicate = "evidence.truth.status"
+
+	BeliefActorHolder     Predicate = "belief.actor.holder"
+	BeliefEvidenceRef     Predicate = "belief.evidence.target"
+	BeliefStanceCurrent   Predicate = "belief.stance.current"
+	KnowledgeActorHolder  Predicate = "knowledge.actor.holder"
+	KnowledgeEvidenceRef  Predicate = "knowledge.evidence.target"
+	RevelationEvidenceRef Predicate = "revelation.evidence.target"
+
+	CompanionCandidatePolicy Predicate = "companion.candidate.policy"
+	CompanionBondPlayer      Predicate = "companion.bond.player"
+	CompanionBondCharacter   Predicate = "companion.bond.character"
+	CompanionBondPolicy      Predicate = "companion.bond.policy"
+	CompanionBondHintLevel   Predicate = "companion.bond.hint-level"
+)
+
 // allPredicates is the authoritative list. A predicate constant missing from
 // it is caught by TestClosedSets_EveryDeclaredConstantIsEnumerated.
 var allPredicates = []Predicate{
@@ -337,6 +368,27 @@ var allPredicates = []Predicate{
 	WorldRelationKnows,
 	WorldRelationCarries,
 	WorldRelationOwesDebt,
+	CaseSolutionCulprit,
+	CaseSolutionMethod,
+	CaseSolutionMotive,
+	CaseRequirementSuspects,
+	CaseRequirementEvidence,
+	CaseMemberSuspect,
+	CaseMemberEvidence,
+	CaseMemberTimeline,
+	CaseTimelineOrder,
+	EvidenceTruthStatusCurrent,
+	BeliefActorHolder,
+	BeliefEvidenceRef,
+	BeliefStanceCurrent,
+	KnowledgeActorHolder,
+	KnowledgeEvidenceRef,
+	RevelationEvidenceRef,
+	CompanionCandidatePolicy,
+	CompanionBondPlayer,
+	CompanionBondCharacter,
+	CompanionBondPolicy,
+	CompanionBondHintLevel,
 }
 
 // AllPredicates returns every predicate identity the engine writes.

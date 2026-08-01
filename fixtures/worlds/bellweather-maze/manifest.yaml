@@ -1,0 +1,9 @@
+id: bellweather-maze
+name: Death in the Bellweather Maze
+version: 0.1.0
+engine_compat: ">=v1.0.0-beta.159 <v2.0.0"
+description: >-
+  An original cozy English-village mystery. During Bellweather's topiary fete,
+  the parish chair is found dead inside the prize maze. Six respectable people
+  have appalling motives, three are lying about unrelated scandals, and Kit
+  Finch is ready to help without knowing more than the evidence he has earned.
