@@ -9,7 +9,7 @@ the engine can preserve a mystery while a bounded, knowledgeable companion parti
 
 ## What Changes
 
-- Add an immutable authored mystery case with a canonical solution, ordered timeline,
+- Add a protected authored mystery case with a canonical solution, ordered timeline,
   six suspects, and twelve clues or red herrings.
 - Separate canonical truth, character belief, actor knowledge, and narration revelation,
   and project only audience-authorized state into every persona request.
@@ -39,7 +39,7 @@ the engine can preserve a mystery while a bounded, knowledgeable companion parti
 
 ### Modified Capabilities
 
-- `world-loading`: validate and import immutable mystery, knowledge, and companion data.
+- `world-loading`: validate and import protected mystery, knowledge, and companion data.
 - `turn-sequencing`: add durable interpretation and companion phases with recovery and
   deterministic no-op behavior.
 - `fiction-adjudication`: keep ordinary adjudication on a public, audience-safe projection.
@@ -58,14 +58,17 @@ the engine can preserve a mystery while a bounded, knowledgeable companion parti
 - Creator UI, place ontology or maps, world clock, chronicler, continuity checker, and
   general campaign lifecycle work.
 - Live-model inference in CI; Gemini remains an explicit, paid smoke run.
+- Substrate-backed graph/operator truth-write enforcement, knowledge-revision hint reset,
+  and crash-atomic provider dispatch. Those guarantees move to the focused
+  `mystery-companion-hardening` follow-up.
 
 ## Classification
 
 This is **game-repo work**: personas judge fiction, rules match closed structured
 decisions, components execute bounded projection, grants, hints, and exact-ID
 verification, and a case lifecycle owns phase. It composes existing SemStreams
-primitives; any substrate gap found during implementation becomes an upstream issue
-rather than a local engine workaround.
+primitives. The three substrate-dependent hardening guarantees found during implementation
+are tracked in `mystery-companion-hardening` rather than implemented as local workarounds.
 
 ## Impact
 

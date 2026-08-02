@@ -1,20 +1,21 @@
 ## ADDED Requirements
 
-### Requirement: Authored mystery case is complete and immutable
+### Requirement: Authored mystery case is complete and protected
 Each mystery package SHALL declare one case with a canonical culprit, method, motive,
 ordered timeline, suspects, and evidence. The Bellweather acceptance package SHALL contain
-exactly six suspects and twelve clues or red herrings. Canonical solution and truth-status
-values SHALL NOT be mutable after import.
+exactly six suspects and twelve clues or red herrings. Package validation and import SHALL
+classify canonical solution and truth-status predicates as immutable, and package rules and
+effect intents SHALL NOT branch on or mutate them.
 
 #### Scenario: Bellweather package is structurally complete
 - **WHEN** the Bellweather package is validated
 - **THEN** it contains one case, six suspects, twelve evidence entities including multiple
   red herrings, and complete culprit, method, motive, and ordered timeline references
 
-#### Scenario: Canonical truth cannot be rewritten
-- **WHEN** an effect, world rule, or operator write attempts to change a canonical solution
-  or truth-status predicate after import
-- **THEN** the write is rejected and the authored value remains unchanged
+#### Scenario: Package-local truth mutation is rejected
+- **WHEN** package validation, import, a world rule, or an effect intent encounters a protected
+  canonical solution or truth-status mutation
+- **THEN** the domain gate rejects it before the authored value can change
 
 ### Requirement: Natural-language investigation exits through CaseDecision
 The casekeeper SHALL interpret a player's natural-language case action into one

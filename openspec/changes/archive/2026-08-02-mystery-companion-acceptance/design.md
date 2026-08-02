@@ -24,7 +24,7 @@ execute work, and lifecycle owns phase.
   and accusations mechanically.
 - Make Kit Finch the first instance of a reusable companion capability with durable
   identity, scoped knowledge, bounded initiative, and deterministic hints.
-- Preserve crash recovery, idempotency, bounded calls, and token-free CI acceptance.
+- Preserve crash recovery, logical idempotency, bounded calls, and token-free CI acceptance.
 
 **Non-Goals:**
 
@@ -36,7 +36,7 @@ execute work, and lifecycle owns phase.
 
 ## Decisions
 
-### D1 — The case is immutable authored graph state with a dedicated lifecycle
+### D1 — The case is protected authored graph state with a dedicated lifecycle
 
 The Bellweather package declares one case entity, six suspect characters, exactly twelve
 clue/red-herring entities, culprit/method/motive references, and an ordered timeline.
@@ -46,9 +46,10 @@ exclusively owns `case.lifecycle.phase`; rules request transitions after structu
 land. A wrong accusation remains in `accusation`; a correct accusation enters terminal
 `denouement`.
 
-Canonical solution and truth-status predicates are immutable after import and unavailable
-to effects, world rules, and operator writes. They remain readable through authorized
-operator surfaces and purpose-scoped engine reads.
+Canonical solution and truth-status predicates are classified as immutable during package
+validation and import and are unavailable to effects and world rules. They remain readable
+through authorized operator surfaces and purpose-scoped engine reads. Substrate-backed rejection
+of later graph-ingest and operator writes is deferred to `mystery-companion-hardening`.
 
 Alternatives rejected: encoding the solution in persona prose leaks it; using the turn
 phase for case progression confuses one request with a multi-turn workflow; letting a
@@ -159,10 +160,10 @@ the narrator's voice ownership.
 ### D7 — Hint progression and initiative are deterministic and bounded
 
 `HintLadder` chooses and persists `nudge → connect → next-step` on the companion bond.
-Further requests stay at the bounded final level. A newly committed knowledge grant for
-that companion is the only reset condition and makes the next hint a `nudge`; duplicate or
-rejected grants do not reset it. Every cited evidence reference must already be
-companion-known.
+Further requests stay at the bounded final level. Every cited evidence reference must already be
+companion-known. Exact reset on a newly committed companion knowledge grant requires an
+authoritative revision and conditional graph mutation and is deferred to
+`mystery-companion-hardening`.
 
 Rules trigger automatic companion work only from closed decision or resolution facts, at
 most once per triggering turn, with an explicit nonzero `max_iterations` that is the hard
@@ -205,8 +206,8 @@ fields, optionality, and closed sets.
 One deterministic mock-model E2E traverses discovery, investigation, knowledge sharing,
 the hint ladder, wrong accusation, correct accusation, and denouement. It checks secret
 canaries with unique IDs and unique text values in projector output, serialized prompt
-bytes, model requests, and egress. The Bellweather script includes idempotent redelivery
-assertions.
+bytes, model requests, and egress. The Bellweather script includes sequential-redelivery
+convergence assertions.
 
 Gemini Flash may run one short investigation and Kit exchange through a Taskfile target
 that loads `.env`. It is never required by CI and must be actively polled when invoked
@@ -223,7 +224,8 @@ because it is a paid operation.
 - [Two added stages increase latency and paid calls] → deterministic no-op artifacts skip
   irrelevant calls; mock inference remains the CI gate.
 - [Package vocabulary may expose a SemStreams substrate gap] → file the gap upstream and
-  block the affected task instead of adding a local substrate workaround.
+  move stronger substrate-dependent guarantees to focused hardening work instead of adding a
+  local workaround.
 
 ## Migration Plan
 
@@ -241,6 +243,6 @@ because it is a paid operation.
 
 ## Open Questions
 
-No blocking design questions remain. Exact predicate names and package record shapes are
-implementation details to settle under the closed contracts above; any required substrate
-change must be raised upstream before proceeding.
+No blocking design questions remain within this acceptance scope. Stronger graph/operator
+truth-write enforcement, grant-revision hint reset, and crash-atomic provider dispatch are
+tracked by `mystery-companion-hardening` and their linked SemStreams issues.

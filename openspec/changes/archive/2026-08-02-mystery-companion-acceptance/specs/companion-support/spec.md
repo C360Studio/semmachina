@@ -53,9 +53,7 @@ belongs to the companion's knowledge projection.
 ### Requirement: Hint ladder is deterministic and bounded
 Repeated valid hint requests SHALL advance the bond's hint level through
 `nudge → connect → next-step`. Requests after `next-step` SHALL remain at that final level.
-A newly committed actor-knowledge grant for that companion SHALL be the only hint-ladder
-reset and SHALL make the next hint a `nudge`; a duplicate, rejected, or other actor's grant
-SHALL NOT reset it. Every hint SHALL cite only companion-known evidence.
+Every hint SHALL cite only companion-known evidence.
 
 #### Scenario: Three requests climb the ladder
 - **WHEN** the player makes three valid hint requests without a reset
@@ -67,18 +65,14 @@ SHALL NOT reset it. Every hint SHALL cite only companion-known evidence.
 - **THEN** the ladder stays bounded, and the response cites no evidence outside the
   companion's knowledge projection
 
-#### Scenario: New companion knowledge resets the ladder exactly once
-- **WHEN** a new knowledge grant commits for the companion after the ladder reached
-  `next-step`
-- **THEN** the next hint is `nudge`, and redelivery of the same grant does not reset an
-  already advanced ladder again
-
 ### Requirement: Companion initiative is capped and idempotent
 Automatic companion work SHALL start only from a structured trigger, at most once for the
 triggering turn. Every triggering rule SHALL declare a nonzero iteration cap as the hard
 initiative ceiling and a silent exhaust path. Any bond-policy or component admission bound
 SHALL be less than or equal to that rule cap and SHALL NOT replace or bypass it. Duplicate
-decisions, triggers, or deliveries SHALL NOT cause duplicate model calls or resolutions.
+decisions, triggers, or sequential deliveries SHALL converge on one logical task and one
+committed resolution. This logical idempotency does not claim at-most-one provider call across
+a process crash.
 
 #### Scenario: Kit intervenes once
 - **WHEN** a structured warning trigger lands twice for one turn

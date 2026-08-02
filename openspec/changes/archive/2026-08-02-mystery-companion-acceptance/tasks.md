@@ -8,12 +8,6 @@
   those tests
 - [x] 1.4 Author `fixtures/worlds/bellweather-maze/` with Kit Finch as a character-backed
   companion candidate and no engine-hardcoded world content
-- [ ] 1.5 Reject import, effect, world-rule, and operator-write attempts that mutate or
-  branch on canonical solution and truth-status predicates
-  - Local package, rule, and effect gates are complete; full graph-ingest/operator
-    enforcement is blocked by
-    [SemStreams issue #818](https://github.com/C360Studio/semstreams/issues/818), which was
-    verified open on 2026-08-02.
 
 ## 2. Case Lifecycle
 
@@ -122,17 +116,6 @@
 
 ## 8. Hint Ladder and Bounded Initiative
 
-- [ ] 8.1 Add failing tests for `nudge → connect → next-step`, final-level bounding, exact
-  reset on a newly committed companion knowledge grant, and no reset on duplicate or
-  rejected grants
-  - Ladder progression, final-level saturation, deterministic projection-bounded evidence
-    selection, and serialized advances are implemented. The knowledge-driven reset remains
-    blocked: it requires a revision-bearing authoritative entity read plus
-    expected-revision/conditional graph mutation. This reset gap belongs to 8.1, not 8.5,
-    and is tracked by [SemStreams issue #851](https://github.com/C360Studio/semstreams/issues/851),
-    which was verified open on 2026-08-02.
-  - The current keyed bond lock is process-local and assumes one process per world;
-    active-active ladder compare-and-swap is unsupported.
 - [x] 8.2 Implement deterministic `HintLadder` selection using companion-known evidence
   - Selection intersects exact companion knowledge records with the authorized companion
     projection, sorts and deduplicates evidence, and applies the fixed per-level bound.
@@ -146,15 +129,6 @@
   when no active bond or trigger applies
   - Applying now crosses an artifact-gated companion stage before narration. No-bond and
     no-trigger paths commit exact-resident structural no-op records without a model task.
-- [ ] 8.5 Add restart and duplicate-delivery tests proving one companion call and one
-  resolution at most per triggering turn
-  - One logical task publication is identified deterministically per turn, and one
-    exact-resident companion stage outcome plus graph reference is proven across retries.
-    Literal at-most-one provider call across a process crash remains blocked: it requires
-    a durable atomic `TaskID → LoopID → initial RequestID` claim and idempotent request
-    publication. The exact crash window and acceptance criteria are recorded on
-    [SemStreams issue #807](https://github.com/C360Studio/semstreams/issues/807), which was
-    verified open on 2026-08-02.
 
 ## 9. Narration and Player Protocol
 
@@ -233,10 +207,8 @@
     `docs/smoke-results/2026-08-02-bellweather-gemini.md`; provider billing detail was not captured.
   - A preceding pre-ingress boot attempt exposed the 32-byte content-bucket reference limit and
     made no provider call. The exact corrected configuration and contract test passed before retry.
-- [ ] 11.5 Archive this change only after every normative scenario and quality gate passes
-  - Archival remains blocked by the incomplete upstream-dependent normative tasks 1.5, 8.1,
-    and 8.5. Their SemStreams issues #818, #851, and #807 were verified open on 2026-08-02.
-  - A 2026-08-02 archive attempt refused and made no changes. It also reported a
-    fiction-adjudication `MODIFIED` delta drift because the change is missing the current
-    `Adjudicator reads current state` scenario. Scope splitting or delta reconciliation requires
-    a user decision and was not attempted.
+- [x] 11.5 Archive this change only after every normative scenario and quality gate passes
+  - By explicit scope decision, the three upstream-dependent hardening tasks moved to the
+    focused `mystery-companion-hardening` follow-up. Every normative task retained by this
+    acceptance change is complete, and the fiction-adjudication delta retains the current
+    `Adjudicator reads current state` scenario for archive reconciliation.

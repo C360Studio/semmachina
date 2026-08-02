@@ -15,7 +15,7 @@ appear in its projection or model request.
 - **THEN** its plausibility, risk, and consequence-class values each belong to the
   registered vocabulary, and the exit is rejected at the tool boundary if any do not
 
-#### Scenario: Adjudicator reads current authorized state
+#### Scenario: Adjudicator reads current state
 - **WHEN** authorized world state changed after the action was submitted but before
   adjudication runs
 - **THEN** the adjudicator's context reflects that state at execution time, not a snapshot

@@ -130,8 +130,8 @@ vision but are NOT on the active MVP path.
    `2026-07-31-turn-loop-vertical-slice`) — durable turn state, idempotent effects,
    validated closed-vocabulary mutations, crash tests; loads the starter world
    from a package-shaped fixture via an importer.
-2. **Minimum epistemic + companion safety proof** (active:
-   `mystery-companion-acceptance`) — use the original *Death in the Bellweather
+2. **Minimum epistemic + companion safety proof** (complete; archived as
+   `2026-08-02-mystery-companion-acceptance`) — use the original *Death in the Bellweather
    Maze* case to prove secret-safe mystery play and first-class companion support.
    Pull forward only the epistemic primitives required to keep canonical truth,
    character belief, actor knowledge, and narration revelation separate, with a
@@ -140,7 +140,10 @@ vision but are NOT on the active MVP path.
    deterministic hint progression, and narrator-owned voice; a second non-mystery binding
    proves the capability is not case-specific. The case lifecycle and exact-ID accusation
    verifier complete one mock-model E2E; Gemini is an opt-in smoke, never a CI dependency.
-   This stage does not complete the full epistemic or NPC-cognition roadmap stages.
+   This stage does not complete the full epistemic or NPC-cognition roadmap stages. The focused
+   `mystery-companion-hardening` follow-up is active but blocked by open SemStreams issues #818,
+   #851, and #807. It owns post-import truth-write enforcement, revision-safe hint reset, and
+   crash-safe provider dispatch without reopening the completed acceptance proof.
 3. **Template proof + place ontology** — instantiate the same starter world twice;
    swap the narrator/tone pack; swap fiction-heavy vs mechanics-heavy rule packs;
    two materially different experiences on identical engine code. The first
