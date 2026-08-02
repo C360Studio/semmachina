@@ -24,10 +24,11 @@ import (
 // this in one scene is telling the operator something, and the operator should
 // hear it.
 //
-// Sixty-four is sized to the kind of scene this engine is for (the starter world
-// uses seven) with room for a crowded one, and it is a dial rather than a
-// constant: worlds are data, so a world that genuinely needs a bigger room says
-// so at construction.
+// Sixty-four is sized to the kind of scene this engine is for (the starter
+// world's current gatehouse view carries eleven: turn, scene, location, six
+// occupants, and two one-hop neighbours) with room for a crowded one. It is a
+// dial rather than a constant: worlds are data, so a world that genuinely needs
+// a bigger room says so at construction.
 //
 // The cap counts ENTITIES while the cost it stands in for is BYTES, so the
 // derived ceiling is worth stating rather than leaving to be rediscovered. Of
@@ -114,19 +115,20 @@ func NewAssembler(g Graph, opts ...Option) (*Assembler, error) {
 // world, which is the whole reason this is a component the persona calls rather
 // than a blob the action carries.
 //
-// The shape, in full — at most five reads, in this order:
+// The shape, in full — at most six reads, in this order:
 //
 //  1. the turn entity, for the scene it is happening in and its own artifacts;
 //  2. the scene entity, for its own facts;
-//  3. the scene's incoming edges, for who is in it;
-//  4. one batch for the members;
-//  5. one batch for the members' 1-hop neighbours.
+//  3. the location entity named by the scene;
+//  4. the location's incoming edges, for who is in it;
+//  5. one batch for the members;
+//  6. one batch for the fixed entities' and members' 1-hop neighbours.
 //
 // "At most" rather than "always" because a stage with no candidates issues no
-// read at all — an empty room costs three. The bound is the load-bearing half:
-// there is no sixth read, and the traversal stops at one hop because nothing
-// here recurses, which is what makes the depth bound structural rather than a
-// parameter somebody can raise.
+// read at all — an empty location costs four. The six-read ceiling is the
+// load-bearing half: there is no seventh read, and the traversal stops at one
+// hop because nothing here recurses, which is what makes the depth bound
+// structural rather than a parameter somebody can raise.
 func (a *Assembler) Assemble(ctx context.Context, turnID, turnEntityID string) (*View, error) {
 	// The turn and its entity are one fact wearing two shapes, and this is a
 	// seam where they arrive as two arguments. A stage handed turn A's entity
@@ -149,17 +151,32 @@ func (a *Assembler) Assemble(ctx context.Context, turnID, turnEntityID string) (
 	if err != nil {
 		return nil, err
 	}
+	scene := project(sceneState)
+	locationID, err := locationOf(scene)
+	if err != nil {
+		return nil, err
+	}
+	locationState, err := a.readSolid(ctx, locationID, "location")
+	if err != nil {
+		return nil, err
+	}
+	location := project(locationState)
+	if err := requireKind(location, vocabulary.EntityKindLocation); err != nil {
+		return nil, err
+	}
 
 	view := &View{
 		TurnID:       turnID,
 		TurnEntityID: turnEntityID,
 		SceneID:      sceneID,
+		LocationID:   locationID,
 		AssembledAt:  a.now().UTC(),
 		Turn:         turn,
-		Scene:        project(sceneState),
+		Scene:        scene,
+		Location:     location,
 	}
 
-	memberIDs, err := a.memberIDs(ctx, sceneID)
+	memberIDs, err := a.memberIDs(ctx, locationID)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +198,7 @@ func (a *Assembler) Assemble(ctx context.Context, turnID, turnEntityID string) (
 	view.Members = members
 	view.Excluded = excluded
 
-	neighbourIDs := neighbourIDsOf(sceneID, view.Turn, view.Scene, members)
+	neighbourIDs := neighbourIDsOf(sceneID, locationID, view.Turn, view.Scene, view.Location, members)
 	if err := a.checkCap(sceneID, fixedEntities+len(memberIDs)+len(neighbourIDs)); err != nil {
 		return nil, err
 	}
@@ -203,8 +220,8 @@ func (a *Assembler) Assemble(ctx context.Context, turnID, turnEntityID string) (
 }
 
 // fixedEntities is what every view carries before anybody is in the room: the
-// turn and the scene.
-const fixedEntities = 2
+// turn, scene, and persistent location.
+const fixedEntities = 3
 
 // readSolid reads one entity and refuses a referential stub.
 //
@@ -247,6 +264,38 @@ func sceneOf(turn Entity) (string, error) {
 			"turn %s holds %d values for the single-valued %s; a scene written on an appending lane leaves "+
 				"this reader choosing one at random", turn.ID, len(scenes), vocabulary.TurnActionScene)
 	}
+}
+
+// locationOf resolves the scene's one persistent place. Missing or duplicate
+// values are refusals: choosing one would assemble an arbitrary room.
+func locationOf(scene Entity) (string, error) {
+	locations, err := entityReferences(scene, vocabulary.SceneLocationCurrent)
+	if err != nil {
+		return "", err
+	}
+	switch len(locations) {
+	case 1:
+		return locations[0], nil
+	case 0:
+		return "", fmt.Errorf("scene %s carries no %s; it has no persistent place to assemble",
+			scene.ID, vocabulary.SceneLocationCurrent)
+	default:
+		return "", fmt.Errorf("scene %s holds %d values for the single-valued %s; choosing one would assemble an arbitrary place",
+			scene.ID, len(locations), vocabulary.SceneLocationCurrent)
+	}
+}
+
+func requireKind(entity Entity, want vocabulary.EntityKind) error {
+	kinds := entity.Objects(vocabulary.WorldEntityKind)
+	if len(kinds) != 1 {
+		return fmt.Errorf("location entity %s holds %d %s values; want exactly one %q",
+			entity.ID, len(kinds), vocabulary.WorldEntityKind, want)
+	}
+	kind, ok := kinds[0].(string)
+	if !ok || kind != string(want) {
+		return fmt.Errorf("scene location %s has entity kind %v; want %q", entity.ID, kinds[0], want)
+	}
+	return nil
 }
 
 // playerOf reads the player whose turn this is off the turn entity.
@@ -376,17 +425,17 @@ func actorOf(view *View) (Actor, error) {
 	return Actor{}, absent
 }
 
-// memberIDs asks who is in the scene.
+// memberIDs asks who is in the persistent location.
 //
 // The answer is a REVERSE lookup: membership is asserted by the member, so the
-// scene's own triples say nothing about it. Every incoming edge is returned by
-// the index, and only the closed membership set counts — the engine's own turn
-// entities point at the scene too, one per turn ever taken there, and treating
-// those as members would grow a persona's context with the campaign's history.
-func (a *Assembler) memberIDs(ctx context.Context, sceneID string) ([]string, error) {
-	incoming, err := a.graph.IncomingRelationships(ctx, sceneID)
+// location's own triples say nothing about its occupants. Every incoming edge
+// is returned by the index, and only the closed membership set counts —
+// topology and other authored references can also point at a location, and
+// treating those as members would hand non-occupants to the persona.
+func (a *Assembler) memberIDs(ctx context.Context, locationID string) ([]string, error) {
+	incoming, err := a.graph.IncomingRelationships(ctx, locationID)
 	if err != nil {
-		return nil, fmt.Errorf("read the members of scene %s: %w", sceneID, err)
+		return nil, fmt.Errorf("read the members of location %s: %w", locationID, err)
 	}
 
 	seen := make(map[string]bool, len(incoming))
@@ -395,7 +444,7 @@ func (a *Assembler) memberIDs(ctx context.Context, sceneID string) ([]string, er
 		if !vocabulary.IsSceneMembership(vocabulary.Predicate(edge.Predicate)) {
 			continue
 		}
-		if edge.FromEntityID == "" || edge.FromEntityID == sceneID || seen[edge.FromEntityID] {
+		if edge.FromEntityID == "" || edge.FromEntityID == locationID || seen[edge.FromEntityID] {
 			continue
 		}
 		seen[edge.FromEntityID] = true
@@ -408,8 +457,8 @@ func (a *Assembler) memberIDs(ctx context.Context, sceneID string) ([]string, er
 	return ids, nil
 }
 
-// neighbourIDsOf collects the 1-hop boundary: everything the turn, the scene,
-// and the scene's members point at that is not already in the view.
+// neighbourIDsOf collects the 1-hop boundary: everything the turn, scene,
+// location, and location's members point at that is not already in the view.
 //
 // This is where a referenced-but-undelivered entity actually turns up. A member
 // carrying an item that was never imported has a perfectly good edge to a
@@ -420,15 +469,15 @@ func (a *Assembler) memberIDs(ctx context.Context, sceneID string) ([]string, er
 // player reference is the only thing that says WHICH of the people in the room
 // is acting. Without it a persona is shown a courier, an apprentice, and a
 // sentry, and no way to tell which one the player is.
-func neighbourIDsOf(sceneID string, turn, scene Entity, members []Entity) []string {
-	inView := map[string]bool{sceneID: true, turn.ID: true}
+func neighbourIDsOf(sceneID, locationID string, turn, scene, location Entity, members []Entity) []string {
+	inView := map[string]bool{sceneID: true, locationID: true, turn.ID: true}
 	for _, member := range members {
 		inView[member.ID] = true
 	}
 
 	seen := make(map[string]bool)
 	var ids []string
-	for _, entity := range append([]Entity{turn, scene}, members...) {
+	for _, entity := range append([]Entity{turn, scene, location}, members...) {
 		for _, triple := range entity.Triples {
 			if !triple.IsRelationship() {
 				continue

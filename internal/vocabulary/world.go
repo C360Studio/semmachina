@@ -30,10 +30,10 @@ const (
 	EntityKindCharacter EntityKind = "character"
 	// EntityKindItem is a carriable or usable object.
 	EntityKindItem EntityKind = "item"
-	// EntityKindScene is a bounded place-and-situation. In this slice the scene
-	// doubles as the place entities occupy, so WorldLocationCurrent points at
-	// a scene.
+	// EntityKindScene is a bounded situation that occurs at one location.
 	EntityKindScene EntityKind = "scene"
+	// EntityKindLocation is a persistent place shared by scenes and occupants.
+	EntityKindLocation EntityKind = "location"
 	// EntityKindPlayer is the human at the table, as a durable graph entity.
 	// Player identity is never a connection ID, so it needs a home in the
 	// graph; the binding to a played character is PlayerCharacterCurrent.
@@ -48,7 +48,7 @@ const (
 )
 
 var entityKindEnum = newEnum(KindEntityKind,
-	EntityKindCharacter, EntityKindItem, EntityKindScene, EntityKindPlayer,
+	EntityKindCharacter, EntityKindItem, EntityKindScene, EntityKindLocation, EntityKindPlayer,
 	EntityKindCase, EntityKindEvidence, EntityKindEvent, EntityKindBelief,
 	EntityKindKnowledge, EntityKindRevelation, EntityKindCompanionBond)
 
@@ -75,12 +75,12 @@ func ParseEntityKind(s string) (EntityKind, error) { return entityKindEnum.parse
 // turn.phase.current is a category error, and SubjectKindsFor says so by
 // returning false rather than an empty list.
 var worldFactSubjectKinds = map[Predicate][]EntityKind{
-	WorldEntityName: {EntityKindCharacter, EntityKindItem, EntityKindScene, EntityKindPlayer,
+	WorldEntityName: {EntityKindCharacter, EntityKindItem, EntityKindScene, EntityKindLocation, EntityKindPlayer,
 		EntityKindCase, EntityKindEvidence, EntityKindEvent},
-	WorldEntityKind: {EntityKindCharacter, EntityKindItem, EntityKindScene, EntityKindPlayer,
+	WorldEntityKind: {EntityKindCharacter, EntityKindItem, EntityKindScene, EntityKindLocation, EntityKindPlayer,
 		EntityKindCase, EntityKindEvidence, EntityKindEvent, EntityKindBelief, EntityKindKnowledge,
 		EntityKindRevelation, EntityKindCompanionBond},
-	WorldEntityDescription: {EntityKindCharacter, EntityKindItem, EntityKindScene, EntityKindPlayer,
+	WorldEntityDescription: {EntityKindCharacter, EntityKindItem, EntityKindScene, EntityKindLocation, EntityKindPlayer,
 		EntityKindCase, EntityKindEvidence, EntityKindEvent, EntityKindBelief},
 
 	PlayerCharacterCurrent: {EntityKindPlayer},
@@ -92,9 +92,12 @@ var worldFactSubjectKinds = map[Predicate][]EntityKind{
 	ItemAttributeQuantity:     {EntityKindItem},
 	SceneAttributeTension:     {EntityKindScene},
 
-	// A character or an item can be somewhere. A scene IS the somewhere, and a
-	// player is a person at a table, not a thing in the fiction.
-	WorldLocationCurrent: {EntityKindCharacter, EntityKindItem},
+	// Characters and items occupy locations; scenes carry their own placement.
+	WorldLocationCurrent:       {EntityKindCharacter, EntityKindItem},
+	SceneLocationCurrent:       {EntityKindScene},
+	LocationRelationConnectsTo: {EntityKindLocation},
+	GeoLocationLatitude:        {EntityKindLocation},
+	GeoLocationLongitude:       {EntityKindLocation},
 
 	// Relationships are asserted BY actors. An item does not befriend anything;
 	// "the sword is carried by Rook" is recorded as Rook carrying the sword, so
@@ -159,9 +162,9 @@ var worldFactSubjectKinds = map[Predicate][]EntityKind{
 // here takes a six-part entity ID as its object, and one absent from it takes a
 // literal. The two facts are the same fact, so they are stated once.
 var referenceObjectKinds = map[Predicate][]EntityKind{
-	// A scene doubles as the place entities occupy in this slice; when place
-	// becomes first-class (roadmap stage 2) this is the line that changes.
-	WorldLocationCurrent: {EntityKindScene},
+	WorldLocationCurrent:       {EntityKindLocation},
+	SceneLocationCurrent:       {EntityKindLocation},
+	LocationRelationConnectsTo: {EntityKindLocation},
 
 	PlayerCharacterCurrent: {EntityKindCharacter},
 
@@ -191,35 +194,34 @@ var referenceObjectKinds = map[Predicate][]EntityKind{
 	CompanionBondCharacter:  {EntityKindCharacter},
 }
 
-// sceneMembershipPredicates is the closed set of edges that put an entity IN a
-// scene.
+// sceneMembershipPredicates is the closed set of edges that put an entity at a
+// scene's resolved location. The compatibility name describes the consumer —
+// scene assembly — rather than the edge target.
 //
 // Membership is asserted BY the member — a character carries
-// world.location.current pointing at the scene, and the scene says nothing about
-// who is in it — so "who is here" is answered by reading the edges pointing at
-// the scene. Those edges are not all membership: the engine's own turn entities
-// point at the scene too (turn.action.scene), one per turn ever taken there, and
-// a reader that took every incoming edge as a member would hand a persona every
-// turn in the campaign's history and call it the room.
+// world.location.current pointing at a location, and the location says nothing
+// about who is in it — so "who is here" is answered by reading the edges
+// pointing at the location. Those edges are not all membership: topology and
+// other authored references can point there too, and a reader that took every
+// incoming edge as a member would hand a persona non-occupants and call them the
+// room.
 //
 // So the set is CLOSED and stated here, next to the ontology it belongs to,
 // rather than inferred at the reader.
 //
-// Growing it is NOT sufficient on its own, and the earlier version of this
-// comment said the opposite. When place becomes first-class (roadmap stage 2)
-// the reverse lookup is still keyed on the SCENE, so adding a second membership
-// predicate here changes which incoming edges count and nothing else — the
-// assembler would still ask the scene who is in it. Re-keying that read onto the
-// location is the assembler's change, and this list is the vocabulary half of
-// the same change rather than the whole of it.
+// Growing it is NOT sufficient on its own: the assembler must resolve the scene
+// to its location and key the reverse lookup there. This list is the vocabulary
+// half of that contract rather than the whole of it.
 var sceneMembershipPredicates = []Predicate{WorldLocationCurrent}
 
-// SceneMembershipPredicates returns the closed set of edges that put an entity
-// in a scene.
+// SceneMembershipPredicates returns the closed set of occupancy edges whose
+// targets are a scene's resolved location. The exported name is retained for
+// compatibility with scene-assembly callers.
 func SceneMembershipPredicates() []Predicate { return slices.Clone(sceneMembershipPredicates) }
 
-// IsSceneMembership reports whether an edge pointing at a scene means its source
-// is IN that scene.
+// IsSceneMembership reports whether an edge pointing at a scene's resolved
+// location means its source occupies that location. The exported name is
+// retained for compatibility with scene-assembly callers.
 func IsSceneMembership(p Predicate) bool { return slices.Contains(sceneMembershipPredicates, p) }
 
 // SubjectKindsFor returns the entity kinds that may carry p as a fact. The
@@ -269,6 +271,7 @@ func IsMultiValued(p Predicate) bool {
 	if slices.Contains([]Predicate{
 		CaseMemberSuspect, CaseMemberEvidence, CaseMemberTimeline,
 		EvidenceRevealKindPredicate, EvidenceRevealTarget,
+		LocationRelationConnectsTo,
 	}, p) {
 		return true
 	}

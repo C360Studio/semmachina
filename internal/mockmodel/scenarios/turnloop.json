@@ -379,7 +379,7 @@
                         {
                           "type": "teleport_entity",
                           "target": "c360.semmachina.world1.starter.character.rook",
-                          "location": "c360.semmachina.world1.starter.scene.gatehouse"
+                          "location": "c360.semmachina.world1.starter.location.gatehouse-place"
                         }
                       ]
                     },

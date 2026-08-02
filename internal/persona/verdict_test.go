@@ -49,7 +49,7 @@ const validRollingVerdict = `{
   "bands": {
     "miss":    [{"type": "set_status", "target": "c360.semmachina.world1.starter.character.rook", "status": "restrained"}],
     "partial": [{"type": "set_attribute", "target": "c360.semmachina.world1.starter.character.rook", "attribute": "stamina", "value": 4}],
-    "full":    [{"type": "move_entity", "target": "c360.semmachina.world1.starter.character.rook", "location": "c360.semmachina.world1.starter.scene.gatehouse"}]
+    "full":    [{"type": "move_entity", "target": "c360.semmachina.world1.starter.character.rook", "location": "c360.semmachina.world1.starter.location.gatehouse-place"}]
   },
   "rationale": "The winch will move for a crowbar, but not quietly, and the sentry is three strides away."
 }`
@@ -362,7 +362,7 @@ func TestVerdict_RefusesAnOutOfVocabularyEffectType(t *testing.T) {
 	// could have corrected in one iteration.
 	h.refuses(t, `{
 	  "scalars": {"plausibility": "plausible", "risk": "low", "consequence": "complication", "requires_roll": false},
-	  "bands": {"auto": [{"type": "teleport_entity", "target": "c360.semmachina.world1.starter.character.rook", "location": "c360.semmachina.world1.starter.scene.gatehouse"}]},
+	  "bands": {"auto": [{"type": "teleport_entity", "target": "c360.semmachina.world1.starter.character.rook", "location": "c360.semmachina.world1.starter.location.gatehouse-place"}]},
 	  "rationale": "An effect type nobody registered."
 	}`, "teleport_entity")
 }

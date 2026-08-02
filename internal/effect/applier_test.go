@@ -27,8 +27,8 @@ const (
 	crowbar   = "c360.semmachina.eff1.starter.item.crowbar"
 	lantern   = "c360.semmachina.eff1.starter.item.lantern"
 	rations   = "c360.semmachina.eff1.starter.item.rations"
-	gatehouse = "c360.semmachina.eff1.starter.scene.gatehouse"
-	courtyard = "c360.semmachina.eff1.starter.scene.courtyard"
+	gatehouse = "c360.semmachina.eff1.starter.location.gatehouse-place"
+	courtyard = "c360.semmachina.eff1.starter.location.courtyard-place"
 	absent    = "c360.semmachina.eff1.starter.character.nobody"
 )
 
@@ -145,8 +145,8 @@ func starterWorld() *fakeStore {
 			crowbar:   entityState(crowbar, vocabulary.EntityKindItem),
 			lantern:   entityState(lantern, vocabulary.EntityKindItem),
 			rations:   entityState(rations, vocabulary.EntityKindItem),
-			gatehouse: entityState(gatehouse, vocabulary.EntityKindScene),
-			courtyard: entityState(courtyard, vocabulary.EntityKindScene),
+			gatehouse: entityState(gatehouse, vocabulary.EntityKindLocation),
+			courtyard: entityState(courtyard, vocabulary.EntityKindLocation),
 		},
 		failOn: map[string]error{},
 	}
@@ -295,7 +295,7 @@ func TestApply_RejectsEachFailureClassWithItsOwnReason(t *testing.T) {
 			names:  wren,
 		},
 		{
-			name: "a scene moved into a scene",
+			name: "a location moved into a location",
 			intent: payload.EffectIntent{
 				Type: vocabulary.EffectMoveEntity, Target: gatehouse, Location: courtyard,
 			},

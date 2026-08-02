@@ -1,21 +1,26 @@
 ## 1. Contract and Vocabulary
 
-- [ ] 1.1 Add failing closed-set, predicate-registration, subject/object-kind, multiplicity, and
+- [x] 1.1 Add failing closed-set, predicate-registration, subject/object-kind, multiplicity, and
   author-shape tests for `location`, `scene.location.current`,
   `location.relation.connects-to`, and canonical latitude/longitude
-- [ ] 1.2 Implement the registered place vocabulary and finite paired-coordinate validation
-- [ ] 1.3 Add failing package tests for missing/duplicate scene placement, wrong-kind occupancy,
+- [x] 1.2 Implement the registered place vocabulary and finite paired-coordinate validation
+- [x] 1.3 Add failing package tests for missing/duplicate scene placement, wrong-kind occupancy,
   dangling or self connections, half coordinates, and coordinate ranges
 
 ## 2. Fixture and Context Migration
 
-- [ ] 2.1 Add location entities, scene placement, topology, and authored geometry to the starter
+- [x] 2.1 Add location entities, scene placement, topology, and authored geometry to the starter
   fixture; migrate Bellweather without changing its accepted mystery facts
-- [ ] 2.2 Add failing assembler tests proving scene→location resolution, location-keyed membership,
+- [x] 2.2 Add failing assembler tests proving scene→location resolution, location-keyed membership,
   three fixed entities, at most six reads, old scene occupancy refusal, and unchanged configured
   entity and one-hop traversal bounds
-- [ ] 2.3 Implement the location-aware assembler and boot readiness gate
-- [ ] 2.4 Run starter, Bellweather, world-import, projector, companion, and turn-loop regression tests
+- [x] 2.3 Implement the location-aware assembler and boot readiness gate
+- [x] 2.4 Run starter, Bellweather, world-import, projector, companion, and turn-loop regression tests
+  - Groups 1 and 2 received architecture APPROVE and independent Go review APPROVE.
+  - Vocabulary, world, payload, scene, full boot, effect, companion, persona, mock-model, and
+    epistemic gates were green. Strict OpenSpec validation also passed.
+  - Focused starter and Bellweather E2E acceptances passed. The full combined E2E was not used as
+    a gate for this slice; the focused acceptances were the E2E evidence.
 
 ## 3. Experience Catalog and Selection
 

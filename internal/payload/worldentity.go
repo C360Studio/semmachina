@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -54,16 +55,13 @@ func (r TemplateRef) Validate() error {
 // and its object.
 //
 // The object is deliberately NOT `any`-shaped on the wire. Every fact in the
-// v1 world vocabulary is a bounded string or an integer, and a JSON round-trip
-// through `any` turns 4 into 4.0 — so a fact written as an attribute value
-// would come back as a float and compare unequal to the one that was
-// published. UnmarshalJSON narrows the wire types to exactly the two the
-// vocabulary defines, and rejects the rest at the boundary instead of letting
-// a float64 reach the graph as an attribute.
+// v1 world vocabulary is a bounded string, an integer, or a finite coordinate
+// float. UnmarshalJSON uses the predicate to keep attributes integral while
+// preserving canonical latitude/longitude as float64.
 type WorldFact struct {
 	// Predicate is a registered world-fact predicate.
 	Predicate vocabulary.Predicate `json:"predicate"`
-	// Object is a string or an int.
+	// Object is a string, int, or finite float64 for canonical coordinates.
 	Object any `json:"object"`
 	// Reference marks the object as an entity ID rather than a literal. It
 	// becomes message.EntityReferenceDatatype on the triple, which makes the
@@ -85,7 +83,7 @@ func (f *WorldFact) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	object, err := decodeFactObject(wire.Object)
+	object, err := decodeFactObject(wire.Predicate, wire.Object)
 	if err != nil {
 		return fmt.Errorf("fact %q: %w", wire.Predicate, err)
 	}
@@ -96,8 +94,9 @@ func (f *WorldFact) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// decodeFactObject accepts exactly a JSON string or an integral JSON number.
-func decodeFactObject(raw json.RawMessage) (any, error) {
+// decodeFactObject accepts strings, integral numbers, and finite canonical
+// coordinate numbers while preserving their intended Go shape.
+func decodeFactObject(predicate vocabulary.Predicate, raw json.RawMessage) (any, error) {
 	if len(raw) == 0 {
 		return nil, errors.New("object is required")
 	}
@@ -113,6 +112,13 @@ func decodeFactObject(raw json.RawMessage) (any, error) {
 	case string:
 		return typed, nil
 	case json.Number:
+		if isCoordinatePredicate(predicate) {
+			coordinate, err := typed.Float64()
+			if err != nil || math.IsNaN(coordinate) || math.IsInf(coordinate, 0) {
+				return nil, fmt.Errorf("object %s is not a finite coordinate", typed)
+			}
+			return coordinate, nil
+		}
 		integer, err := typed.Int64()
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -164,11 +170,28 @@ func (f WorldFact) Validate() error {
 			return fmt.Errorf("fact %q is marked as an entity reference but its object is a number", f.Predicate)
 		}
 		return nil
+	case float64:
+		if f.Reference {
+			return fmt.Errorf("fact %q is marked as an entity reference but its object is a number", f.Predicate)
+		}
+		if !isCoordinatePredicate(f.Predicate) {
+			return fmt.Errorf("fact %q carries a float64 object; only canonical coordinate predicates accept floats",
+				f.Predicate)
+		}
+		if math.IsNaN(object) || math.IsInf(object, 0) {
+			return fmt.Errorf("fact %q coordinate must be finite", f.Predicate)
+		}
+		return nil
 	case nil:
 		return fmt.Errorf("fact %q has no object", f.Predicate)
 	default:
-		return fmt.Errorf("fact %q carries a %T object; only string and int are defined", f.Predicate, f.Object)
+		return fmt.Errorf("fact %q carries a %T object; only string, int, and finite coordinate float64 are defined",
+			f.Predicate, f.Object)
 	}
+}
+
+func isCoordinatePredicate(predicate vocabulary.Predicate) bool {
+	return predicate == vocabulary.GeoLocationLatitude || predicate == vocabulary.GeoLocationLongitude
 }
 
 // WorldEntity is one materialized world entity on its way to graph-ingest.

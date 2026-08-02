@@ -41,6 +41,8 @@ const (
 	ShapeCompanionPolicy
 	// ShapeHintLevel is the closed bounded hint level.
 	ShapeHintLevel
+	// ShapeNumber is a finite JSON number represented as float64.
+	ShapeNumber
 )
 
 // ObjectShapeFor returns the object shape a template author must write for p,
@@ -79,6 +81,8 @@ func ObjectShapeFor(p vocabulary.Predicate) ObjectShape {
 		return ShapeCompanionPolicy
 	case vocabulary.CompanionBondHintLevel:
 		return ShapeHintLevel
+	case vocabulary.GeoLocationLatitude, vocabulary.GeoLocationLongitude:
+		return ShapeNumber
 	case vocabulary.WorldEntityName, vocabulary.WorldEntityDescription:
 		return ShapeText
 	default:

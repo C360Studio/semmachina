@@ -153,6 +153,9 @@ func (p *Plan) IDs() []string {
 // same order — which is what makes re-import a no-op rather than a second
 // world. Nothing here reads a clock, a random source, or the environment.
 func (p *Package) Resolve(inst InstanceConfig) (*Plan, error) {
+	if err := validatePlaceEntities(p.Entities); err != nil {
+		return nil, fmt.Errorf("validate place package: %w", err)
+	}
 	if _, err := validateMysteryEntities(p.Entities); err != nil {
 		return nil, fmt.Errorf("validate mystery package: %w", err)
 	}

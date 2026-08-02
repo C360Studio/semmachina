@@ -177,13 +177,15 @@ func (g *fakeGraph) IncomingRelationships(_ context.Context, entityID string) ([
 	return entries, nil
 }
 
-// gatehouse builds the starter scene's shape: a room, three people in it, a
+// gatehouse builds a compact starter-scene shape: a room, two people in it, a
 // crowbar one of them carries, and a turn happening there.
 func gatehouse(t *testing.T) *fakeGraph {
 	t.Helper()
 	g := newFakeGraph()
 
 	sceneID := id(t, "scene", "gatehouse")
+	locationID := id(t, "location", "gatehouse-place")
+	roadID := id(t, "location", "north-road")
 	rook := id(t, "character", "rook")
 	wren := id(t, "character", "wren")
 	crowbar := id(t, "item", "crowbar")
@@ -192,19 +194,29 @@ func gatehouse(t *testing.T) *fakeGraph {
 		fact(vocabulary.WorldEntityName, "The Gatehouse"),
 		fact(vocabulary.WorldEntityKind, string(vocabulary.EntityKindScene)),
 		fact(vocabulary.SceneAttributeTension, 3),
+		fact(vocabulary.SceneLocationCurrent, locationID),
+	)
+	g.put(locationID,
+		fact(vocabulary.WorldEntityName, "Gatehouse Place"),
+		fact(vocabulary.WorldEntityKind, string(vocabulary.EntityKindLocation)),
+		fact(vocabulary.LocationRelationConnectsTo, roadID),
+	)
+	g.put(roadID,
+		fact(vocabulary.WorldEntityName, "North Road"),
+		fact(vocabulary.WorldEntityKind, string(vocabulary.EntityKindLocation)),
 	)
 	g.put(rook,
 		fact(vocabulary.WorldEntityName, "Rook"),
 		fact(vocabulary.CharacterAttributeHealth, 8),
 		fact(vocabulary.CharacterStatusCurrent, string(vocabulary.StatusHealthy)),
-		fact(vocabulary.WorldLocationCurrent, sceneID),
+		fact(vocabulary.WorldLocationCurrent, locationID),
 		fact(vocabulary.WorldRelationCarries, crowbar),
 		fact(vocabulary.WorldRelationKnows, wren),
 	)
 	g.put(wren,
 		fact(vocabulary.WorldEntityName, "Wren"),
 		fact(vocabulary.CharacterAttributeHealth, 6),
-		fact(vocabulary.WorldLocationCurrent, sceneID),
+		fact(vocabulary.WorldLocationCurrent, locationID),
 	)
 	// The crowbar is NOT in the scene: it is carried, so it is a 1-hop
 	// neighbour rather than a member.
@@ -273,9 +285,10 @@ func TestAssemble_ReadsTheSceneOffTheTurnAndReturnsItsMembers(t *testing.T) {
 		got[0] != id(t, "character", "rook") || got[1] != id(t, "character", "wren") {
 		t.Fatalf("members are %v, want the two characters in the room", got)
 	}
-	if got := ids(view.Neighbours); len(got) != 2 ||
-		got[0] != id(t, "item", "crowbar") || got[1] != id(t, "player", "p1") {
-		t.Fatalf("neighbours are %v, want the carried item and the player one hop out", got)
+	if got := ids(view.Neighbours); len(got) != 3 ||
+		got[0] != id(t, "item", "crowbar") || got[1] != id(t, "location", "north-road") ||
+		got[2] != id(t, "player", "p1") {
+		t.Fatalf("neighbours are %v, want the carried item, connected location, and player one hop out", got)
 	}
 	if got := view.Scene.Objects(vocabulary.WorldEntityName); len(got) != 1 || got[0] != "The Gatehouse" {
 		t.Fatalf("the scene's own facts are missing: %v", got)
@@ -347,10 +360,11 @@ func TestAssemble_NamesTheActingCharacterItProvedIsInTheRoom(t *testing.T) {
 }
 
 // The hole membership cannot report. Scene membership comes only from the edges
-// pointing AT the scene, so a character whose world.location.current the index
-// has not applied yet is not a CANDIDATE — and a candidate is the only thing an
-// Exclusion can name. Without this check the adjudicator is handed a room that
-// does not contain the person acting, with no error and no exclusion.
+// pointing AT the scene's location, so a character whose
+// world.location.current the index has not applied yet is not a CANDIDATE — and
+// a candidate is the only thing an Exclusion can name. Without this check the
+// adjudicator is handed a room that does not contain the person acting, with no
+// error and no exclusion.
 //
 // ErrIndexNotReady does not cover it: upstream's readiness latch flips as soon as
 // initial enumeration completes over an empty graph (target == 0 on a fresh
@@ -399,7 +413,7 @@ func TestAssemble_SaysSoWhenTheActingCharacterWasACandidateAndWasRefused(t *test
 	g := gatehouse(t)
 	rook := id(t, "character", "rook")
 	// The edge survives in the index; the entity behind it does not resolve.
-	g.rememberEdge(rook, vocabulary.WorldLocationCurrent, id(t, "scene", "gatehouse"))
+	g.rememberEdge(rook, vocabulary.WorldLocationCurrent, id(t, "location", "gatehouse-place"))
 	delete(g.entities, rook)
 
 	_, err := newAssembler(t, g).Assemble(t.Context(), testTurnID, testTurnEntityID)
@@ -474,7 +488,7 @@ func TestAssemble_ChecksTheActorWithoutIssuingAnotherRead(t *testing.T) {
 	g := gatehouse(t)
 	assemble(t, g)
 
-	if g.gets != 2 || g.batches != 2 || g.incoming != 1 {
+	if g.gets != 3 || g.batches != 2 || g.incoming != 1 {
 		t.Fatalf("assembly issued %d single reads, %d batches, %d membership reads; the actor cross-check "+
 			"must be pure in-memory work over data the view already carries", g.gets, g.batches, g.incoming)
 	}
@@ -501,8 +515,8 @@ func TestAssemble_IssuesAFixedNumberOfReads(t *testing.T) {
 	g := gatehouse(t)
 	assemble(t, g)
 
-	if g.gets != 2 {
-		t.Fatalf("issued %d single reads, want the turn and the scene", g.gets)
+	if g.gets != 3 {
+		t.Fatalf("issued %d single reads, want the turn, scene, and location", g.gets)
 	}
 	if g.incoming != 1 {
 		t.Fatalf("issued %d membership reads, want one", g.incoming)
@@ -517,12 +531,13 @@ func TestAssemble_IssuesAFixedNumberOfReads(t *testing.T) {
 // crowbar is a neighbour; what the crowbar points at is not in the view at all.
 func TestAssemble_StopsAtOneHop(t *testing.T) {
 	g := gatehouse(t)
-	crowbar := id(t, "item", "crowbar")
-	forge := id(t, "scene", "forge")
-	g.put(forge, fact(vocabulary.WorldEntityName, "The Forge"))
-	// The crowbar was made in the forge: two hops from the gatehouse.
-	g.entities[crowbar].Triples = append(g.entities[crowbar].Triples, message.Triple{
-		Subject: crowbar, Predicate: vocabulary.WorldLocationCurrent.String(), Object: forge,
+	road := id(t, "location", "north-road")
+	forge := id(t, "location", "forge")
+	g.put(forge, fact(vocabulary.WorldEntityName, "The Forge"),
+		fact(vocabulary.WorldEntityKind, string(vocabulary.EntityKindLocation)))
+	// The road reaches the forge: two hops from the gatehouse place.
+	g.entities[road].Triples = append(g.entities[road].Triples, message.Triple{
+		Subject: road, Predicate: vocabulary.LocationRelationConnectsTo.String(), Object: forge,
 		Source: "test", Timestamp: testTime, Confidence: 1,
 	})
 
@@ -671,7 +686,7 @@ func TestAssemble_ReportsAMemberTheGraphDidNotReturn(t *testing.T) {
 	ghost := id(t, "character", "ghost")
 	// An edge into the scene from an entity that does not exist: the index has
 	// the edge, the entity store has nothing.
-	g.rememberEdge(ghost, vocabulary.WorldLocationCurrent, id(t, "scene", "gatehouse"))
+	g.rememberEdge(ghost, vocabulary.WorldLocationCurrent, id(t, "location", "gatehouse-place"))
 	g.entities[id(t, "character", "rook")].Triples = append(
 		g.entities[id(t, "character", "rook")].Triples, message.Triple{
 			Subject: id(t, "character", "rook"), Predicate: vocabulary.WorldRelationKnows.String(),
@@ -698,10 +713,11 @@ func TestAssemble_ReportsAMemberTheGraphDidNotReturn(t *testing.T) {
 func TestAssemble_RefusesAnOversizeSceneRatherThanTrimmingIt(t *testing.T) {
 	g := gatehouse(t)
 	sceneID := id(t, "scene", "gatehouse")
+	locationID := id(t, "location", "gatehouse-place")
 	for idx := range 10 {
 		g.put(id(t, "character", fmt.Sprintf("extra%d", idx)),
 			fact(vocabulary.WorldEntityName, "Somebody"),
-			fact(vocabulary.WorldLocationCurrent, sceneID),
+			fact(vocabulary.WorldLocationCurrent, locationID),
 		)
 	}
 
@@ -756,8 +772,8 @@ func TestAssemble_RefusesWhenTheMembersFitAndTheirNeighboursDoNot(t *testing.T) 
 	if !errors.As(err, &oversize) {
 		t.Fatalf("refusal is a %T, want an OversizeError", err)
 	}
-	if oversize.Entities != 11 {
-		t.Fatalf("the refusal counts %d entities, want the scene, the turn, two members, and seven "+
+	if oversize.Entities != 13 {
+		t.Fatalf("the refusal counts %d entities, want the turn, scene, location, two members, and eight "+
 			"neighbours", oversize.Entities)
 	}
 	if g.batches != batchesBefore+1 {
@@ -774,12 +790,12 @@ func TestAssemble_RefusesWhenTheMembersFitAndTheirNeighboursDoNot(t *testing.T) 
 func TestAssemble_TheCapCountsEverythingTheViewCarries(t *testing.T) {
 	g := gatehouse(t)
 
-	exact := assemble(t, g, scene.WithMaxEntities(6))
-	if exact.Size.Entities != 6 {
-		t.Fatalf("the view carries %d entities at a cap of 6: %s", exact.Size.Entities, exact.Size)
+	exact := assemble(t, g, scene.WithMaxEntities(8))
+	if exact.Size.Entities != 8 {
+		t.Fatalf("the view carries %d entities at a cap of 8: %s", exact.Size.Entities, exact.Size)
 	}
 
-	_, err := newAssembler(t, g, scene.WithMaxEntities(5)).Assemble(t.Context(), testTurnID, testTurnEntityID)
+	_, err := newAssembler(t, g, scene.WithMaxEntities(7)).Assemble(t.Context(), testTurnID, testTurnEntityID)
 	var oversize *scene.OversizeError
 	if !errors.As(err, &oversize) {
 		t.Fatalf("a six-entity context assembled under a cap of five (%v); the cap is not counting what the "+
@@ -811,7 +827,7 @@ func TestAssemble_ReportsItsOwnSize(t *testing.T) {
 	bigger := gatehouse(t)
 	bigger.put(id(t, "character", "hollis"),
 		fact(vocabulary.WorldEntityName, "Hollis"),
-		fact(vocabulary.WorldLocationCurrent, id(t, "scene", "gatehouse")),
+		fact(vocabulary.WorldLocationCurrent, id(t, "location", "gatehouse-place")),
 	)
 	larger := assemble(t, bigger)
 	if larger.Size.Bytes <= view.Size.Bytes || larger.Size.Entities <= view.Size.Entities {

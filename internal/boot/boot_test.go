@@ -294,11 +294,19 @@ func twoScenePackage(t *testing.T) fstest.MapFS {
 	manifest := "id: two\nname: Two Rooms\nversion: 0.1.0\n" +
 		"engine_compat: \">=v1.0.0-beta.150 <v2.0.0\"\ndescription: two scenes\n"
 	entities := strings.Join([]string{
-		`{"local_id":"cellar","type":"scene","triples":[{"predicate":"world.entity.name","object":"The Cellar"}]}`,
-		`{"local_id":"loft","type":"scene","triples":[{"predicate":"world.entity.name","object":"The Loft"}]}`,
+		`{"local_id":"cellar","type":"scene","triples":[` +
+			`{"predicate":"world.entity.name","object":"The Cellar"},` +
+			`{"predicate":"scene.location.current","object":"local:cellar-place"}]}`,
+		`{"local_id":"loft","type":"scene","triples":[` +
+			`{"predicate":"world.entity.name","object":"The Loft"},` +
+			`{"predicate":"scene.location.current","object":"local:loft-place"}]}`,
+		`{"local_id":"cellar-place","type":"location","triples":[` +
+			`{"predicate":"world.entity.name","object":"The Cellar Place"}]}`,
+		`{"local_id":"loft-place","type":"location","triples":[` +
+			`{"predicate":"world.entity.name","object":"The Loft Place"}]}`,
 		`{"local_id":"` + starterCharacter + `","type":"character","triples":[` +
 			`{"predicate":"world.entity.name","object":"Rook"},` +
-			`{"predicate":"world.location.current","object":"local:cellar"}]}`,
+			`{"predicate":"world.location.current","object":"local:cellar-place"}]}`,
 	}, "\n") + "\n"
 
 	return fstest.MapFS{

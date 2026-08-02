@@ -21,10 +21,10 @@ import (
 // membershipPredicate is the edge "who is here" is answered by.
 //
 // Membership is asserted by the MEMBER — a character carries
-// world.location.current pointing at the scene, and the scene says nothing about
-// who is in it — so it is a reverse lookup, served by graph-index rather than by
-// the graph. That is precisely why the boot-readiness gate is keyed on it: a
-// mid-build index returns a partial keyset, which reads as a SMALLER SCENE
+// world.location.current pointing at a location, and the location says nothing
+// about who is in it — so it is a reverse lookup, served by graph-index rather
+// than by the graph. That is precisely why the boot-readiness gate is keyed on
+// it: a mid-build index returns a partial keyset, which reads as a SMALLER PLACE
 // rather than as an error, and a persona handed part of a room narrates a room
 // that is not there.
 const membershipPredicate = vocabulary.WorldLocationCurrent

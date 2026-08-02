@@ -283,6 +283,14 @@ const (
 	// WorldLocationCurrent is the single-valued target of a move_entity
 	// effect; its object is a location entity ID.
 	WorldLocationCurrent Predicate = "world.location.current"
+	// SceneLocationCurrent places a scene at one persistent location.
+	SceneLocationCurrent Predicate = "scene.location.current"
+	// LocationRelationConnectsTo is one authored, directed location edge.
+	LocationRelationConnectsTo Predicate = "location.relation.connects-to"
+	// GeoLocationLatitude is SemStreams' canonical latitude predicate.
+	GeoLocationLatitude Predicate = "geo.location.latitude"
+	// GeoLocationLongitude is SemStreams' canonical longitude predicate.
+	GeoLocationLongitude Predicate = "geo.location.longitude"
 )
 
 // Attribute predicates: the single-valued targets of set_attribute effects.
@@ -403,6 +411,10 @@ var allPredicates = []Predicate{
 	PlayerTurnResolved,
 	CharacterStatusCurrent,
 	WorldLocationCurrent,
+	SceneLocationCurrent,
+	LocationRelationConnectsTo,
+	GeoLocationLatitude,
+	GeoLocationLongitude,
 	CharacterAttributeHealth,
 	CharacterAttributeStamina,
 	CharacterAttributeResolve,

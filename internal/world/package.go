@@ -104,6 +104,9 @@ func LoadPackage(fsys fs.FS, opts LoadOptions) (*Package, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validatePlaceEntities(entities); err != nil {
+		return nil, fmt.Errorf("validate place package: %w", err)
+	}
 	mystery, err := validateMysteryEntities(entities)
 	if err != nil {
 		return nil, fmt.Errorf("validate mystery package: %w", err)

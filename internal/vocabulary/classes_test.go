@@ -105,7 +105,7 @@ func closedSets() []closedSet {
 			kind:      vocabulary.KindEntityKind,
 			members:   strs(vocabulary.EntityKinds()),
 			parse:     asStringParser(vocabulary.ParseEntityKind),
-			nearMiss:  []string{"Character", "npc", "monster", "location", "place", "creature"},
+			nearMiss:  []string{"Character", "npc", "monster", "region", "place", "creature"},
 			sampleBad: "npc",
 		},
 		{

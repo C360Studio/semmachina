@@ -72,11 +72,12 @@ const (
 	//
 	// It is served by graph-index rather than graph-ingest, which is why it is
 	// the one subject here in a different namespace. The engine needs it because
-	// membership in a scene is asserted by the MEMBER — a character carries
-	// world.location.current pointing at the scene, and the scene says nothing
-	// about who is in it — so "who is here" is a reverse lookup, and reverse
-	// lookups are what that index exists for. Scanning the world and filtering
-	// would be a hand-rolled index over data the substrate already indexes (M6).
+	// occupancy is asserted by the MEMBER — a character carries
+	// world.location.current pointing at a location, and the location says
+	// nothing about who is in it — so "who is here" is a reverse lookup, and
+	// reverse lookups are what that index exists for. Scanning the world and
+	// filtering would be a hand-rolled index over data the substrate already
+	// indexes (M6).
 	SubjectIndexQueryIncoming = "graph.index.query.incoming"
 	// SubjectIndexQueryPredicate is graph-index's predicate membership query.
 	// Supplying Value asks the index to hydrate candidates internally and filter
@@ -394,7 +395,7 @@ func (s *Store) EntitiesWithPrefix(
 // IncomingRelationships returns every edge pointing AT an entity.
 //
 // This is the reverse lookup the graph itself cannot answer: a triple lives on
-// its subject, so "who points at this scene" is not readable from the scene.
+// its subject, so "who points at this target" is not readable from the target.
 // graph-index maintains that direction, and asking it is the alternative to
 // scanning the world — which would be a hand-rolled index over data the
 // substrate already indexes.

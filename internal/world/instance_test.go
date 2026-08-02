@@ -40,7 +40,7 @@ func TestResolve_ComposesTheDocumentedSixPartID(t *testing.T) {
 
 	want := map[string]string{
 		"rook":      "c360.semmachina.world1.starter.character.rook",
-		"gatehouse": "c360.semmachina.world1.starter.scene.gatehouse",
+		"gatehouse": "c360.semmachina.world1.starter.location.gatehouse",
 		"p1":        "c360.semmachina.world1.starter.player.p1",
 	}
 	got := make(map[string]string, len(plan.Entities))
@@ -208,6 +208,9 @@ func TestResolve_RejectsAReferenceAtTheWrongKindOfEntity(t *testing.T) {
 		`{"predicate":"world.entity.name","object":"A bent crowbar"}]}`
 	wrenLine := `{"local_id":"wren","type":"character","triples":[` +
 		`{"predicate":"world.entity.name","object":"Wren"}]}`
+	arrivalLine := `{"local_id":"arrival","type":"scene","triples":[` +
+		`{"predicate":"world.entity.name","object":"Arrival"},` +
+		`{"predicate":"scene.location.current","object":"local:gatehouse"}]}`
 
 	cases := map[string]struct {
 		rook  string
@@ -228,9 +231,9 @@ func TestResolve_RejectsAReferenceAtTheWrongKindOfEntity(t *testing.T) {
 		},
 		"an alliance with a scene": {
 			rook: `{"local_id":"rook","type":"character","triples":[` +
-				`{"predicate":"world.relation.allied-with","object":"local:gatehouse"}]}`,
-			extra: gatehouseLine,
-			names: "local:gatehouse",
+				`{"predicate":"world.relation.allied-with","object":"local:arrival"}]}`,
+			extra: arrivalLine + "\n" + gatehouseLine,
+			names: "local:arrival",
 		},
 	}
 
@@ -266,11 +269,13 @@ func TestResolve_RefusesEveryObjectKindTheVocabularyRefuses(t *testing.T) {
 	byKind := map[vocabulary.EntityKind]string{
 		vocabulary.EntityKindCharacter: "wren",
 		vocabulary.EntityKindItem:      "crowbar",
-		vocabulary.EntityKindScene:     "gatehouse",
+		vocabulary.EntityKindScene:     "arrival",
+		vocabulary.EntityKindLocation:  "gatehouse",
 	}
 	lines := []string{
 		`{"local_id":"wren","type":"character","triples":[{"predicate":"world.entity.name","object":"Wren"}]}`,
 		`{"local_id":"crowbar","type":"item","triples":[{"predicate":"world.entity.name","object":"A crowbar"}]}`,
+		`{"local_id":"arrival","type":"scene","triples":[{"predicate":"world.entity.name","object":"Arrival"}]}`,
 		gatehouseLine,
 	}
 
@@ -396,7 +401,7 @@ func TestResolve_RejectsBadInstanceConfiguration(t *testing.T) {
 		},
 		"character that is not a character": {
 			mutate: func(c *world.InstanceConfig) { c.Player.Character = "local:gatehouse" },
-			names:  "is a \"scene\"",
+			names:  "is a \"location\"",
 		},
 		"player id colliding with a template entity": {
 			mutate: func(c *world.InstanceConfig) { c.Player.LocalID = "rook" },

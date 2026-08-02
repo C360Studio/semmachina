@@ -21,7 +21,7 @@ const (
 	playerID    = "c360.semmachina.world1.starter.player.p1"
 	actorID     = "c360.semmachina.world1.starter.character.rook"
 	companionID = "c360.semmachina.world1.starter.character.wren"
-	locationID  = "c360.semmachina.world1.starter.scene.gatehouse"
+	locationID  = "c360.semmachina.world1.starter.location.gatehouse-place"
 	evidenceID  = "c360.semmachina.world1.starter.evidence.scrap"
 )
 

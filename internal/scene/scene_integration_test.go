@@ -45,6 +45,7 @@ type liveScene struct {
 	namespace string
 
 	sceneID      string
+	locationID   string
 	turnID       string
 	turnEntityID string
 }
@@ -105,27 +106,33 @@ func startScene(t *testing.T) *liveScene {
 		namespace: fmt.Sprintf("scenew%d", integrationCounter.Add(1)),
 	}
 	live.sceneID = live.id(t, "scene", "gatehouse")
+	live.locationID = live.id(t, "location", "gatehouse-place")
 
-	// The scene FIRST. An entity referencing it before it exists mints a
+	// The location FIRST. An entity referencing it before it exists mints a
 	// referential stub at its key, and the atomic create then loses to that stub
 	// — the same ordering the world importer and the campaign gate live under.
+	live.create(t, live.locationID,
+		fact(vocabulary.WorldEntityName, "The Gatehouse Place"),
+		fact(vocabulary.WorldEntityKind, string(vocabulary.EntityKindLocation)),
+	)
 	live.create(t, live.sceneID,
 		fact(vocabulary.WorldEntityName, "The Gatehouse"),
 		fact(vocabulary.WorldEntityKind, string(vocabulary.EntityKindScene)),
 		fact(vocabulary.SceneAttributeTension, 3),
+		fact(vocabulary.SceneLocationCurrent, live.locationID),
 	)
 	live.create(t, live.id(t, "character", "rook"),
 		fact(vocabulary.WorldEntityName, "Rook"),
 		fact(vocabulary.WorldEntityKind, string(vocabulary.EntityKindCharacter)),
 		fact(vocabulary.CharacterAttributeHealth, 8),
 		fact(vocabulary.CharacterStatusCurrent, string(vocabulary.StatusHealthy)),
-		fact(vocabulary.WorldLocationCurrent, live.sceneID),
+		fact(vocabulary.WorldLocationCurrent, live.locationID),
 	)
 	live.create(t, live.id(t, "character", "wren"),
 		fact(vocabulary.WorldEntityName, "Wren"),
 		fact(vocabulary.WorldEntityKind, string(vocabulary.EntityKindCharacter)),
 		fact(vocabulary.CharacterAttributeHealth, 6),
-		fact(vocabulary.WorldLocationCurrent, live.sceneID),
+		fact(vocabulary.WorldLocationCurrent, live.locationID),
 	)
 	// The player is a durable graph entity bound to the character they play,
 	// exactly as instance configuration writes it — never a connection.
@@ -263,7 +270,7 @@ func TestIntegration_SomebodyWhoArrivedAfterSubmissionIsInTheContext(t *testing.
 		fact(vocabulary.WorldEntityName, "Hollis"),
 		fact(vocabulary.WorldEntityKind, string(vocabulary.EntityKindCharacter)),
 		fact(vocabulary.CharacterAttributeHealth, 9),
-		fact(vocabulary.WorldLocationCurrent, live.sceneID),
+		fact(vocabulary.WorldLocationCurrent, live.locationID),
 	)
 
 	view := live.assembleWhen(t, "carrying the sentry", func(v *scene.View) bool {
@@ -321,7 +328,7 @@ func TestIntegration_AReferencedButUndeliveredEntityIsExcludedAsAStub(t *testing
 	live.create(t, hollis,
 		fact(vocabulary.WorldEntityName, "Hollis"),
 		fact(vocabulary.WorldEntityKind, string(vocabulary.EntityKindCharacter)),
-		fact(vocabulary.WorldLocationCurrent, live.sceneID),
+		fact(vocabulary.WorldLocationCurrent, live.locationID),
 		fact(vocabulary.WorldRelationCarries, lantern),
 	)
 

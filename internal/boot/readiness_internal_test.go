@@ -18,6 +18,7 @@ import (
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/vocabulary"
+	"github.com/c360studio/semmachina/internal/world"
 )
 
 // These are the two gates that decide whether this engine serves play from a
@@ -149,6 +150,28 @@ func TestAwaitMembershipIndexed_ReturnsOnceEveryEdgeAppears(t *testing.T) {
 	expected := map[string][]string{"scene": {"rook", "wren"}}
 	if err := awaitMembershipIndexed(t.Context(), g, expected, testWindow()); err != nil {
 		t.Fatalf("awaitMembershipIndexed: %v", err)
+	}
+}
+
+func TestMembershipEdges_KeyOccupancyByResolvedLocation(t *testing.T) {
+	locationID := "c360.semmachina.world1.starter.location.gatehouse-place"
+	sceneID := "c360.semmachina.world1.starter.scene.gatehouse"
+	rookID := "c360.semmachina.world1.starter.character.rook"
+	plan := &world.Plan{Entities: []world.PlannedEntity{
+		{ID: sceneID, Kind: vocabulary.EntityKindScene, Facts: []payload.WorldFact{{
+			Predicate: vocabulary.SceneLocationCurrent, Object: locationID, Reference: true,
+		}}},
+		{ID: rookID, Kind: vocabulary.EntityKindCharacter, Facts: []payload.WorldFact{{
+			Predicate: vocabulary.WorldLocationCurrent, Object: locationID, Reference: true,
+		}}},
+	}}
+
+	got := membershipEdges(plan)
+	if len(got) != 1 || len(got[locationID]) != 1 || got[locationID][0] != rookID {
+		t.Fatalf("membership edges = %v, want Rook keyed by the resolved location", got)
+	}
+	if _, sceneAsPlace := got[sceneID]; sceneAsPlace {
+		t.Fatalf("scene placement was mistaken for occupancy: %v", got)
 	}
 }
 

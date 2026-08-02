@@ -23,7 +23,8 @@ func mysteryPackageFS(entityLines string) fstest.MapFS {
 func completeMysteryLines() string {
 	var lines []string
 	lines = append(lines,
-		`{"local_id":"village","type":"scene","triples":[{"predicate":"world.entity.name","object":"Village"}]}`,
+		`{"local_id":"village-location","type":"location","triples":[{"predicate":"world.entity.name","object":"Village"}]}`,
+		`{"local_id":"village","type":"scene","triples":[{"predicate":"world.entity.name","object":"Village"},{"predicate":"scene.location.current","object":"local:village-location"}]}`,
 		`{"local_id":"method","type":"item","triples":[{"predicate":"world.entity.name","object":"The method"}]}`,
 		`{"local_id":"kit","type":"character","triples":[{"predicate":"world.entity.name","object":"Kit Finch"},{"predicate":"companion.candidate.policy","object":"bounded-initiative"}]}`,
 		`{"local_id":"victim","type":"character","triples":[{"predicate":"world.entity.name","object":"The victim"}]}`,

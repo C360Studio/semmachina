@@ -2,6 +2,7 @@ package payload_test
 
 import (
 	"encoding/json"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -252,10 +253,25 @@ func TestWorldEntity_ValidateRejectsStructuralViolations(t *testing.T) {
 		"object of an undefined Go type": {
 			mutate: func(e *payload.WorldEntity) {
 				e.Facts = []payload.WorldFact{
-					{Predicate: vocabulary.CharacterAttributeHealth, Object: 3.5},
+					{Predicate: vocabulary.CharacterAttributeHealth, Object: true},
 				}
 			},
-			names: "only string and int",
+			names: "only string, int, and finite coordinate float64",
+		},
+		"float on a non-coordinate predicate": {
+			mutate: func(e *payload.WorldEntity) {
+				e.Facts = []payload.WorldFact{{Predicate: vocabulary.CharacterAttributeHealth, Object: 3.5}}
+			},
+			names: "coordinate",
+		},
+		"non-finite coordinate": {
+			mutate: func(e *payload.WorldEntity) {
+				e.ID = "c360.semmachina.world1.starter.location.gatehouse-place"
+				e.Kind = vocabulary.EntityKindLocation
+				e.Template.LocalID = "gatehouse-place"
+				e.Facts = []payload.WorldFact{{Predicate: vocabulary.GeoLocationLatitude, Object: math.Inf(1)}}
+			},
+			names: "finite",
 		},
 	}
 
@@ -299,6 +315,24 @@ func TestWorldFact_UnmarshalNarrowsTheObjectToStringOrInt(t *testing.T) {
 	}
 	if got, ok := fact.Object.(int); !ok || got != 8 {
 		t.Fatalf("object decoded as %T(%v), want int(8)", fact.Object, fact.Object)
+	}
+}
+
+func TestWorldFact_CanonicalCoordinateSurvivesTheWireAsFloat64(t *testing.T) {
+	want := payload.WorldFact{Predicate: vocabulary.GeoLocationLatitude, Object: 41.8819}
+	data, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got payload.WorldFact
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Predicate != want.Predicate || got.Object != want.Object || got.Reference {
+		t.Fatalf("coordinate round trip = %+v, want %+v", got, want)
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatalf("round-tripped coordinate is invalid: %v", err)
 	}
 }
 

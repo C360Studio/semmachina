@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 
 	ssvocab "github.com/c360studio/semstreams/vocabulary"
@@ -344,6 +345,13 @@ func parseFactObject(
 		}
 		return TemplateFact{Predicate: predicate, Literal: string(level)}, nil
 
+	case ShapeNumber:
+		value, err := decodeFloat(raw)
+		if err != nil {
+			return TemplateFact{}, err
+		}
+		return TemplateFact{Predicate: predicate, Literal: value}, nil
+
 	case ShapeText:
 		text, err := decodeString(raw)
 		if err != nil {
@@ -406,4 +414,22 @@ func decodeInt(raw json.RawMessage) (int, error) {
 		return 0, fmt.Errorf("object %s must be a whole number", number)
 	}
 	return int(integer), nil
+}
+
+func decodeFloat(raw json.RawMessage) (float64, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return 0, fmt.Errorf("object must be a JSON number: %w", err)
+	}
+	number, ok := value.(json.Number)
+	if !ok {
+		return 0, fmt.Errorf("object must be a JSON number, got %s", raw)
+	}
+	numeric, err := number.Float64()
+	if err != nil || math.IsNaN(numeric) || math.IsInf(numeric, 0) {
+		return 0, fmt.Errorf("object %s must be a finite number", number)
+	}
+	return numeric, nil
 }

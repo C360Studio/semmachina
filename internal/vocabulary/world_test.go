@@ -365,7 +365,8 @@ func TestAllowsObjectKind_EnforcesTheRegisteredRule(t *testing.T) {
 		kind      vocabulary.EntityKind
 		want      bool
 	}{
-		{vocabulary.WorldLocationCurrent, vocabulary.EntityKindScene, true},
+		{vocabulary.WorldLocationCurrent, vocabulary.EntityKindLocation, true},
+		{vocabulary.WorldLocationCurrent, vocabulary.EntityKindScene, false},
 		{vocabulary.WorldLocationCurrent, vocabulary.EntityKindItem, false},
 		{vocabulary.WorldRelationCarries, vocabulary.EntityKindItem, true},
 		{vocabulary.WorldRelationCarries, vocabulary.EntityKindCharacter, false},
@@ -397,6 +398,7 @@ func TestIsMultiValued_CoversRelationsAndCaseMemberships(t *testing.T) {
 		vocabulary.CaseMemberTimeline,
 		vocabulary.EvidenceRevealKindPredicate,
 		vocabulary.EvidenceRevealTarget,
+		vocabulary.LocationRelationConnectsTo,
 	} {
 		multi[p] = true
 	}

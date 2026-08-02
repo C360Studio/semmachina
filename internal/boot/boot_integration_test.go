@@ -1381,14 +1381,18 @@ func TestBoot_TheIngressGateReadsTheMarkerRatherThanRememberingIt(t *testing.T) 
 	}
 }
 
-// noMembershipPackage is a world where nobody is anywhere: a scene, a character,
-// and no world.location.current between them.
+// noMembershipPackage is a world where nobody is anywhere: a scene at a valid
+// location, a character, and no world.location.current between them.
 func noMembershipPackage(t *testing.T) fstest.MapFS {
 	t.Helper()
 	manifest := "id: nowhere\nname: Nowhere\nversion: 0.1.0\n" +
 		"engine_compat: \">=v1.0.0-beta.150 <v2.0.0\"\ndescription: nobody is anywhere\n"
 	entities := strings.Join([]string{
-		`{"local_id":"cellar","type":"scene","triples":[{"predicate":"world.entity.name","object":"The Cellar"}]}`,
+		`{"local_id":"cellar","type":"scene","triples":[` +
+			`{"predicate":"world.entity.name","object":"The Cellar"},` +
+			`{"predicate":"scene.location.current","object":"local:cellar-place"}]}`,
+		`{"local_id":"cellar-place","type":"location","triples":[` +
+			`{"predicate":"world.entity.name","object":"The Cellar Place"}]}`,
 		`{"local_id":"` + starterCharacter + `","type":"character","triples":[` +
 			`{"predicate":"world.entity.name","object":"Rook"}]}`,
 	}, "\n") + "\n"

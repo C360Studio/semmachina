@@ -83,9 +83,9 @@ type Exclusion struct {
 // Actor is who is acting in the assembled scene, and whether the view could
 // PROVE they are in it.
 //
-// It exists because scene membership comes only from the edges pointing at the
-// scene, so the acting character reaches the view exclusively through the
-// incoming index. An index that has not applied that character's
+// It exists because scene membership comes only from occupancy edges pointing
+// at the scene's location, so the acting character reaches the view exclusively
+// through the incoming index. An index that has not applied that character's
 // world.location.current edge yet leaves the actor out of the room without ever
 // making them a candidate — and a candidate is the only thing an Exclusion can
 // name. The presence check is therefore a separate answer, carried here.
@@ -144,13 +144,14 @@ const (
 // It is NOT a retrieval weight, and the difference is the one F17 is about. What
 // was retrieved to build this view is larger than what the view carries: the
 // projection drops every unregistered triple the batch reads returned, and the
-// membership read's reply — one entry per edge ever pointed at this scene,
-// including one per turn ever taken in it — is not counted here at all. Per-turn
-// CONTEXT is flat and this number shows it; per-turn RETRIEVAL is not, and this
-// number would hide that if it were read as an answer to it.
+// location-membership read's reply — every incoming edge pointed at the
+// location, including non-membership topology or authored references — is not
+// counted here at all. Per-turn CONTEXT is flat and this number shows it;
+// per-turn RETRIEVAL is not, and this number would hide that if it were read as
+// an answer to it.
 type Size struct {
-	// Entities is how many entities the view carries, including the scene and
-	// the turn.
+	// Entities is how many entities the view carries, including the turn, scene,
+	// and scene location.
 	Entities int
 	// Triples is how many registered facts they carry between them.
 	Triples int
@@ -172,9 +173,11 @@ type View struct {
 	// TurnID and TurnEntityID identify the turn this context was assembled for.
 	TurnID       string
 	TurnEntityID string
-	// SceneID is the scene the turn is happening in, read from the turn entity
-	// rather than supplied by the caller.
+	// SceneID is the scene the turn is happening in, read from the turn entity.
 	SceneID string
+	// LocationID is the persistent place the scene occurs at, read from the
+	// scene's single scene.location.current reference.
+	LocationID string
 	// AssembledAt is when the query ran. It is the answer to "how fresh is
 	// this", and under email-cadence play the gap between it and the action's
 	// arrival can be days.
@@ -189,13 +192,15 @@ type View struct {
 	Turn Entity
 	// Scene is the scene entity's own facts.
 	Scene Entity
-	// Members are the entities IN the scene, sorted by id so one world state
+	// Location is the persistent place shared by this and any other scenes.
+	Location Entity
+	// Members are the entities IN the location, sorted by id so one world state
 	// assembles to one view.
 	Members []Entity
-	// Neighbours are the entities members and the scene point at that are not
-	// themselves in the scene — the 1-hop boundary. They are hydrated so a
-	// persona can name what a character carries or knows, and the traversal
-	// stops here because there is no code that goes further.
+	// Neighbours are the entities the turn, scene, location, and members point at
+	// that are not themselves in the view — the 1-hop boundary. They are
+	// hydrated so a persona can name what a character carries or knows, and the
+	// traversal stops here because there is no code that goes further.
 	Neighbours []Entity
 	// Excluded names every candidate left out, with a reason.
 	Excluded []Exclusion
@@ -206,10 +211,10 @@ type View struct {
 }
 
 // Entities returns every entity in the view, in a stable order: the turn, the
-// scene, the members, then the neighbours.
+// scene, the location, the members, then the neighbours.
 func (v *View) Entities() []Entity {
-	out := make([]Entity, 0, 2+len(v.Members)+len(v.Neighbours))
-	out = append(out, v.Turn, v.Scene)
+	out := make([]Entity, 0, 3+len(v.Members)+len(v.Neighbours))
+	out = append(out, v.Turn, v.Scene, v.Location)
 	out = append(out, v.Members...)
 	return append(out, v.Neighbours...)
 }

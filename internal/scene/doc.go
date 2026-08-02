@@ -5,14 +5,15 @@
 // graph-retrieval-bounded, never append-everything, and the bound here is
 // STRUCTURAL rather than conventional:
 //
-//   - The query SHAPE is fixed. At most five reads — the turn, the scene, the
-//     scene's incoming edges, one batch of members, one batch of their
-//     neighbours — with no recursion, no depth parameter, and nothing a caller
-//     can widen. Fewer when a stage has no candidates; never more. Depth is 1
-//     because there is no code that goes further.
-//   - The query SCOPE is the scene. Membership comes from the edges pointing at
-//     the scene, so a world of a thousand rooms costs exactly what this room
-//     costs; the map's size never enters the retrieval.
+//   - The query SHAPE is fixed. At most six reads — the turn, the scene, the
+//     scene's location, the location's incoming edges, one batch of members,
+//     and one batch of their neighbours — with no recursion, no depth
+//     parameter, and nothing a caller can widen. Fewer when a stage has no
+//     candidates; never more. Depth is 1 because there is no code that goes
+//     further.
+//   - The query SCOPE is the scene's location. Membership comes from the edges
+//     pointing at that place, so a world of a thousand rooms costs exactly what
+//     this room costs; the map's size never enters the retrieval.
 //   - The query SIZE is capped and REPORTED. A scene that exceeds the entity cap
 //     is a loud refusal naming the scene, never a silent truncation, and every
 //     assembled view carries its own measured weight so "how big was this

@@ -38,9 +38,9 @@ const (
 		`{"predicate":"character.status.current","object":"healthy"},` +
 		`{"predicate":"world.location.current","object":"local:gatehouse"}]}`
 
-	gatehouseLine = `{"local_id":"gatehouse","type":"scene","triples":[` +
+	gatehouseLine = `{"local_id":"gatehouse","type":"location","triples":[` +
 		`{"predicate":"world.entity.name","object":"The Gatehouse"},` +
-		`{"predicate":"scene.attribute.tension","object":3}]}`
+		`{"predicate":"world.entity.description","object":"A persistent place."}]}`
 )
 
 func TestParseEntities_ParsesTheAuthoredShape(t *testing.T) {
