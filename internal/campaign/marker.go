@@ -71,11 +71,17 @@ var ErrImportInterrupted = errors.New("the campaign was claimed but its world im
 // unreproducible, so this is the lane choice with the sharpest consequence in
 // the package.
 func (g *Gate) MarkImported(ctx context.Context, claim Instantiation) (time.Time, error) {
-	if !claim.claimed {
+	if !claim.proof.sealed {
 		return time.Time{}, fmt.Errorf(
 			"refusing to mark campaign %s imported from an Instantiation that did not come out of Claim; the "+
 				"argument is PROOF that this boot won the atomic create, and a hand-built value proves nothing "+
 				"about who imported the world", g.campaignID)
+	}
+	if !claim.hasValidProof() {
+		return time.Time{}, fmt.Errorf(
+			"refusing to mark campaign %s imported because the Instantiation no longer matches its Claim proof; "+
+				"CampaignID, Seed, Experience, and Fresh are sealed as one answer and none may be changed",
+			g.campaignID)
 	}
 	if !claim.Fresh {
 		return time.Time{}, fmt.Errorf(

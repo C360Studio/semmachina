@@ -12,6 +12,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	sspersona "github.com/c360studio/semstreams/persona"
 
+	"github.com/c360studio/semmachina/internal/campaign"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 	"github.com/c360studio/semmachina/internal/world"
@@ -156,7 +157,9 @@ func localIDs(entities []world.PlannedEntity) []string {
 // no-op policy swallows it, and it stays a permanent factless stub. The stream
 // path works precisely because it merges.
 func (e *Engine) instantiate(ctx context.Context) error {
-	claim, err := e.gate.Claim(ctx)
+	claim, err := e.gate.Claim(ctx, campaign.Experience{
+		PersonaPack: e.plan.Experience.PersonaPack, MechanicsPack: e.plan.Experience.MechanicsPack,
+	})
 	if err != nil {
 		return fmt.Errorf("claim the campaign: %w", err)
 	}

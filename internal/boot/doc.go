@@ -29,19 +29,24 @@
 //  2. entity-stream, then graph — graph-ingest binds its input consumer with
 //     AutoCreate false, so the fact lane must exist before the sole
 //     ENTITY_STATES writer can start.
-//  3. agent-stream, personas, agentic — the agentic loop binds a consumer per
-//     declared port, so its stream comes first; the world's persona fragments
-//     are seeded before the loop reads the bucket at Start; and the loop must be
-//     RUNNING before any persona stage can be triggered.
-//  4. world — claim, import (or skip, or refuse), read the world back, mark it.
-//  5. stage-stream, then rules — a rule that fires while the stage stream does
-//     not exist publishes into nothing, and a stage that was never triggered
-//     looks exactly like a stage that ran and did nothing.
-//  6. resume — the position above.
-//  7. stages and egress — the notifier's durable is DeliverPolicy "new", so a
+//  3. agent-stream — provision the loop's input before constructing the loop.
+//  4. world provenance/import — claim with the sealed experience, import (or
+//     skip, or refuse), read the world back, and mark it. Experience mismatch
+//     or missing provenance stops here before persona seeding or rule startup.
+//  5. personas, then agentic — persona fragments are seeded only after the
+//     world gate passes and before the loop reads the bucket at Start; the loop
+//     must be RUNNING before any persona stage can be triggered.
+//  6. lifecycle — attach after the imported case is queryable and before rules
+//     that perform lifecycle transitions load.
+//  7. stage-stream, then rules — rules require the proven World step. A rule
+//     that fires while the stage stream does not exist publishes into nothing,
+//     and a stage that was never triggered looks exactly like a stage that ran
+//     and did nothing.
+//  8. resume — the position above.
+//  9. stages and egress — the notifier's durable is DeliverPolicy "new", so a
 //     turn resolving before it binds stays retrievable and is not pushed; binding
 //     it before intake is what keeps that window empty.
-//  8. ledger, action-stream, intake, ingress — ingress last, because it is the
+//  10. ledger, action-stream, intake, ingress — ingress last, because it is the
 //     only step that lets a stranger add work.
 //
 // # Which preconditions are CHECKED, and which are only ordered

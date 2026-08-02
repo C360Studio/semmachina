@@ -120,10 +120,14 @@ func RegisterPredicates() error {
 		if err := ValidatePredicate(predicate); err != nil {
 			return fmt.Errorf("cannot declare predicate %q: %w", predicate, err)
 		}
-		ssvocab.RegisterPredicate(ssvocab.PredicateMetadata{
+		metadata := ssvocab.PredicateMetadata{
 			Name:       predicate.String(),
 			RuleOpaque: opaque[predicate],
-		})
+		}
+		if predicate == CampaignExperiencePersonaPack || predicate == CampaignExperienceMechanicsPack {
+			metadata.DataType = "string"
+		}
+		ssvocab.RegisterPredicate(metadata)
 	}
 	return nil
 }

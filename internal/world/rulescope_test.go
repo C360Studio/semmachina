@@ -432,6 +432,16 @@ func TestLoadPackage_ReservesTheCampaignSeedWithoutReservingTheCampaignClock(t *
 	if err := loadWithRule(t, seedRule); err == nil {
 		t.Fatal("LoadPackage accepted a world rule branching on the campaign seed")
 	}
+	for _, predicate := range []string{
+		"campaign.experience.persona-pack",
+		"campaign.experience.mechanics-pack",
+	} {
+		experienceRule := ruleJSON("world_reads_campaign_experience",
+			fmt.Sprintf(`{"field":%q,"operator":"eq","value":"default"}`, predicate), "on_enter", ``)
+		if err := loadWithRule(t, experienceRule); err == nil {
+			t.Fatalf("LoadPackage accepted a world rule branching on protected provenance %s", predicate)
+		}
+	}
 
 	// A deadline reaction, which is what CLAUDE.md calls the canonical shape.
 	clockRule := ruleJSON("world_gate_bars_at_dusk",

@@ -132,25 +132,49 @@ type Instantiation struct {
 	// one already stored otherwise. Either way it is THE seed for this
 	// campaign, for its whole life.
 	Seed Seed
+	// Experience is the immutable persona/mechanics pack selection recorded by
+	// the campaign's atomic create, or read from that same stored provenance.
+	Experience Experience
 	// Fresh reports that THIS call created the campaign. It is the world
 	// importer's gate: true means an empty world instance, false means a
 	// campaign that has already been played and must not be re-imported over.
 	Fresh bool
 
-	// claimed records that this value came out of Claim.
-	//
-	// Unexported, with no setter, because Instantiation is an exported struct
-	// with exported fields and MarkImported takes one as PROOF that the caller
-	// won the create. Without this, `campaign.Instantiation{CampaignID: x,
-	// Fresh: true}` is an ordinary composite literal that compiles, and the guard
-	// it is handed to becomes a rule somebody has to follow rather than a fact
-	// about where the value came from — which is the shape this codebase already
-	// closed for verified players and for connection ids.
-	//
-	// Weaker than either of those on its own terms: one caller, same module, and
-	// the value naturally comes from Claim anyway. It costs two lines, and the
-	// alternative is a comment asking the next caller not to hand-build one.
-	claimed bool
+	// proof is an immutable private snapshot of every exported field. External
+	// callers may copy an Instantiation, but cannot forge or update this value
+	// after mutating the public answer MarkImported treats as evidence.
+	proof instantiationProof
+}
+
+type instantiationSnapshot struct {
+	campaignID string
+	seed       Seed
+	experience Experience
+	fresh      bool
+}
+
+type instantiationProof struct {
+	snapshot instantiationSnapshot
+	sealed   bool
+}
+
+func newInstantiation(campaignID string, seed Seed, experience Experience, fresh bool) Instantiation {
+	value := Instantiation{CampaignID: campaignID, Seed: seed, Experience: experience, Fresh: fresh}
+	value.proof = instantiationProof{snapshot: value.snapshot(), sealed: true}
+	return value
+}
+
+func (i Instantiation) snapshot() instantiationSnapshot {
+	return instantiationSnapshot{
+		campaignID: i.CampaignID,
+		seed:       i.Seed,
+		experience: i.Experience,
+		fresh:      i.Fresh,
+	}
+}
+
+func (i Instantiation) hasValidProof() bool {
+	return i.proof.sealed && i.proof.snapshot == i.snapshot()
 }
 
 // Claim performs the instantiation decision as one atomic create.
@@ -175,7 +199,10 @@ type Instantiation struct {
 // import — leaving the partial world in place. Import is convergent under
 // replace semantics, so re-running it would be safe; knowing that it is NEEDED
 // requires a completion marker this gate deliberately does not invent.
-func (g *Gate) Claim(ctx context.Context) (Instantiation, error) {
+func (g *Gate) Claim(ctx context.Context, requested Experience) (Instantiation, error) {
+	if err := requested.Validate(); err != nil {
+		return Instantiation{}, fmt.Errorf("claim campaign %s with invalid experience: %w", g.campaignID, err)
+	}
 	seed, err := g.newSeed()
 	if err != nil {
 		return Instantiation{}, err
@@ -184,7 +211,7 @@ func (g *Gate) Claim(ctx context.Context) (Instantiation, error) {
 		return Instantiation{}, errors.New("campaign seed source produced the zero seed")
 	}
 
-	result, err := g.store.CreateEntity(ctx, g.entity(seed))
+	result, err := g.store.CreateEntity(ctx, g.entity(seed, requested))
 	switch {
 	case err == nil:
 		// Degraded means the write COMMITTED and only the read-back failed;
@@ -192,21 +219,39 @@ func (g *Gate) Claim(ctx context.Context) (Instantiation, error) {
 		// as "someone else instantiated it" would draw the opposite of the
 		// truth. The minted seed is authoritative — this call wrote it.
 		if result.Degraded {
-			return Instantiation{CampaignID: g.campaignID, Seed: seed, Fresh: true, claimed: true}, nil
+			return newInstantiation(g.campaignID, seed, requested, true), nil
 		}
-		if err := g.confirmStoredSeed(result.Entity, seed); err != nil {
+		if err := g.confirmStoredInstantiation(result.Entity, seed, requested); err != nil {
 			return Instantiation{}, err
 		}
-		return Instantiation{CampaignID: g.campaignID, Seed: seed, Fresh: true, claimed: true}, nil
+		return newInstantiation(g.campaignID, seed, requested, true), nil
 
 	case errors.Is(err, graphio.ErrEntityExists):
-		stored, loadErr := g.LoadSeed(ctx)
+		// One authoritative snapshot. Reading seed and pack provenance through
+		// separate GetEntity calls could combine two revisions into a state that
+		// never existed and would make corruption diagnostics race-dependent.
+		state, loadErr := g.store.GetEntity(ctx, g.campaignID)
 		if loadErr != nil {
 			return Instantiation{}, fmt.Errorf(
-				"campaign %s already exists but its seed is unreadable, and a campaign's seed is never regenerated: %w",
+				"campaign %s already exists but its instantiation provenance is unreadable: %w",
 				g.campaignID, loadErr)
 		}
-		return Instantiation{CampaignID: g.campaignID, Seed: stored, Fresh: false, claimed: true}, nil
+		storedSeed, storedExperience, parseErr := instantiationFromEntity(state, g.campaignID)
+		if parseErr != nil {
+			return Instantiation{}, fmt.Errorf(
+				"campaign %s already exists but its instantiation provenance is unreadable, and a campaign's seed and "+
+					"experience are never regenerated, inferred, defaulted, or backfilled: %w",
+				g.campaignID, parseErr)
+		}
+		if storedExperience != requested {
+			return Instantiation{}, fmt.Errorf(
+				"%w: campaign %s recorded persona pack %q and mechanics pack %q; this boot requested persona pack %q "+
+					"and mechanics pack %q",
+				ErrExperienceMismatch, g.campaignID,
+				storedExperience.PersonaPack, storedExperience.MechanicsPack,
+				requested.PersonaPack, requested.MechanicsPack)
+		}
+		return newInstantiation(g.campaignID, storedSeed, storedExperience, false), nil
 
 	default:
 		return Instantiation{}, err
@@ -230,27 +275,24 @@ func (g *Gate) LoadSeed(ctx context.Context) (Seed, error) {
 
 // seedFromEntity extracts the seed from a stored campaign entity.
 func seedFromEntity(state *graph.EntityState, campaignID string) (Seed, error) {
-	if state == nil {
-		return Seed{}, fmt.Errorf("campaign entity %s read back as nil", campaignID)
+	if err := validateCampaignEntity(state, campaignID); err != nil {
+		return Seed{}, err
 	}
-	// A stub occupies the key without carrying any of the entity's own facts.
-	// If a campaign ID is ever referenced by another entity before the campaign
-	// is created, the create loses to the stub and this is the only signal that
-	// distinguishes "already instantiated" from "referenced, never born".
-	if state.IsStub() {
-		return Seed{}, fmt.Errorf(
-			"campaign entity %s is a referential stub: something referenced it before it was created, "+
-				"so it holds no seed", campaignID)
-	}
-	triple := state.GetTriple(vocabulary.CampaignSeedValue.String())
-	if triple == nil {
+	objects := predicateObjects(state, vocabulary.CampaignSeedValue)
+	switch len(objects) {
+	case 0:
 		return Seed{}, fmt.Errorf("campaign entity %s carries no %s triple",
 			campaignID, vocabulary.CampaignSeedValue)
+	case 1:
+	default:
+		return Seed{}, fmt.Errorf(
+			"campaign entity %s holds %d values for the single-valued %s; its seed is ambiguous",
+			campaignID, len(objects), vocabulary.CampaignSeedValue)
 	}
-	value, ok := triple.Object.(string)
+	value, ok := objects[0].(string)
 	if !ok {
 		return Seed{}, fmt.Errorf("campaign entity %s carries a %T seed value, want a hex string",
-			campaignID, triple.Object)
+			campaignID, objects[0])
 	}
 	seed, err := ParseSeed(value)
 	if err != nil {
@@ -259,40 +301,122 @@ func seedFromEntity(state *graph.EntityState, campaignID string) (Seed, error) {
 	return seed, nil
 }
 
-// confirmStoredSeed checks the read-back carries the seed this call wrote.
+func instantiationFromEntity(state *graph.EntityState, campaignID string) (Seed, Experience, error) {
+	if err := validateCampaignEntity(state, campaignID); err != nil {
+		return Seed{}, Experience{}, err
+	}
+	seed, err := seedFromEntity(state, campaignID)
+	if err != nil {
+		return Seed{}, Experience{}, err
+	}
+	personaObjects := predicateObjects(state, vocabulary.CampaignExperiencePersonaPack)
+	mechanicsObjects := predicateObjects(state, vocabulary.CampaignExperienceMechanicsPack)
+	switch {
+	case len(personaObjects) == 0 && len(mechanicsObjects) == 0:
+		return Seed{}, Experience{}, fmt.Errorf(
+			"%w: campaign entity %s has neither %s nor %s",
+			ErrExperienceMigrationRequired, campaignID,
+			vocabulary.CampaignExperiencePersonaPack, vocabulary.CampaignExperienceMechanicsPack)
+	case len(personaObjects) == 0 || len(mechanicsObjects) == 0:
+		return Seed{}, Experience{}, fmt.Errorf(
+			"campaign entity %s has partial experience provenance: %s has %d values and %s has %d",
+			campaignID, vocabulary.CampaignExperiencePersonaPack, len(personaObjects),
+			vocabulary.CampaignExperienceMechanicsPack, len(mechanicsObjects))
+	case len(personaObjects) > 1:
+		return Seed{}, Experience{}, fmt.Errorf(
+			"campaign entity %s holds %d values for the single-valued %s; experience provenance is ambiguous",
+			campaignID, len(personaObjects), vocabulary.CampaignExperiencePersonaPack)
+	case len(mechanicsObjects) > 1:
+		return Seed{}, Experience{}, fmt.Errorf(
+			"campaign entity %s holds %d values for the single-valued %s; experience provenance is ambiguous",
+			campaignID, len(mechanicsObjects), vocabulary.CampaignExperienceMechanicsPack)
+	}
+
+	personaPack, ok := personaObjects[0].(string)
+	if !ok {
+		return Seed{}, Experience{}, fmt.Errorf(
+			"campaign entity %s records malformed experience provenance: %s has type %T, want a string",
+			campaignID, vocabulary.CampaignExperiencePersonaPack, personaObjects[0])
+	}
+	mechanicsPack, ok := mechanicsObjects[0].(string)
+	if !ok {
+		return Seed{}, Experience{}, fmt.Errorf(
+			"campaign entity %s records malformed experience provenance: %s has type %T, want a string",
+			campaignID, vocabulary.CampaignExperienceMechanicsPack, mechanicsObjects[0])
+	}
+	experience := Experience{PersonaPack: personaPack, MechanicsPack: mechanicsPack}
+	if err := experience.Validate(); err != nil {
+		return Seed{}, Experience{}, fmt.Errorf("campaign entity %s records malformed experience provenance: %w", campaignID, err)
+	}
+	return seed, experience, nil
+}
+
+func validateCampaignEntity(state *graph.EntityState, campaignID string) error {
+	if state == nil {
+		return fmt.Errorf("campaign entity %s read back as nil", campaignID)
+	}
+	if state.IsStub() {
+		return fmt.Errorf(
+			"campaign entity %s is a referential stub: something referenced it before it was created, so it holds "+
+				"no instantiation provenance", campaignID)
+	}
+	return nil
+}
+
+func predicateObjects(state *graph.EntityState, predicate vocabulary.Predicate) []any {
+	var objects []any
+	for _, triple := range state.Triples {
+		if triple.Predicate == predicate.String() {
+			objects = append(objects, triple.Object)
+		}
+	}
+	return objects
+}
+
+// confirmStoredInstantiation checks the read-back carries the seed and pack
+// provenance this call wrote.
 //
 // Cheap, and it closes the one failure that would otherwise be invisible: a
-// create that succeeds while the seed triple is dropped or rewritten leaves a
-// campaign whose stored seed differs from the one this process is about to roll
-// with — reproducible in memory, unreproducible on restart.
-func (g *Gate) confirmStoredSeed(stored *graph.EntityState, minted Seed) error {
-	readBack, err := seedFromEntity(stored, g.campaignID)
+// create that succeeds while any instantiation triple is dropped or rewritten
+// leaves this process running with state a restart cannot reproduce.
+func (g *Gate) confirmStoredInstantiation(stored *graph.EntityState, minted Seed, requested Experience) error {
+	readBackSeed, readBackExperience, err := instantiationFromEntity(stored, g.campaignID)
 	if err != nil {
-		return fmt.Errorf("campaign %s was created but its seed did not store: %w", g.campaignID, err)
+		return fmt.Errorf(
+			"campaign %s was created but its seed did not store or its experience provenance was not exact: %w",
+			g.campaignID, err)
 	}
-	if readBack != minted {
+	if readBackSeed != minted {
 		return fmt.Errorf("campaign %s stored a different seed than the one it was created with", g.campaignID)
+	}
+	if readBackExperience != requested {
+		return fmt.Errorf(
+			"campaign %s stored persona pack %q and mechanics pack %q instead of requested persona pack %q and "+
+				"mechanics pack %q",
+			g.campaignID, readBackExperience.PersonaPack, readBackExperience.MechanicsPack,
+			requested.PersonaPack, requested.MechanicsPack)
 	}
 	return nil
 }
 
 // entity builds the campaign entity: the sentinel and the seed holder.
-func (g *Gate) entity(seed Seed) *graph.EntityState {
+func (g *Gate) entity(seed Seed, experience Experience) *graph.EntityState {
 	at := g.now().UTC()
+	triple := func(predicate vocabulary.Predicate, object string) message.Triple {
+		return message.Triple{
+			Subject: g.campaignID, Predicate: predicate.String(), Object: object,
+			Source: InstantiationSource, Timestamp: at, Confidence: 1.0, Context: g.campaignID,
+		}
+	}
 	return &graph.EntityState{
 		ID:          g.campaignID,
 		MessageType: EntityMessageType,
 		Version:     1,
 		UpdatedAt:   at,
-		Triples: []message.Triple{{
-			Subject:   g.campaignID,
-			Predicate: vocabulary.CampaignSeedValue.String(),
-			Object:    seed.String(),
-			Source:    InstantiationSource,
-			Timestamp: at,
-			// The seed is minted and recorded, never inferred.
-			Confidence: 1.0,
-			Context:    g.campaignID,
-		}},
+		Triples: []message.Triple{
+			triple(vocabulary.CampaignSeedValue, seed.String()),
+			triple(vocabulary.CampaignExperiencePersonaPack, experience.PersonaPack),
+			triple(vocabulary.CampaignExperienceMechanicsPack, experience.MechanicsPack),
+		},
 	}
 }

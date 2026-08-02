@@ -781,6 +781,15 @@ func TestBoot_ImportsTheWorldAndMarksItComplete(t *testing.T) {
 	if seed := testinfra.FirstObject(state, vocabulary.CampaignSeedValue.String()); seed == nil {
 		t.Error("the campaign carries no seed after boot")
 	}
+	for predicate, want := range map[string]string{
+		vocabulary.CampaignExperiencePersonaPack.String():   "default",
+		vocabulary.CampaignExperienceMechanicsPack.String(): "default",
+	} {
+		objects := testinfra.ObjectsFor(state, predicate)
+		if len(objects) != 1 || objects[0] != want {
+			t.Errorf("campaign %s provenance = %v, want exactly one %q", predicate, objects, want)
+		}
+	}
 	markers := testinfra.ObjectsFor(state, vocabulary.CampaignImportCompleted.String())
 	if len(markers) != 1 {
 		t.Fatalf("the campaign carries %d import markers, want exactly one", len(markers))
@@ -862,7 +871,7 @@ func TestBoot_RefusesToServeAnInterruptedImport(t *testing.T) {
 	// whose only job is graph-ingest.
 	helper := startEngine(t, interruptedHelperConfig(cfg))
 	_ = client
-	claim, err := gate.Claim(t.Context())
+	claim, err := gate.Claim(t.Context(), campaign.Experience{PersonaPack: "default", MechanicsPack: "default"})
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -882,6 +891,101 @@ func TestBoot_RefusesToServeAnInterruptedImport(t *testing.T) {
 	}
 	if engine.Addr() != "" {
 		t.Error("the player socket opened on a boot that refused the world")
+	}
+}
+
+func TestBoot_ExperienceProvenanceFailuresPrecedePersonaSeedingAndRules(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		plant     func(*testing.T, *campaign.Gate, *graphio.Store)
+		wantError error
+	}{
+		{
+			name: "mismatch",
+			plant: func(t *testing.T, gate *campaign.Gate, _ *graphio.Store) {
+				t.Helper()
+				_, err := gate.Claim(t.Context(), campaign.Experience{
+					PersonaPack: "default", MechanicsPack: "default",
+				})
+				if err != nil {
+					t.Fatalf("plant mismatched campaign: %v", err)
+				}
+			},
+			wantError: campaign.ErrExperienceMismatch,
+		},
+		{
+			name: "pre-provenance migration",
+			plant: func(t *testing.T, gate *campaign.Gate, store *graphio.Store) {
+				t.Helper()
+				seed, err := campaign.NewSeed()
+				if err != nil {
+					t.Fatalf("NewSeed: %v", err)
+				}
+				at := time.Now().UTC()
+				_, err = store.CreateEntity(t.Context(), &graph.EntityState{
+					ID: gate.CampaignID(), MessageType: campaign.EntityMessageType,
+					Version: 1, UpdatedAt: at,
+					Triples: []message.Triple{{
+						Subject: gate.CampaignID(), Predicate: vocabulary.CampaignSeedValue.String(), Object: seed.String(),
+						Source: campaign.InstantiationSource, Context: gate.CampaignID(), Timestamp: at, Confidence: 1,
+					}},
+				})
+				if err != nil {
+					t.Fatalf("plant pre-provenance campaign: %v", err)
+				}
+			},
+			wantError: campaign.ErrExperienceMigrationRequired,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := bootConfig(t)
+			adjudicatorID := "provenance-" + cfg.WorldNS + "-adjudicator"
+			narratorID := "provenance-" + cfg.WorldNS + "-narrator"
+			cfg.World = selectedPersonaWorld(t, adjudicatorID, narratorID, "provenance-"+cfg.WorldNS+"-other")
+
+			// A helper boot supplies the real graph mutation lane while the target
+			// campaign is planted, and leaves a rule status revision as the negative
+			// control proving the refused boot never reached rule startup.
+			planter := newTestEngine(t, interruptedHelperConfig(cfg))
+			if err := planter.StartThrough(t.Context(), boot.StepRules); err != nil {
+				t.Fatalf("start planting engine: %v", err)
+			}
+			store := graphStore(t)
+			gate, err := campaign.NewGate(store, campaign.Identity{
+				Org: cfg.Org, WorldNS: cfg.WorldNS, Template: "starter",
+			})
+			if err != nil {
+				t.Fatalf("NewGate: %v", err)
+			}
+			tc.plant(t, gate, store)
+			planter.Stop()
+			ruleRevision := ruleStatusRevision(t)
+
+			engine := newTestEngine(t, cfg)
+			t.Cleanup(engine.Stop)
+			err = engine.StartThrough(t.Context(), boot.StepRules)
+			if !errors.Is(err, tc.wantError) {
+				t.Fatalf("boot error = %v, want %v", err, tc.wantError)
+			}
+
+			manager, managerErr := sspersona.NewManager(requireBroker(t).Client)
+			if managerErr != nil {
+				t.Fatalf("open PERSONAS after refused boot: %v", managerErr)
+			}
+			stored, listErr := manager.List(t.Context())
+			if listErr != nil {
+				t.Fatalf("list PERSONAS after refused boot: %v", listErr)
+			}
+			for _, id := range []string{adjudicatorID, narratorID} {
+				if stored[id] != nil {
+					t.Errorf("persona %q was seeded before the world provenance gate passed", id)
+				}
+			}
+			if got := ruleStatusRevision(t); got != ruleRevision {
+				t.Errorf("rule status revision changed from %d to %d; rule startup ran before provenance refusal",
+					ruleRevision, got)
+			}
+		})
 	}
 }
 

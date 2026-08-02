@@ -137,6 +137,16 @@ const (
 	// exactly once, here.
 	CampaignSeedValue Predicate = "campaign.seed.value"
 
+	// CampaignExperiencePersonaPack records the immutable persona pack selected
+	// when the campaign entity was first created. Its object is one canonical
+	// ID segment and it is single-valued by the campaign gate's write/read contract.
+	CampaignExperiencePersonaPack Predicate = "campaign.experience.persona-pack"
+
+	// CampaignExperienceMechanicsPack records the immutable mechanics pack
+	// selected when the campaign entity was first created. Its object is one
+	// canonical ID segment and it is single-valued by the campaign gate's contract.
+	CampaignExperienceMechanicsPack Predicate = "campaign.experience.mechanics-pack"
+
 	// CampaignImportCompleted records that the world import which followed the
 	// instantiation claim actually FINISHED. Its object is an RFC3339 instant.
 	//
@@ -402,6 +412,8 @@ var allPredicates = []Predicate{
 	TurnFailureReason,
 	TurnFailureRef,
 	CampaignSeedValue,
+	CampaignExperiencePersonaPack,
+	CampaignExperienceMechanicsPack,
 	CampaignImportCompleted,
 	WorldEntityName,
 	WorldEntityKind,

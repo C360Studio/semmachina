@@ -209,29 +209,33 @@ func (e *Engine) Steps() []Step { return e.seq.Steps() }
 //
 //  1. connect, provision every stream, then graph-ingest and graph-index — nothing else can read or
 //     write authoritative state until the sole writer is running.
-//  2. the AGENT stream, then the world's persona fragments, then the agentic
-//     loop. The loop binds a consumer per declared input port, so its stream
-//     must exist first; and it must be RUNNING before any persona stage can be
-//     triggered, or every stage publishes a task nothing consumes and nak-loops.
-//  3. the world: claim, import (or skip, or refuse), read it back, mark it.
-//  4. attach the case lifecycle after the imported case is queryable. This
+//  2. the AGENT stream, before anything can start the agentic loop.
+//  3. the world provenance gate: claim with the sealed experience, import (or
+//     skip, or refuse), read the world back, and mark it. A mismatch or
+//     pre-provenance campaign stops here, before persona prompts or rules start.
+//  4. the world's persona fragments, then the agentic loop. The loop reads the
+//     persona bucket at Start and binds a consumer per declared input port; it
+//     must be RUNNING before any persona stage can be triggered, or every stage
+//     publishes a task nothing consumes and nak-loops.
+//  5. attach the case lifecycle after the imported case is queryable. This
 //     registers the shared manager before any lifecycle-transition rule loads,
 //     while attach-on-existing preserves an earlier boot's phase.
-//  5. the stage-trigger stream, BEFORE the rule processor — a rule that fires
+//  6. the stage-trigger stream, BEFORE the rule processor — a rule that fires
 //     while the stream does not exist publishes into nothing, and a stage that
 //     was never triggered looks exactly like a stage that ran and did nothing.
-//  6. the rule processor.
-//  7. the stranded-turn pass. This is the position that ends live turns when it
+//  7. the rule processor, gated on the proven world as well as its stage
+//     dependencies.
+//  8. the stranded-turn pass. This is the position that ends live turns when it
 //     is wrong: the pass reads which turns the substrate still holds work for
 //     and acts on what is MISSING from that set, and the processor's bootstrap
 //     replay publishes into that very set. Run before the processor, the pass
 //     reads an empty set for a turn about to receive a trigger and FAILS it —
 //     terminally, after which the replayed trigger is declined.
-//  8. the stage runners and the egress notifier. The notifier's durable is
+//  9. the stage runners and the egress notifier. The notifier's durable is
 //     DeliverPolicy "new", so a turn that resolves before it binds stays
 //     retrievable and is not pushed; binding it here rather than after intake is
 //     what keeps that window empty.
-//  9. the ledger, then intake, then ingress. Ingress opens last because it is
+//  10. the ledger, then intake, then ingress. Ingress opens last because it is
 //     the only step that lets a stranger add work.
 //
 // Every one of those is a Needs declaration on the step, so a reordering is
@@ -336,7 +340,14 @@ func (e *Engine) steps() []Step {
 			Run:   e.startGraph,
 		},
 		{ID: StepAgentStream, Needs: []StepID{StepStreams}, Run: e.ensureAgentStream},
-		{ID: StepPersonas, Needs: []StepID{StepConnect}, Run: e.seedPersonas},
+		{
+			ID: StepWorld,
+			// graph-ingest must be running to serve the claim and the import, and
+			// graph-index to answer the membership readback the world step gates on.
+			Needs: []StepID{StepGraph},
+			Run:   e.instantiate,
+		},
+		{ID: StepPersonas, Needs: []StepID{StepConnect, StepWorld}, Run: e.seedPersonas},
 		{
 			ID: StepAgentic,
 			// The stream first, because the loop binds a consumer per declared
@@ -347,13 +358,6 @@ func (e *Engine) steps() []Step {
 			Needs: []StepID{StepAgentStream, StepPersonas},
 			Check: e.checkPersonaModels,
 			Run:   e.startAgenticLoop,
-		},
-		{
-			ID: StepWorld,
-			// graph-ingest must be running to serve the claim and the import, and
-			// graph-index to answer the membership readback the world step gates on.
-			Needs: []StepID{StepGraph},
-			Run:   e.instantiate,
 		},
 		{
 			ID:    StepLifecycle,

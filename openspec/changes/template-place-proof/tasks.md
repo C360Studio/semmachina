@@ -54,10 +54,18 @@
   - Duplicate IDs and runtime-invalid definitions produce focused diagnostics. Independent Go
     review APPROVED the slice; focused boot/persona, full world, CLI compilation, and diff gates
     passed.
-  - Durable campaign selection provenance and restart matching remain open under task 4.4.
-- [ ] 4.4 Add failing campaign-provenance tests for atomic fresh selection records, exact restart
+- [x] 4.4 Add failing campaign-provenance tests for atomic fresh selection records, exact restart
   match, changed selection, missing/partial provenance, and the explicit existing-world migration
   refusal; then implement the read gate before persona seeding or rule startup
+  - Fresh campaign creation atomically records the seed plus persona and mechanics selections;
+    restart reads one snapshot and requires an exact provenance match.
+  - Migration, partial, ambiguous, malformed, and mismatched provenance are refused. Same-selection
+    races converge, different-selection races refuse the loser, and the private full-claim proof
+    covers the complete atomic value.
+  - Boot orders World before Personas, Agentic, and Rules, while package-rule protections remain
+    intact. Architecture and independent Go reviews both APPROVED the slice.
+  - Bounded campaign, vocabulary, world, and boot gates passed. No broad boot aggregate or E2E was
+    used yet; template and tunability acceptance remains Group 5.
 
 ## 5. Template and Tunability Acceptance
 

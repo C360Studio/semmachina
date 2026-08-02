@@ -3,6 +3,7 @@ package campaign_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -43,10 +44,10 @@ func TestMarkImported_RefusesAClaimThatDidNotCreateTheCampaign(t *testing.T) {
 	store := newFakeStore()
 	gate := newTestGate(t, store)
 
-	if _, err := gate.Claim(t.Context()); err != nil {
+	if _, err := gate.Claim(t.Context(), testExperience); err != nil {
 		t.Fatalf("first claim: %v", err)
 	}
-	loser, err := gate.Claim(t.Context())
+	loser, err := gate.Claim(t.Context(), testExperience)
 	if err != nil {
 		t.Fatalf("second claim: %v", err)
 	}
@@ -63,18 +64,49 @@ func TestMarkImported_RefusesAClaimThatDidNotCreateTheCampaign(t *testing.T) {
 	}
 }
 
-func TestMarkImported_RefusesAClaimOnADifferentCampaign(t *testing.T) {
+func TestMarkImported_RefusesEveryMutationOfAClaimProof(t *testing.T) {
 	store := newFakeStore()
 	gate := newTestGate(t, store)
 
-	claim, err := gate.Claim(t.Context())
+	claim, err := gate.Claim(t.Context(), testExperience)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	claim.CampaignID = "c360.semmachina.other.starter.campaign.main"
+	mutations := map[string]func(*campaign.Instantiation){
+		"campaign id": func(value *campaign.Instantiation) {
+			value.CampaignID = "c360.semmachina.other.starter.campaign.main"
+		},
+		"seed": func(value *campaign.Instantiation) {
+			value.Seed[0] ^= 0xff
+		},
+		"persona pack": func(value *campaign.Instantiation) {
+			value.Experience.PersonaPack = "other-voices"
+		},
+		"mechanics pack": func(value *campaign.Instantiation) {
+			value.Experience.MechanicsPack = "other-rules"
+		},
+		"fresh": func(value *campaign.Instantiation) {
+			value.Fresh = false
+		},
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			mutated := claim
+			mutate(&mutated)
+			_, err := gate.MarkImported(t.Context(), mutated)
+			if err == nil || !strings.Contains(err.Error(), "proof") {
+				t.Fatalf("MarkImported mutation error = %v, want proof mismatch", err)
+			}
+			if objects := markerObjects(t, store); len(objects) != 0 {
+				t.Fatalf("the refused mutated claim still wrote %v", objects)
+			}
+		})
+	}
 
-	if _, err := gate.MarkImported(t.Context(), claim); err == nil {
-		t.Fatal("a fresh claim on another campaign was allowed to mark THIS one imported")
+	// A by-value copy is still the exact claim Claim returned and remains valid.
+	copied := claim
+	if _, err := gate.MarkImported(t.Context(), copied); err != nil {
+		t.Fatalf("MarkImported refused an untouched returned copy: %v", err)
 	}
 }
 
@@ -84,7 +116,7 @@ func TestMarkImported_RecordsOneInstantAndReplacesItOnASecondWrite(t *testing.T)
 	store := newFakeStore()
 	gate := newTestGate(t, store)
 
-	claim, err := gate.Claim(t.Context())
+	claim, err := gate.Claim(t.Context(), testExperience)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -126,7 +158,7 @@ func TestMarkImported_TheAppendingLaneWouldLeaveTwoMarkers(t *testing.T) {
 		t.Fatalf("NewGate: %v", err)
 	}
 
-	claim, err := gate.Claim(t.Context())
+	claim, err := gate.Claim(t.Context(), testExperience)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -147,11 +179,11 @@ func TestMarkImported_TheAppendingLaneWouldLeaveTwoMarkers(t *testing.T) {
 // The other half of the lane choice, and the one with the sharpest consequence:
 // the seed shares this entity, and a boot that rewrote it would make every roll
 // already in the ledger unreproducible.
-func TestMarkImported_LeavesTheCampaignSeedIntact(t *testing.T) {
+func TestMarkImported_LeavesCampaignInstantiationProvenanceIntact(t *testing.T) {
 	store := newFakeStore()
 	gate := newTestGate(t, store)
 
-	claim, err := gate.Claim(t.Context())
+	claim, err := gate.Claim(t.Context(), testExperience)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -166,6 +198,19 @@ func TestMarkImported_LeavesTheCampaignSeedIntact(t *testing.T) {
 	if stored != claim.Seed {
 		t.Errorf("seed after marking = %s, want %s", stored, claim.Seed)
 	}
+	state, err := store.GetEntity(t.Context(), testCampaignID)
+	if err != nil {
+		t.Fatalf("GetEntity after marking: %v", err)
+	}
+	for predicate, want := range map[string]string{
+		vocabulary.CampaignExperiencePersonaPack.String():   testExperience.PersonaPack,
+		vocabulary.CampaignExperienceMechanicsPack.String(): testExperience.MechanicsPack,
+	} {
+		objects := triplesFor(state, predicate)
+		if len(objects) != 1 || objects[0].Object != want {
+			t.Errorf("%s after marking = %+v, want one %q", predicate, objects, want)
+		}
+	}
 }
 
 // The three states the marker has to distinguish, each with a different remedy.
@@ -177,7 +222,7 @@ func TestImportCompletion_DistinguishesAbsentFromUnmarked(t *testing.T) {
 		t.Fatalf("ImportCompletion on an uninstantiated world = %v, want ErrEntityNotFound", err)
 	}
 
-	if _, err := gate.Claim(t.Context()); err != nil {
+	if _, err := gate.Claim(t.Context(), testExperience); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 	at, marked, err := gate.ImportCompletion(t.Context())
@@ -241,7 +286,7 @@ func TestAwaitImportCompletion_ReturnsOnceAnotherClaimantMarksIt(t *testing.T) {
 	store := newFakeStore()
 	gate := newTestGate(t, store)
 
-	claim, err := gate.Claim(t.Context())
+	claim, err := gate.Claim(t.Context(), testExperience)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -287,7 +332,7 @@ func TestAwaitImportCompletion_FailsLoudlyRatherThanImportingOrMarking(t *testin
 	if err != nil {
 		t.Fatalf("NewGate: %v", err)
 	}
-	if _, err := gate.Claim(t.Context()); err != nil {
+	if _, err := gate.Claim(t.Context(), testExperience); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 	reads.Store(0)
@@ -358,14 +403,21 @@ func TestMarkImported_RefusesAnInstantiationThatDidNotComeFromClaim(t *testing.T
 	store := newFakeStore()
 	gate := newTestGate(t, store)
 
-	if _, err := gate.Claim(t.Context()); err != nil {
+	fresh, err := gate.Claim(t.Context(), testExperience)
+	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 
-	forged := campaign.Instantiation{CampaignID: testCampaignID, Fresh: true}
-	if _, err := gate.MarkImported(t.Context(), forged); err == nil {
-		t.Fatal("a hand-built Instantiation marked the import complete; the argument is supposed to be proof " +
-			"that this boot won the create, and a composite literal proves nothing")
+	for name, value := range map[string]campaign.Instantiation{
+		"zero":   {},
+		"forged": {CampaignID: testCampaignID, Fresh: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := gate.MarkImported(t.Context(), value); err == nil {
+				t.Fatal("a hand-built Instantiation marked the import complete; the argument is supposed to be proof " +
+					"that this boot won the create, and a composite literal proves nothing")
+			}
+		})
 	}
 	if objects := markerObjects(t, store); len(objects) != 0 {
 		t.Fatalf("the refused mark still wrote %v", objects)
@@ -374,12 +426,35 @@ func TestMarkImported_RefusesAnInstantiationThatDidNotComeFromClaim(t *testing.T
 	// The positive control: a claim that DID come from Claim still marks, so the
 	// refusal above is about provenance rather than about MarkImported having
 	// stopped working.
-	genuine, err := gate.Claim(t.Context())
+	genuine, err := gate.Claim(t.Context(), testExperience)
 	if err != nil {
 		t.Fatalf("second claim: %v", err)
 	}
-	genuine.Fresh = true // the second claim lost, as it must; the provenance is what is under test
-	if _, err := gate.MarkImported(t.Context(), genuine); err != nil {
-		t.Fatalf("a claim that came from Claim was refused: %v", err)
+	mutated := genuine
+	mutated.Fresh = true
+	if _, err := gate.MarkImported(t.Context(), mutated); err == nil || !strings.Contains(err.Error(), "proof") {
+		t.Fatalf("a losing claim mutated to Fresh was not refused by its proof: %v", err)
+	}
+	if _, err := gate.MarkImported(t.Context(), genuine); err == nil || !strings.Contains(err.Error(), "did not create") {
+		t.Fatalf("an untouched losing claim did not reach the existing non-fresh refusal: %v", err)
+	}
+	if objects := markerObjects(t, store); len(objects) != 0 {
+		t.Fatalf("the refused forged or mutated claims still wrote %v", objects)
+	}
+	if _, err := gate.MarkImported(t.Context(), fresh); err != nil {
+		t.Fatalf("an untouched genuine fresh claim was refused: %v", err)
+	}
+}
+
+func TestMarkImported_AcceptsAnUntouchedDegradedClaim(t *testing.T) {
+	store := newFakeStore()
+	store.degrade = true
+	gate := newTestGate(t, store)
+	claim, err := gate.Claim(t.Context(), testExperience)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if _, err := gate.MarkImported(t.Context(), claim); err != nil {
+		t.Fatalf("MarkImported refused a genuine degraded claim: %v", err)
 	}
 }

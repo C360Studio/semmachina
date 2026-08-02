@@ -48,7 +48,7 @@ func realGate(t *testing.T, worldNS string, opts ...campaign.GateOption) (*campa
 func TestIntegration_ClaimCreatesTheCampaignEntityCarryingItsSeed(t *testing.T) {
 	gate, harness := realGate(t, "gateworld1")
 
-	claim, err := gate.Claim(t.Context())
+	claim, err := gate.Claim(t.Context(), testExperience)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -69,17 +69,26 @@ func TestIntegration_ClaimCreatesTheCampaignEntityCarryingItsSeed(t *testing.T) 
 	if stored[0] != claim.Seed.String() {
 		t.Fatalf("the graph holds seed %v, the claim returned %v", stored[0], claim.Seed)
 	}
+	for predicate, want := range map[string]string{
+		vocabulary.CampaignExperiencePersonaPack.String():   testExperience.PersonaPack,
+		vocabulary.CampaignExperienceMechanicsPack.String(): testExperience.MechanicsPack,
+	} {
+		objects := testinfra.ObjectsFor(state, predicate)
+		if len(objects) != 1 || objects[0] != want {
+			t.Fatalf("campaign %s values = %v, want exactly one %q", predicate, objects, want)
+		}
+	}
 }
 
 func TestIntegration_SecondClaimSeesTheExistingCampaignAndItsOriginalSeed(t *testing.T) {
 	seeds := countingSeeds()
 	gate, _ := realGate(t, "gateworld2", campaign.WithSeedSource(seeds))
 
-	first, err := gate.Claim(t.Context())
+	first, err := gate.Claim(t.Context(), testExperience)
 	if err != nil {
 		t.Fatalf("first Claim: %v", err)
 	}
-	second, err := gate.Claim(t.Context())
+	second, err := gate.Claim(t.Context(), testExperience)
 	if err != nil {
 		t.Fatalf("second Claim: %v", err)
 	}
@@ -92,6 +101,9 @@ func TestIntegration_SecondClaimSeesTheExistingCampaignAndItsOriginalSeed(t *tes
 	}
 	if second.Seed != first.Seed {
 		t.Fatal("the second claim returned a re-minted seed; every roll already in the ledger would stop reproducing")
+	}
+	if second.Experience != testExperience {
+		t.Fatalf("the second claim returned experience %+v, want %+v", second.Experience, testExperience)
 	}
 
 	// Guard: the source advanced, so the equality above is a real claim about
@@ -126,7 +138,7 @@ func TestIntegration_ConcurrentClaimsHaveExactlyOneWinnerAndOneSeed(t *testing.T
 		go func() {
 			defer wg.Done()
 			<-start
-			claim, err := gate.Claim(t.Context())
+			claim, err := gate.Claim(t.Context(), testExperience)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -229,7 +241,7 @@ func TestIntegration_ClaimRefusesACampaignKeyOccupiedByAReferentialStub(t *testi
 		t.Fatal("graph-ingest did not mint a referential stub at the campaign key; the premise no longer holds")
 	}
 
-	claim, err := gate.Claim(t.Context())
+	claim, err := gate.Claim(t.Context(), testExperience)
 	if err == nil {
 		t.Fatalf("the gate reported an instantiation decision over a factless stub: %+v", claim)
 	}
@@ -259,7 +271,7 @@ func TestIntegration_LoadSeedReportsAnAbsentCampaignRatherThanMintingOne(t *test
 func TestIntegration_SeedSurvivesANewClientOverTheSameGraph(t *testing.T) {
 	gate, harness := realGate(t, "gateworld5")
 
-	claim, err := gate.Claim(t.Context())
+	claim, err := gate.Claim(t.Context(), testExperience)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}

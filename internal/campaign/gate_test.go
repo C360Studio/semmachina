@@ -39,6 +39,7 @@ type fakeStore struct {
 	getErr     error
 	mergeErr   error
 	createCall int
+	getCall    int
 }
 
 func newFakeStore() *fakeStore {
@@ -65,6 +66,7 @@ func (s *fakeStore) CreateEntity(_ context.Context, entity *graph.EntityState) (
 func (s *fakeStore) GetEntity(_ context.Context, id string) (*graph.EntityState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.getCall++
 	if s.getErr != nil {
 		return nil, s.getErr
 	}
@@ -187,7 +189,7 @@ func TestGateClaim_FirstCallIsFreshAndSecondIsNot(t *testing.T) {
 	store := newFakeStore()
 	gate := newTestGate(t, store)
 
-	first, err := gate.Claim(t.Context())
+	first, err := gate.Claim(t.Context(), testExperience)
 	if err != nil {
 		t.Fatalf("first Claim: %v", err)
 	}
@@ -195,7 +197,7 @@ func TestGateClaim_FirstCallIsFreshAndSecondIsNot(t *testing.T) {
 		t.Fatal("the first claim on an empty world reported an existing campaign")
 	}
 
-	second, err := gate.Claim(t.Context())
+	second, err := gate.Claim(t.Context(), testExperience)
 	if err != nil {
 		t.Fatalf("second Claim: %v", err)
 	}
@@ -215,13 +217,13 @@ func TestGateClaim_NeverRegeneratesTheSeedOfAnExistingCampaign(t *testing.T) {
 	seeds := countingSeeds()
 	gate := newTestGate(t, newFakeStore(), campaign.WithSeedSource(seeds))
 
-	first, err := gate.Claim(t.Context())
+	first, err := gate.Claim(t.Context(), testExperience)
 	if err != nil {
 		t.Fatalf("first Claim: %v", err)
 	}
 
 	for attempt := range 3 {
-		again, err := gate.Claim(t.Context())
+		again, err := gate.Claim(t.Context(), testExperience)
 		if err != nil {
 			t.Fatalf("Claim %d: %v", attempt+2, err)
 		}
@@ -248,12 +250,12 @@ func TestGateClaim_LosingTheRaceReturnsTheStoredSeed(t *testing.T) {
 	winner := newTestGate(t, store)
 	loser := newTestGate(t, store)
 
-	won, err := winner.Claim(t.Context())
+	won, err := winner.Claim(t.Context(), testExperience)
 	if err != nil {
 		t.Fatalf("winner Claim: %v", err)
 	}
 
-	lost, err := loser.Claim(t.Context())
+	lost, err := loser.Claim(t.Context(), testExperience)
 	if err != nil {
 		t.Fatalf("loser Claim: %v", err)
 	}
@@ -273,7 +275,7 @@ func TestGateClaim_TreatsADegradedCreateAsACommittedFreshWorld(t *testing.T) {
 	store.degrade = true
 	gate := newTestGate(t, store)
 
-	claim, err := gate.Claim(t.Context())
+	claim, err := gate.Claim(t.Context(), testExperience)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -344,6 +346,18 @@ func TestGateClaim_RefusesToProceedWhenTheStoredSeedIsUnreadable(t *testing.T) {
 			},
 			wantErr: "bytes",
 		},
+		{
+			name: "the seed is ambiguous",
+			resident: &graph.EntityState{
+				ID:          testCampaignID,
+				MessageType: campaign.EntityMessageType,
+				Triples: []message.Triple{
+					{Subject: testCampaignID, Predicate: vocabulary.CampaignSeedValue.String(), Object: strings.Repeat("01", campaign.SeedBytes)},
+					{Subject: testCampaignID, Predicate: vocabulary.CampaignSeedValue.String(), Object: strings.Repeat("02", campaign.SeedBytes)},
+				},
+			},
+			wantErr: "ambiguous",
+		},
 	}
 
 	for _, tc := range cases {
@@ -352,7 +366,7 @@ func TestGateClaim_RefusesToProceedWhenTheStoredSeedIsUnreadable(t *testing.T) {
 			store.put(tc.resident)
 			gate := newTestGate(t, store)
 
-			claim, err := gate.Claim(t.Context())
+			claim, err := gate.Claim(t.Context(), testExperience)
 			if err == nil {
 				t.Fatalf("Claim proceeded past an unreadable seed: %+v", claim)
 			}
@@ -376,7 +390,7 @@ func TestGateClaim_RefusesACreateWhoseSeedDidNotStore(t *testing.T) {
 	store := &seedDroppingStore{fakeStore: newFakeStore()}
 	gate := newTestGate(t, store)
 
-	if _, err := gate.Claim(t.Context()); err == nil {
+	if _, err := gate.Claim(t.Context(), testExperience); err == nil {
 		t.Fatal("a create whose seed triple was dropped was accepted")
 	} else if !strings.Contains(err.Error(), "seed did not store") {
 		t.Fatalf("failure reason %q does not name the dropped seed", err.Error())
@@ -405,7 +419,7 @@ func TestGateClaim_PropagatesAnUnclassifiedCreateFailure(t *testing.T) {
 	store.createErr = errors.New("nats: no responders")
 	gate := newTestGate(t, store)
 
-	claim, err := gate.Claim(t.Context())
+	claim, err := gate.Claim(t.Context(), testExperience)
 	if err == nil {
 		t.Fatal("a failed create was resolved into an instantiation decision")
 	}
@@ -426,7 +440,7 @@ func TestGateLoadSeed_ReadsTheSeedAClaimStored(t *testing.T) {
 	store := newFakeStore()
 	gate := newTestGate(t, store)
 
-	claim, err := gate.Claim(t.Context())
+	claim, err := gate.Claim(t.Context(), testExperience)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
@@ -481,7 +495,7 @@ func TestGateClaim_StampsARealEnvelopeOnTheCampaignEntity(t *testing.T) {
 	store := newFakeStore()
 	gate := newTestGate(t, store)
 
-	if _, err := gate.Claim(t.Context()); err != nil {
+	if _, err := gate.Claim(t.Context(), testExperience); err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 	stored, err := store.GetEntity(t.Context(), testCampaignID)

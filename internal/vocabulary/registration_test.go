@@ -31,6 +31,23 @@ func TestRegisterPredicates_DeclaresEveryPredicateTheEngineWrites(t *testing.T) 
 	}
 }
 
+func TestRegisterPredicates_DeclaresCampaignExperiencePacksAsStrings(t *testing.T) {
+	defer ssvocab.SnapshotRegistry()()
+	ssvocab.ClearRegistry()
+	if err := vocabulary.RegisterPredicates(); err != nil {
+		t.Fatalf("RegisterPredicates: %v", err)
+	}
+	for _, predicate := range []vocabulary.Predicate{
+		vocabulary.CampaignExperiencePersonaPack,
+		vocabulary.CampaignExperienceMechanicsPack,
+	} {
+		metadata := ssvocab.GetPredicateMetadata(predicate.String())
+		if metadata == nil || metadata.DataType != "string" {
+			t.Fatalf("%s metadata = %+v, want registered string predicate", predicate, metadata)
+		}
+	}
+}
+
 // The anti-vacuity control for the test above: without registration the gate
 // rule configuration runs actually REFUSES these predicates, so "declared after
 // registration" is a fact about the registration and not about the gate being

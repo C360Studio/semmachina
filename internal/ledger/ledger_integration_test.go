@@ -115,7 +115,9 @@ func startArchive(t *testing.T) *archiveWorld {
 	if err != nil {
 		t.Fatalf("campaign.NewGate: %v", err)
 	}
-	instantiation, err := gate.Claim(t.Context())
+	instantiation, err := gate.Claim(t.Context(), campaign.Experience{
+		PersonaPack: "default", MechanicsPack: "default",
+	})
 	if err != nil {
 		t.Fatalf("claim the campaign: %v", err)
 	}

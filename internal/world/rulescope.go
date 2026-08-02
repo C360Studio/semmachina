@@ -172,6 +172,12 @@ func enginePredicateNamespaces() ([]reservedDomain, error) {
 				"resetting every fact the template declares and dropping the relationships play created",
 		},
 		{
+			predicate: vocabulary.CampaignExperiencePersonaPack,
+			width:     domainAndCategory,
+			why: "the selected persona and mechanics packs are immutable campaign-instantiation provenance, so a " +
+				"world rule may neither branch on nor rewrite the campaign's sealed experience",
+		},
+		{
 			predicate: vocabulary.PlayerTurnCurrent,
 			width:     domainAndCategory,
 			why: "this is the ingress admission gate's pointer at the turn a player currently holds, so a " +
