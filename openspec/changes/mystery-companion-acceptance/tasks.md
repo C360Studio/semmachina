@@ -205,11 +205,25 @@
 
 ## 11. Quality Gates and Acceptance
 
-- [ ] 11.1 Run backend architecture review for lifecycle ownership, rule/component/persona
+- [x] 11.1 Run backend architecture review for lifecycle ownership, rule/component/persona
   boundaries, and absence of SemStreams substrate workarounds
-- [ ] 11.2 Run backend code and security review for secret authorization, idempotency,
+  - Architecture review approved lifecycle-manager-exclusive phase writes, structural rule
+    triggers, deterministic component ownership, purpose-scoped personas, and the existing
+    stream-versus-KV boundaries without a SemStreams workaround.
+  - The accepted deployment boundary remains one world per broker; multi-world subject and
+    durable isolation is not claimed by this change.
+- [x] 11.2 Run backend code and security review for secret authorization, idempotency,
   payload registry coverage, and error handling
-- [ ] 11.3 Run unit tests, race tests, mock E2E, lint, build, and strict OpenSpec validation
+  - Independent code and security reviews approved the unique canary coverage and fail-closed
+    identity, artifact-reference, bond, and knowledge authorization checks.
+  - Reviews accepted the documented sequential-redelivery and provider-crash idempotency
+    caveats. Provider secrets and the paid smoke remain isolated from deterministic tests and CI.
+- [x] 11.3 Run unit tests, race tests, mock E2E, lint, build, and strict OpenSpec validation
+  - `go test ./...`, `go test -race ./...`, the deterministic Bellweather E2E, lint, build,
+    strict OpenSpec validation at 9/9, and the final diff check all passed.
 - [ ] 11.4 Run the opt-in Gemini smoke only with operator authorization and record its
   result separately from deterministic acceptance
+  - The paid Gemini smoke has not been run and still requires explicit operator authorization.
 - [ ] 11.5 Archive this change only after every normative scenario and quality gate passes
+  - This change cannot be archived while the explicitly authorized paid smoke and its recorded
+    result remain outstanding under task 11.4.
