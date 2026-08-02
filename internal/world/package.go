@@ -38,6 +38,13 @@ type Package struct {
 	// Mystery is the typed, validated projection of mystery authoring records.
 	// It is nil for worlds that declare no case.
 	Mystery *MysteryCase
+	// Catalog is an inspection copy of the validated explicit or implicit
+	// experience catalog. Resolve uses a separate loader-owned snapshot.
+	Catalog PackCatalog
+	// validatedCatalog is the loader-owned catalog Resolve trusts. Catalog is a
+	// separate inspection copy so callers cannot mutate a validated selection
+	// after load.
+	validatedCatalog *PackCatalog
 	// RuleFiles and PersonaFiles are the package-relative paths of the world's
 	// reactions and persona configurations, sorted. RuleFiles may be empty: a
 	// world that reacts to nothing is a legitimate world (see optionalDir).
@@ -112,21 +119,37 @@ func LoadPackage(fsys fs.FS, opts LoadOptions) (*Package, error) {
 		return nil, fmt.Errorf("validate mystery package: %w", err)
 	}
 
-	ruleFiles, err := loadJSONDir(fsys, RulesDir, optionalDir, checkRuleFile)
+	legacyRuleFiles, err := loadJSONDir(fsys, RulesDir, optionalDir, checkRuleFile)
 	if err != nil {
 		return nil, err
 	}
-	personaFiles, err := loadJSONDir(fsys, PersonasDir, requiredDir, checkPersonaRecord)
+	legacyPersonaFiles, err := loadJSONDir(fsys, PersonasDir, optionalDir, checkPersonaRecord)
 	if err != nil {
 		return nil, err
+	}
+	catalog, explicitCatalog, err := loadCatalog(fsys, legacyPersonaFiles)
+	if err != nil {
+		return nil, err
+	}
+	if !explicitCatalog && len(legacyPersonaFiles) == 0 {
+		return nil, fmt.Errorf("%s/: %w", PersonasDir, errors.New("holds no .json files"))
+	}
+	ruleFiles := legacyRuleFiles
+	personaFiles := legacyPersonaFiles
+	if explicitCatalog {
+		ruleFiles = catalogFiles(catalog.MechanicsPacks)
+		personaFiles = catalogFiles(catalog.PersonaPacks)
 	}
 
+	validatedCatalog := clonePackCatalog(catalog)
 	return &Package{
-		Manifest:     manifest,
-		Entities:     entities,
-		Mystery:      mystery,
-		RuleFiles:    ruleFiles,
-		PersonaFiles: personaFiles,
+		Manifest:         manifest,
+		Entities:         entities,
+		Mystery:          mystery,
+		Catalog:          clonePackCatalog(validatedCatalog),
+		validatedCatalog: &validatedCatalog,
+		RuleFiles:        ruleFiles,
+		PersonaFiles:     personaFiles,
 	}, nil
 }
 
@@ -269,12 +292,29 @@ func decodeRuleDefinitions(data []byte) ([]rule.Definition, error) {
 // content — a package that could choose its own model slot could choose its own
 // spend.
 func checkPersonaRecord(data []byte) error {
+	_, err := DecodePersonaRecord(data)
+	return err
+}
+
+// DecodePersonaRecord is the single package/boot gate for world-authored
+// persona fragments. It strict-decodes the production upstream type, applies
+// its validator, and refuses role-less fragments because upstream treats them
+// as global prompt text rather than as one selected voice.
+func DecodePersonaRecord(data []byte) (*persona.Persona, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 
 	var record persona.Persona
 	if err := decoder.Decode(&record); err != nil {
-		return err
+		return nil, err
 	}
-	return record.Validate()
+	if err := record.Validate(); err != nil {
+		return nil, err
+	}
+	if len(record.Roles) == 0 {
+		return nil, errors.New(
+			"the persona record declares no roles, so its text would be prepended to EVERY persona's prompt; " +
+				"a world's adjudicator voice reaching the narrator is a world speaking in the wrong mouth")
+	}
+	return &record, nil
 }

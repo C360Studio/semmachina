@@ -337,6 +337,11 @@ func TestImport_RejectsAnUnvalidatedOrAlteredSeedPlan(t *testing.T) {
 	if _, err := importer.Import(t.Context(), altered); err == nil {
 		t.Fatal("Import accepted a plan altered after package validation")
 	}
+	selectionAltered := importedPlan(t)
+	selectionAltered.Experience.PersonaPack = "changed-after-resolution"
+	if _, err := importer.Import(t.Context(), selectionAltered); err == nil {
+		t.Fatal("Import accepted an experience selection altered after Package.Resolve sealed it")
+	}
 	if len(publisher.messages) != 0 {
 		t.Fatalf("import published %d messages before refusing unvalidated seed data", len(publisher.messages))
 	}

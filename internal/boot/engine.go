@@ -1,7 +1,6 @@
 package boot
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1263,19 +1262,5 @@ func (e *Engine) startIngress(ctx context.Context) error {
 // deployment configuration and not world content, rather than having them
 // silently dropped.
 func decodePersona(data []byte) (*sspersona.Persona, error) {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	var record sspersona.Persona
-	if err := decoder.Decode(&record); err != nil {
-		return nil, err
-	}
-	if err := record.Validate(); err != nil {
-		return nil, err
-	}
-	if len(record.Roles) == 0 {
-		return nil, errors.New(
-			"the persona record declares no roles, so its text would be prepended to EVERY persona's prompt; " +
-				"a world's adjudicator voice reaching the narrator is a world speaking in the wrong mouth")
-	}
-	return &record, nil
+	return world.DecodePersonaRecord(data)
 }

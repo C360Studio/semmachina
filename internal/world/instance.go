@@ -39,6 +39,13 @@ type CompanionBinding struct {
 	Policy vocabulary.CompanionPolicy
 }
 
+// ExperienceSelection chooses one named persona pack and one named mechanics
+// pack. Empty names use the package catalog defaults.
+type ExperienceSelection struct {
+	PersonaPack   string
+	MechanicsPack string
+}
+
 // InstanceConfig is everything a campaign supplies that the template does not.
 type InstanceConfig struct {
 	// Org is the federation organization position.
@@ -50,6 +57,8 @@ type InstanceConfig struct {
 	Player PlayerBinding
 	// Companion is the optional active player-companion relationship.
 	Companion *CompanionBinding
+	// Experience selects package-authored voice and bounded mechanics.
+	Experience ExperienceSelection
 }
 
 // Validate checks the positions this config contributes to every composed ID.
@@ -127,6 +136,8 @@ type Plan struct {
 	// Template identifies the package the plan was resolved from.
 	TemplateID      string
 	TemplateVersion string
+	// Experience is the exact selected pack identity and copied file lists.
+	Experience ResolvedExperience
 	// Entities are the entities to materialize, in template file order followed
 	// by the instance-configured player and optional companion bond.
 	Entities []PlannedEntity
@@ -134,6 +145,14 @@ type Plan struct {
 	// It is deliberately unexported: callers may inspect a plan, but cannot
 	// construct or alter one and still present it as validated seed data.
 	seal [32]byte
+}
+
+// ResolvedExperience is the immutable package selection sealed into a Plan.
+type ResolvedExperience struct {
+	PersonaPack    string
+	MechanicsPack  string
+	PersonaFiles   []string
+	MechanicsFiles []string
 }
 
 // IDs returns every entity ID the plan materializes, in plan order.
@@ -160,6 +179,10 @@ func (p *Package) Resolve(inst InstanceConfig) (*Plan, error) {
 		return nil, fmt.Errorf("validate mystery package: %w", err)
 	}
 	if err := inst.Validate(); err != nil {
+		return nil, err
+	}
+	experience, err := p.resolveExperience(inst.Experience)
+	if err != nil {
 		return nil, err
 	}
 
@@ -218,6 +241,7 @@ func (p *Package) Resolve(inst InstanceConfig) (*Plan, error) {
 		WorldNS:         inst.WorldNS,
 		TemplateID:      p.Manifest.ID,
 		TemplateVersion: p.Manifest.Version,
+		Experience:      experience,
 		Entities:        planned,
 	}
 	if err := plan.sealResolved(); err != nil {

@@ -4,11 +4,11 @@
 // # Templates and instances
 //
 // A TEMPLATE is an immutable versioned product: a directory holding
-// manifest.yaml, entities.jsonl, personas/, and — optionally — rules/. An
-// INSTANCE is a mutable campaign materialized from a template into a world
-// namespace. The distinction is what makes "worlds are data" true in practice —
-// the same package can be played twice, by different people, in one graph, with
-// no edit.
+// manifest.yaml, entities.jsonl, personas/, and — optionally — rules/ and the
+// separate versioned packs.yaml experience catalog. An INSTANCE is a mutable
+// campaign materialized from a template into a world namespace. The distinction
+// is what makes "worlds are data" true in practice — the same package can be
+// played twice, by different people, in one graph, with no edit.
 //
 // Loading is three steps with three different failure surfaces, kept apart on
 // purpose:
@@ -17,12 +17,14 @@
 //	               engine compatibility, the predicate alphabet (in entity facts
 //	               AND in rule conditions), vocabulary membership, kind
 //	               compatibility, object shapes, entity-ID segment legality,
-//	               attribute bounds, and the world-rule scope boundary
-//	               (rulescope.go). Fails with a file and a line.
+//	               attribute bounds, experience catalog paths and records, and
+//	               the world-rule scope boundary (rulescope.go). Fails with a
+//	               file and a line.
 //	Resolve      — everything that needs instance identity: the six-part ID
 //	               mapping, `local:` reference rewriting, dangling references,
-//	               and the instance-configured player binding. Pure and
-//	               deterministic; reads no clock and no environment.
+//	               the instance-configured player binding, and exact experience
+//	               selection. Pure and deterministic; reads no clock and no
+//	               environment.
 //	Import       — publishing. The only step that touches the network.
 //
 // # What the engine never learns from a package

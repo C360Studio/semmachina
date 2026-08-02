@@ -40,6 +40,7 @@ import (
 	"github.com/c360studio/semmachina/internal/boot"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/vocabulary"
+	worldpkg "github.com/c360studio/semmachina/internal/world"
 )
 
 func main() {
@@ -111,10 +112,11 @@ func run() error {
 		return fmt.Errorf("register the SemMachina predicates: %w", err)
 	}
 
-	world, err := worldPackage(*worldPath)
+	world, closeWorld, err := worldPackage(*worldPath)
 	if err != nil {
 		return err
 	}
+	defer func() { _ = closeWorld() }()
 	cfg.World = world
 
 	engine, err := boot.New(cfg)
@@ -141,11 +143,16 @@ func run() error {
 // a deployment that boots into an empty world. A directory is the escape hatch
 // for authoring, and is the same fs.FS shape, so the loader cannot tell them
 // apart and neither path is the privileged one.
-func worldPackage(path string) (fs.FS, error) {
+func worldPackage(path string) (fs.FS, func() error, error) {
 	if path == "" {
-		return fixtures.StarterWorld()
+		world, err := fixtures.StarterWorld()
+		return world, func() error { return nil }, err
 	}
-	return os.DirFS(path), nil
+	root, err := worldpkg.OpenPackageDirectory(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return root, root.Close, nil
 }
 
 func newLogger(level string) (*slog.Logger, error) {

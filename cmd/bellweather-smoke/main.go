@@ -28,6 +28,7 @@ import (
 	"github.com/c360studio/semmachina/internal/playersocket"
 	"github.com/c360studio/semmachina/internal/turn"
 	"github.com/c360studio/semmachina/internal/vocabulary"
+	"github.com/c360studio/semmachina/internal/world"
 )
 
 const (
@@ -69,10 +70,11 @@ func run() error {
 	// attaching them later; the operator surface below logs closed fields only.
 	engineLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	cfg, err := loadSmokeConfig(*configPath, *worldPath, engineLogger)
+	cfg, packageRoot, err := loadSmokeConfig(*configPath, *worldPath, engineLogger)
 	if err != nil {
 		return fmt.Errorf("configuration refused: %w", err)
 	}
+	defer packageRoot.Close() //nolint:errcheck // process-scoped package handle
 	// Every paid proof must begin at the authored cold_open. Reusing the base
 	// namespace would silently inherit an earlier smoke's discovery phase and
 	// turn the body-observation assertion into a no-op.
@@ -273,34 +275,40 @@ func smokeWorldNamespace(base string, runID int64) string {
 	return fmt.Sprintf("%s-%d", base, runID)
 }
 
-func loadSmokeConfig(configPath, worldPath string, logger *slog.Logger) (boot.Config, error) {
+func loadSmokeConfig(
+	configPath, worldPath string, logger *slog.Logger,
+) (boot.Config, *world.PackageDirectory, error) {
 	raw, err := os.ReadFile(configPath)
 	if err != nil {
-		return boot.Config{}, fmt.Errorf("read instance file: %w", err)
+		return boot.Config{}, nil, fmt.Errorf("read instance file: %w", err)
 	}
 	cfg, err := boot.LoadConfig(raw)
 	if err != nil {
-		return boot.Config{}, err
+		return boot.Config{}, nil, err
 	}
 	if err := validateBellweatherBinding(cfg); err != nil {
-		return boot.Config{}, err
-	}
-	world := os.DirFS(worldPath)
-	if _, err := fs.Stat(world, "manifest.yaml"); err != nil {
-		return boot.Config{}, fmt.Errorf("open Bellweather world package: %w", err)
+		return boot.Config{}, nil, err
 	}
 	registry := payloadregistry.New()
 	if err := payloadbuiltins.Register(registry); err != nil {
-		return boot.Config{}, fmt.Errorf("register framework payloads: %w", err)
+		return boot.Config{}, nil, fmt.Errorf("register framework payloads: %w", err)
 	}
 	if err := payload.RegisterPayloads(registry); err != nil {
-		return boot.Config{}, fmt.Errorf("register SemMachina payloads: %w", err)
+		return boot.Config{}, nil, fmt.Errorf("register SemMachina payloads: %w", err)
 	}
 	if err := vocabulary.RegisterPredicates(); err != nil {
-		return boot.Config{}, fmt.Errorf("register predicates: %w", err)
+		return boot.Config{}, nil, fmt.Errorf("register predicates: %w", err)
 	}
-	cfg.Registry, cfg.World, cfg.Logger = registry, world, logger
-	return cfg, nil
+	packageRoot, err := world.OpenPackageDirectory(worldPath)
+	if err != nil {
+		return boot.Config{}, nil, fmt.Errorf("open Bellweather world package: %w", err)
+	}
+	if _, err := fs.Stat(packageRoot, world.ManifestFile); err != nil {
+		_ = packageRoot.Close()
+		return boot.Config{}, nil, fmt.Errorf("open Bellweather world package: %w", err)
+	}
+	cfg.Registry, cfg.World, cfg.Logger = registry, packageRoot, logger
+	return cfg, packageRoot, nil
 }
 
 func validateBellweatherBinding(cfg boot.Config) error {

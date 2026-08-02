@@ -21,9 +21,11 @@ const (
 
 func minimalPackageFS() fstest.MapFS {
 	return fstest.MapFS{
-		world.ManifestFile:       &fstest.MapFile{Data: []byte(goodManifest)},
-		world.EntitiesFile:       &fstest.MapFile{Data: []byte(rookLine + "\n" + gatehouseLine + "\n")},
-		"rules/00-stub.json":     &fstest.MapFile{Data: []byte(stubRule)},
+		world.ManifestFile:   &fstest.MapFile{Data: []byte(goodManifest)},
+		world.EntitiesFile:   &fstest.MapFile{Data: []byte(rookLine + "\n" + gatehouseLine + "\n")},
+		"rules/00-stub.json": &fstest.MapFile{Data: []byte(stubRule)},
+		"personas/adjudicator.json": &fstest.MapFile{Data: []byte(
+			`{"id":"stub/adjudicator","category":100,"roles":["adjudicator"],"content":"Judge."}`)},
 		"personas/narrator.json": &fstest.MapFile{Data: []byte(stubPersona)},
 	}
 }
@@ -39,7 +41,7 @@ func TestLoadPackage_LoadsAWholePackage(t *testing.T) {
 	if len(pkg.Entities) != 2 {
 		t.Fatalf("loaded %d entities, want 2", len(pkg.Entities))
 	}
-	if len(pkg.RuleFiles) != 1 || len(pkg.PersonaFiles) != 1 {
+	if len(pkg.RuleFiles) != 1 || len(pkg.PersonaFiles) != 2 {
 		t.Fatalf("rules=%v personas=%v", pkg.RuleFiles, pkg.PersonaFiles)
 	}
 }
@@ -49,9 +51,7 @@ func TestLoadPackage_LoadsAWholePackage(t *testing.T) {
 // no reactions is legitimate, and TestLoadPackage_AcceptsAWorldWithNoRules
 // holds that line from the other side.
 func TestLoadPackage_RequiresEveryPackageMember(t *testing.T) {
-	for _, missing := range []string{
-		world.ManifestFile, world.EntitiesFile, "personas/narrator.json",
-	} {
+	for _, missing := range []string{world.ManifestFile, world.EntitiesFile} {
 		t.Run(missing, func(t *testing.T) {
 			fsys := minimalPackageFS()
 			delete(fsys, missing)
@@ -69,6 +69,15 @@ func TestLoadPackage_RequiresEveryPackageMember(t *testing.T) {
 			}
 		})
 	}
+	t.Run("personas", func(t *testing.T) {
+		fsys := minimalPackageFS()
+		delete(fsys, "personas/adjudicator.json")
+		delete(fsys, "personas/narrator.json")
+		_, err := world.LoadPackage(fsys, world.LoadOptions{})
+		if err == nil || !strings.Contains(err.Error(), "personas") {
+			t.Fatalf("LoadPackage missing-personas refusal = %v", err)
+		}
+	})
 }
 
 func TestLoadPackage_RejectsMalformedPackageContent(t *testing.T) {
@@ -219,6 +228,42 @@ func TestLoadPackage_DefaultsToTheEngineVersionThisBuildLinks(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), world.EngineVersion) {
 		t.Fatalf("rejection reason %q does not name the engine version it checked against", err)
+	}
+}
+
+func TestLoadPackage_RefusesPersonaRecordWithoutRoles(t *testing.T) {
+	const roleless = `{"id":"stub/voice","category":100,"content":"Speak everywhere."}`
+	for name, fixture := range map[string]func() (fstest.MapFS, string){
+		"legacy preflight": func() (fstest.MapFS, string) {
+			fsys := minimalPackageFS()
+			fsys["personas/narrator.json"] = &fstest.MapFile{Data: []byte(roleless)}
+			return fsys, "personas/narrator.json"
+		},
+		"catalog-only nested file": func() (fstest.MapFS, string) {
+			fsys := catalogPackageFS()
+			const file = "personas/variants/global.json"
+			fsys[world.PacksFile] = &fstest.MapFile{Data: []byte(
+				strings.Replace(validCatalog, "personas/bright.json", file, 1))}
+			fsys[file] = &fstest.MapFile{Data: []byte(roleless)}
+			return fsys, file
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fsys, file := fixture()
+			_, err := world.LoadPackage(fsys, world.LoadOptions{})
+			if err == nil {
+				t.Fatal("LoadPackage accepted a persona record with no roles")
+			}
+			for _, want := range []string{
+				file,
+				"the persona record declares no roles",
+				"prepended to EVERY persona's prompt",
+			} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("empty-role refusal %q does not name %q", err, want)
+				}
+			}
+		})
 	}
 }
 

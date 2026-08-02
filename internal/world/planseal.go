@@ -14,6 +14,7 @@ type planSealWire struct {
 	WorldNS         string
 	TemplateID      string
 	TemplateVersion string
+	Experience      ResolvedExperience
 	Entities        []PlannedEntity
 }
 
@@ -23,6 +24,7 @@ func (p *Plan) sealBytes() ([32]byte, error) {
 		WorldNS:         p.WorldNS,
 		TemplateID:      p.TemplateID,
 		TemplateVersion: p.TemplateVersion,
+		Experience:      p.Experience,
 		Entities:        p.Entities,
 	})
 	if err != nil {

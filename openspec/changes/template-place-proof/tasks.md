@@ -24,13 +24,19 @@
 
 ## 3. Experience Catalog and Selection
 
-- [ ] 3.1 Add failing `packs.yaml` tests for closed/versioned parsing, clean existing paths, unique
+- [x] 3.1 Add failing `packs.yaml` tests for closed/versioned parsing, clean existing paths, unique
   files within a pack, cross-pack file reuse, required defaults, empty persona packs, and legacy
   implicit persona plus empty-mechanics `default` packs
-- [ ] 3.2 Implement the catalog and strict package preflight without changing manifest v0
-- [ ] 3.3 Add failing instance tests for omitted defaults, exact named selection, unknown names, and
+- [x] 3.2 Implement the catalog and strict package preflight without changing manifest v0
+- [x] 3.3 Add failing instance tests for omitted defaults, exact named selection, unknown names, and
   selection sealed into otherwise disjoint resolved plans
-- [ ] 3.4 Implement `experience` instance configuration and selected plan records
+- [x] 3.4 Implement `experience` instance configuration and selected plan records
+  - Strict catalog, default, selection, and plan-seal tests passed, including the required
+    persona-role gate and private validated-snapshot mutation safety.
+  - Package path preflight uses `os.OpenRoot` and passed symlink-confinement coverage.
+  - Independent Go review APPROVED the slice. The full world suite, targeted boot tests, CLI
+    compilation, and diff checks passed.
+  - Runtime boot composition and campaign provenance remain open under Group 4.
 
 ## 4. Boot Composition
 

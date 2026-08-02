@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/c360studio/semstreams/pkg/types"
 
@@ -126,6 +127,263 @@ func TestResolve_IntoTwoNamespacesSharesNoEntityIDs(t *testing.T) {
 					entity.ID, object)
 			}
 		}
+	}
+}
+
+func TestResolve_SelectsDefaultsAndExactNamedExperience(t *testing.T) {
+	pkg, err := world.LoadPackage(catalogPackageFS(), world.LoadOptions{})
+	if err != nil {
+		t.Fatalf("LoadPackage: %v", err)
+	}
+
+	defaults, err := pkg.Resolve(testInstance())
+	if err != nil {
+		t.Fatalf("Resolve defaults: %v", err)
+	}
+	if defaults.Experience.PersonaPack != "dusk" || defaults.Experience.MechanicsPack != "quiet" {
+		t.Fatalf("default experience = %#v", defaults.Experience)
+	}
+
+	namedInstance := testInstance()
+	namedInstance.Experience = world.ExperienceSelection{PersonaPack: "bright", MechanicsPack: "reactive"}
+	named, err := pkg.Resolve(namedInstance)
+	if err != nil {
+		t.Fatalf("Resolve named: %v", err)
+	}
+	if got, want := named.Experience.PersonaFiles,
+		[]string{"personas/bright.json", "personas/shared.json"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("selected persona files = %v, want %v", got, want)
+	}
+	if got, want := named.Experience.MechanicsFiles,
+		[]string{"rules/00-stub.json"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("selected mechanics files = %v, want %v", got, want)
+	}
+}
+
+func TestResolve_RejectsUnknownExperiencePackNames(t *testing.T) {
+	pkg, err := world.LoadPackage(catalogPackageFS(), world.LoadOptions{})
+	if err != nil {
+		t.Fatalf("LoadPackage: %v", err)
+	}
+
+	for class, selection := range map[string]world.ExperienceSelection{
+		"persona":   {PersonaPack: "absent"},
+		"mechanics": {MechanicsPack: "absent"},
+	} {
+		t.Run(class, func(t *testing.T) {
+			instance := testInstance()
+			instance.Experience = selection
+			_, err := pkg.Resolve(instance)
+			if err == nil {
+				t.Fatal("Resolve accepted an unknown pack name")
+			}
+			if !strings.Contains(err.Error(), class) || !strings.Contains(err.Error(), "absent") {
+				t.Fatalf("selection refusal %q does not name class %q and pack", err, class)
+			}
+		})
+	}
+}
+
+func TestResolve_SealsCopiedSelectionsIntoDisjointPlans(t *testing.T) {
+	pkg, err := world.LoadPackage(catalogPackageFS(), world.LoadOptions{})
+	if err != nil {
+		t.Fatalf("LoadPackage: %v", err)
+	}
+
+	oneConfig := testInstance()
+	oneConfig.Experience = world.ExperienceSelection{PersonaPack: "dusk", MechanicsPack: "quiet"}
+	twoConfig := testInstance()
+	twoConfig.WorldNS = "world2"
+	twoConfig.Experience = world.ExperienceSelection{PersonaPack: "bright", MechanicsPack: "reactive"}
+	one, err := pkg.Resolve(oneConfig)
+	if err != nil {
+		t.Fatalf("Resolve world1: %v", err)
+	}
+	two, err := pkg.Resolve(twoConfig)
+	if err != nil {
+		t.Fatalf("Resolve world2: %v", err)
+	}
+
+	pkg.Catalog.PersonaPacks["dusk"][0] = "personas/mutated.json"
+	pkg.Catalog.MechanicsPacks["reactive"][0] = "rules/mutated.json"
+	if one.Experience.PersonaFiles[0] == "personas/mutated.json" ||
+		two.Experience.MechanicsFiles[0] == "rules/mutated.json" {
+		t.Fatal("resolved plan aliases mutable package catalog slices")
+	}
+	if reflect.DeepEqual(one.Experience, two.Experience) {
+		t.Fatalf("different selections collapsed to one experience: %#v", one.Experience)
+	}
+
+	seen := make(map[string]bool, len(one.Entities))
+	for _, id := range one.IDs() {
+		seen[id] = true
+	}
+	for _, id := range two.IDs() {
+		if seen[id] {
+			t.Fatalf("differently selected plans share entity id %q", id)
+		}
+	}
+}
+
+func TestResolve_UsesValidatedCatalogSnapshotAfterPublicMutation(t *testing.T) {
+	pkg, err := world.LoadPackage(catalogPackageFS(), world.LoadOptions{})
+	if err != nil {
+		t.Fatalf("LoadPackage: %v", err)
+	}
+
+	pkg.Catalog.Version = 999
+	pkg.Catalog.DefaultPersonaPack = "forged"
+	pkg.Catalog.DefaultMechanicsPack = "forged"
+	pkg.Catalog.PersonaPacks["bright"][0] = "personas/mutated.json"
+	delete(pkg.Catalog.PersonaPacks, "dusk")
+	pkg.Catalog.PersonaPacks["forged"] = []string{"personas/forged.json"}
+	pkg.Catalog.MechanicsPacks["reactive"][0] = "rules/mutated.json"
+	delete(pkg.Catalog.MechanicsPacks, "quiet")
+	pkg.Catalog.MechanicsPacks["forged"] = []string{"rules/forged.json"}
+
+	defaults, err := pkg.Resolve(testInstance())
+	if err != nil {
+		t.Fatalf("Resolve defaults after public mutation: %v", err)
+	}
+	if got, want := defaults.Experience, (world.ResolvedExperience{
+		PersonaPack:    "dusk",
+		MechanicsPack:  "quiet",
+		PersonaFiles:   []string{"personas/narrator.json", "personas/shared.json"},
+		MechanicsFiles: []string{},
+	}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("defaults followed mutable inspection catalog:\n got %#v\nwant %#v", got, want)
+	}
+
+	namedConfig := testInstance()
+	namedConfig.Experience = world.ExperienceSelection{PersonaPack: "bright", MechanicsPack: "reactive"}
+	named, err := pkg.Resolve(namedConfig)
+	if err != nil {
+		t.Fatalf("Resolve named after public mutation: %v", err)
+	}
+	if got, want := named.Experience, (world.ResolvedExperience{
+		PersonaPack:    "bright",
+		MechanicsPack:  "reactive",
+		PersonaFiles:   []string{"personas/bright.json", "personas/shared.json"},
+		MechanicsFiles: []string{"rules/00-stub.json"},
+	}); !reflect.DeepEqual(got, want) {
+		t.Fatalf("named selection followed mutable inspection catalog:\n got %#v\nwant %#v", got, want)
+	}
+}
+
+func TestResolve_RefusesDirectlyConstructedExplicitCatalog(t *testing.T) {
+	pkg := testPackage(t)
+	pkg.Catalog = world.PackCatalog{
+		Version:              1,
+		DefaultPersonaPack:   "forged",
+		DefaultMechanicsPack: "forged",
+		PersonaPacks:         map[string][]string{"forged": {"personas/forged.json"}},
+		MechanicsPacks:       map[string][]string{"forged": {}},
+	}
+
+	_, err := pkg.Resolve(testInstance())
+	if err == nil {
+		t.Fatal("Resolve trusted a directly constructed explicit catalog")
+	}
+	for _, want := range []string{"catalog", "LoadPackage", "validated"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("direct catalog refusal %q does not name %q", err, want)
+		}
+	}
+}
+
+func TestResolve_RequiresNarratorAndAdjudicatorInEverySelectedPersonaPack(t *testing.T) {
+	for name, build := range map[string]func(t *testing.T) (*world.Package, world.InstanceConfig){
+		"explicit named pack": func(t *testing.T) (*world.Package, world.InstanceConfig) {
+			fsys := catalogPackageFS()
+			catalog := strings.Replace(validCatalog, "mechanics_packs:",
+				"  voice-only:\n    files:\n      - personas/narrator.json\nmechanics_packs:", 1)
+			fsys[world.PacksFile] = &fstest.MapFile{Data: []byte(catalog)}
+			pkg, err := world.LoadPackage(fsys, world.LoadOptions{})
+			if err != nil {
+				t.Fatalf("LoadPackage: %v", err)
+			}
+			instance := testInstance()
+			instance.Experience.PersonaPack = "voice-only"
+			return pkg, instance
+		},
+		"explicit named pack without narrator": func(t *testing.T) (*world.Package, world.InstanceConfig) {
+			fsys := catalogPackageFS()
+			catalog := strings.Replace(validCatalog, "mechanics_packs:",
+				"  judge-only:\n    files:\n      - personas/shared.json\nmechanics_packs:", 1)
+			fsys[world.PacksFile] = &fstest.MapFile{Data: []byte(catalog)}
+			pkg, err := world.LoadPackage(fsys, world.LoadOptions{})
+			if err != nil {
+				t.Fatalf("LoadPackage: %v", err)
+			}
+			instance := testInstance()
+			instance.Experience.PersonaPack = "judge-only"
+			return pkg, instance
+		},
+		"explicit default pack": func(t *testing.T) (*world.Package, world.InstanceConfig) {
+			fsys := catalogPackageFS()
+			catalog := strings.Replace(validCatalog,
+				"    files:\n      - personas/narrator.json\n      - personas/shared.json",
+				"    files:\n      - personas/narrator.json", 1)
+			fsys[world.PacksFile] = &fstest.MapFile{Data: []byte(catalog)}
+			pkg, err := world.LoadPackage(fsys, world.LoadOptions{})
+			if err != nil {
+				t.Fatalf("LoadPackage: %v", err)
+			}
+			return pkg, testInstance()
+		},
+		"legacy implicit default": func(t *testing.T) (*world.Package, world.InstanceConfig) {
+			fsys := minimalPackageFS()
+			delete(fsys, "personas/adjudicator.json")
+			pkg, err := world.LoadPackage(fsys, world.LoadOptions{})
+			if err != nil {
+				t.Fatalf("LoadPackage: %v", err)
+			}
+			return pkg, testInstance()
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pkg, instance := build(t)
+			_, err := pkg.Resolve(instance)
+			if err == nil {
+				t.Fatal("Resolve accepted a selected persona pack without every required role")
+			}
+			wantPack := map[string]string{
+				"explicit named pack":                  "voice-only",
+				"explicit named pack without narrator": "judge-only",
+				"explicit default pack":                "dusk",
+				"legacy implicit default":              "default",
+			}[name]
+			wantRole := "adjudicator"
+			if name == "explicit named pack without narrator" {
+				wantRole = "narrator"
+			}
+			for _, want := range []string{"persona pack", wantPack, wantRole} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("role refusal %q does not name %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+func TestResolve_AcceptsOneSharedMultiRolePersonaFragment(t *testing.T) {
+	fsys := catalogPackageFS()
+	fsys["personas/multi.json"] = &fstest.MapFile{Data: []byte(
+		`{"id":"shared/voice","category":100,"roles":["narrator","adjudicator"],"content":"Speak and judge."}`)}
+	catalog := strings.Replace(validCatalog,
+		"    files:\n      - personas/narrator.json\n      - personas/shared.json",
+		"    files:\n      - personas/multi.json", 1)
+	fsys[world.PacksFile] = &fstest.MapFile{Data: []byte(catalog)}
+	pkg, err := world.LoadPackage(fsys, world.LoadOptions{})
+	if err != nil {
+		t.Fatalf("LoadPackage: %v", err)
+	}
+	plan, err := pkg.Resolve(testInstance())
+	if err != nil {
+		t.Fatalf("Resolve refused a fragment serving both required roles: %v", err)
+	}
+	if got, want := plan.Experience.PersonaFiles, []string{"personas/multi.json"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("selected multi-role files = %v, want %v", got, want)
 	}
 }
 
