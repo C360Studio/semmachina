@@ -17,7 +17,7 @@
   },
 
   "scene_local_id": "fete-green",
-  "content_bucket": "BELLWEATHER_GEMINI36_SMOKE_CONTENT",
+  "content_bucket": "BELLWEATHER_GEMINI_SMOKE",
 
   "socket": {
     "addr": "127.0.0.1:0",

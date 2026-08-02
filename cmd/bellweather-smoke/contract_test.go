@@ -90,6 +90,10 @@ func TestBellweatherGeminiConfigPinsTheOperatorScenario(t *testing.T) {
 		cfg.Companion.Policy != vocabulary.CompanionPolicyBoundedInitiative {
 		t.Fatalf("wrong Kit binding: %+v", cfg.Companion)
 	}
+	if cfg.ContentBucket != "BELLWEATHER_GEMINI_SMOKE" || len(cfg.ContentBucket) > 32 {
+		t.Fatalf("Bellweather content bucket = %q (%d bytes), want the exact reference-safe instance",
+			cfg.ContentBucket, len(cfg.ContentBucket))
+	}
 	endpoint := cfg.Models.Endpoints["gemini-flash"]
 	if endpoint == nil || endpoint.URL != "https:/"+"/generativelanguage.googleapis.com/v1beta/openai" {
 		t.Fatalf("Bellweather Gemini endpoint = %+v, want the exact live endpoint", endpoint)

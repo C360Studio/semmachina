@@ -11,7 +11,9 @@
 - [ ] 1.5 Reject import, effect, world-rule, and operator-write attempts that mutate or
   branch on canonical solution and truth-status predicates
   - Local package, rule, and effect gates are complete; full graph-ingest/operator
-    enforcement is blocked by `C360Studio/semstreams#818`.
+    enforcement is blocked by
+    [SemStreams issue #818](https://github.com/C360Studio/semstreams/issues/818), which was
+    verified open on 2026-08-02.
 
 ## 2. Case Lifecycle
 
@@ -127,7 +129,8 @@
     selection, and serialized advances are implemented. The knowledge-driven reset remains
     blocked: it requires a revision-bearing authoritative entity read plus
     expected-revision/conditional graph mutation. This reset gap belongs to 8.1, not 8.5,
-    and is tracked by [SemStreams issue #851](https://github.com/C360Studio/semstreams/issues/851).
+    and is tracked by [SemStreams issue #851](https://github.com/C360Studio/semstreams/issues/851),
+    which was verified open on 2026-08-02.
   - The current keyed bond lock is process-local and assumes one process per world;
     active-active ladder compare-and-swap is unsupported.
 - [x] 8.2 Implement deterministic `HintLadder` selection using companion-known evidence
@@ -150,7 +153,8 @@
     Literal at-most-one provider call across a process crash remains blocked: it requires
     a durable atomic `TaskID → LoopID → initial RequestID` claim and idempotent request
     publication. The exact crash window and acceptance criteria are recorded on
-    [SemStreams issue #807](https://github.com/C360Studio/semstreams/issues/807).
+    [SemStreams issue #807](https://github.com/C360Studio/semstreams/issues/807), which was
+    verified open on 2026-08-02.
 
 ## 9. Narration and Player Protocol
 
@@ -200,8 +204,8 @@
   - `docs/runbooks/bellweather-gemini-smoke.md` covers prerequisites, the fresh namespace,
     two bounded provider turn chains, authoritative polling, wedge and egress aborts, the
     absolute timeout, terminal evidence, teardown, cost, CI exclusion, and secret-safe diagnosis.
-  - The paid smoke has not been run. Running it remains a separate, explicitly authorized
-    operator action under task 11.4.
+  - The separately authorized run is recorded in
+    `docs/smoke-results/2026-08-02-bellweather-gemini.md` under task 11.4.
 
 ## 11. Quality Gates and Acceptance
 
@@ -221,9 +225,18 @@
 - [x] 11.3 Run unit tests, race tests, mock E2E, lint, build, and strict OpenSpec validation
   - `go test ./...`, `go test -race ./...`, the deterministic Bellweather E2E, lint, build,
     strict OpenSpec validation at 9/9, and the final diff check all passed.
-- [ ] 11.4 Run the opt-in Gemini smoke only with operator authorization and record its
+- [x] 11.4 Run the opt-in Gemini smoke only with operator authorization and record its
   result separately from deterministic acceptance
-  - The paid Gemini smoke has not been run and still requires explicit operator authorization.
+  - The authorized 2026-08-02 run passed both bounded provider turn chains in approximately
+    59 seconds with authoritative discovery, terminal `complete`, a Kit `hint`, and no wedge.
+    Secret-safe evidence is recorded separately in
+    `docs/smoke-results/2026-08-02-bellweather-gemini.md`; provider billing detail was not captured.
+  - A preceding pre-ingress boot attempt exposed the 32-byte content-bucket reference limit and
+    made no provider call. The exact corrected configuration and contract test passed before retry.
 - [ ] 11.5 Archive this change only after every normative scenario and quality gate passes
-  - This change cannot be archived while the explicitly authorized paid smoke and its recorded
-    result remain outstanding under task 11.4.
+  - Archival remains blocked by the incomplete upstream-dependent normative tasks 1.5, 8.1,
+    and 8.5. Their SemStreams issues #818, #851, and #807 were verified open on 2026-08-02.
+  - A 2026-08-02 archive attempt refused and made no changes. It also reported a
+    fiction-adjudication `MODIFIED` delta drift because the change is missing the current
+    `Adjudicator reads current state` scenario. Scope splitting or delta reconciliation requires
+    a user decision and was not attempted.

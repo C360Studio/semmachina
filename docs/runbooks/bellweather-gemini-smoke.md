@@ -1,7 +1,8 @@
 # Bellweather Gemini Smoke
 
-This is an operator-only, paid production smoke. It has not been run as part of Group 10.
-Run it only after an operator explicitly authorizes the provider spend.
+This is an operator-only, paid production smoke. A successful authorized run is recorded under
+[Recorded runs](#recorded-runs). Run it again only after an operator explicitly authorizes the
+additional provider spend.
 
 The smoke boots the ordinary Bellweather package and production components, connects through
 the authenticated player WebSocket, and executes two bounded provider turn chains:
@@ -121,5 +122,8 @@ Record the following separately from deterministic acceptance:
 - teardown confirmation.
 
 Never record the Gemini key, `.env` contents, prompt bodies, provider responses, or player bearer
-credential. Task 11.4 remains open until an explicitly authorized paid run is performed and its
-result is recorded.
+credential.
+
+## Recorded runs
+
+- [2026-08-02 authorized acceptance run](../smoke-results/2026-08-02-bellweather-gemini.md)
