@@ -102,6 +102,46 @@ func newTestEngine(t *testing.T, cfg boot.Config) *boot.Engine {
 	return engine
 }
 
+func TestLoadConfig_AcceptsClosedNamedExperienceSelection(t *testing.T) {
+	data := []byte(`{"org":"c360","world_ns":"named","player":{` +
+		`"local_id":"one","name":"Player","character":"local:rook","credential":"secret"},` +
+		`"experience":{"persona_pack":"night","mechanics_pack":"scarce"}}`)
+	cfg, err := boot.LoadConfig(data)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Experience.PersonaPack != "night" || cfg.Experience.MechanicsPack != "scarce" {
+		t.Fatalf("experience = %#v", cfg.Experience)
+	}
+
+	unknown := []byte(strings.Replace(string(data), `"mechanics_pack":"scarce"`,
+		`"mechanics_pack":"scarce","surprise":true`, 1))
+	if _, err := boot.LoadConfig(unknown); err == nil || !strings.Contains(err.Error(), "surprise") {
+		t.Fatalf("unknown nested experience field refusal = %v", err)
+	}
+}
+
+func TestNew_ResolvesNamedExperienceAndRejectsUnknownBeforeStart(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.World = selectedPersonaWorld(t, "default-adjudicator", "default-narrator", "named-narrator")
+	cfg.Experience = boot.ExperienceConfig{PersonaPack: "unselected", MechanicsPack: "empty"}
+	if _, err := boot.New(cfg); err != nil {
+		t.Fatalf("boot.New rejected a declared non-default experience: %v", err)
+	}
+
+	cfg.Experience.PersonaPack = "absent"
+	cfg.NATSURL = "nats://must-not-be-contacted.invalid:1"
+	_, err := boot.New(cfg)
+	if err == nil {
+		t.Fatal("boot.New accepted an unknown persona pack")
+	}
+	for _, want := range []string{"persona pack", "absent"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("unknown selection refusal %q does not name %q", err, want)
+		}
+	}
+}
+
 // New resolves the world without touching a broker, so the ids it exposes are
 // assertable before anything starts.
 func TestNew_ResolvesTheInstanceIdentityFromThePackage(t *testing.T) {

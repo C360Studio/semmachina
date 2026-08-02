@@ -61,6 +61,13 @@ type CompanionConfig struct {
 	Policy    vocabulary.CompanionPolicy `json:"policy"`
 }
 
+// ExperienceConfig selects one declared persona pack and mechanics pack.
+// Empty names use the package defaults.
+type ExperienceConfig struct {
+	PersonaPack   string `json:"persona_pack,omitempty"`
+	MechanicsPack string `json:"mechanics_pack,omitempty"`
+}
+
 // Config is one world instance's whole deployment configuration.
 //
 // The JSON-tagged half is what an operator writes. The untagged half is what a
@@ -82,6 +89,8 @@ type Config struct {
 	Player PlayerConfig `json:"player"`
 	// Companion is optional; nil means this player has no active companion bond.
 	Companion *CompanionConfig `json:"companion,omitempty"`
+	// Experience selects the package-authored voice and mechanics for this instance.
+	Experience ExperienceConfig `json:"experience,omitempty"`
 
 	// SceneLocalID names the scene actions are taken in, as a template-local id.
 	//
@@ -258,7 +267,14 @@ func (c Config) playerBinding() world.PlayerBinding {
 }
 
 func (c Config) instanceConfig() world.InstanceConfig {
-	instance := world.InstanceConfig{Org: c.Org, WorldNS: c.WorldNS, Player: c.playerBinding()}
+	instance := world.InstanceConfig{
+		Org:     c.Org,
+		WorldNS: c.WorldNS,
+		Player:  c.playerBinding(),
+		Experience: world.ExperienceSelection{
+			PersonaPack: c.Experience.PersonaPack, MechanicsPack: c.Experience.MechanicsPack,
+		},
+	}
 	if c.Companion != nil {
 		instance.Companion = &world.CompanionBinding{
 			Character: c.Companion.Character,

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"slices"
 	"sort"
 	"strings"
@@ -43,6 +42,10 @@ func (e *Engine) loadWorld() error {
 	if err != nil {
 		return fmt.Errorf("resolve the world package into this instance: %w", err)
 	}
+	personas, mechanics, err := bindSelectedExperience(e.cfg.World, plan)
+	if err != nil {
+		return err
+	}
 
 	sceneID, err := sceneEntityID(plan, e.cfg.SceneLocalID)
 	if err != nil {
@@ -55,6 +58,8 @@ func (e *Engine) loadWorld() error {
 
 	e.pkg = pkg
 	e.plan = plan
+	e.personas = personas
+	e.mechanics = mechanics
 	e.sceneID = sceneID
 	e.playerID = playerID
 	return nil
@@ -448,27 +453,25 @@ func membershipEdges(plan *world.Plan) map[string][]string {
 // may edit and re-import, and Create would make the second boot after an edit
 // silently keep the first boot's text. Seeding is idempotent by that choice.
 func (e *Engine) seedPersonas(ctx context.Context) error {
-	manager, err := sspersona.NewManager(e.client)
-	if err != nil {
-		return fmt.Errorf("open the persona bucket: %w", err)
-	}
-	if len(e.pkg.PersonaFiles) == 0 {
+	if len(e.personas) == 0 {
 		return errors.New(
 			"the world package ships no persona records; without them both loops run on the framework's default " +
 				"fragments and the world has no voice at all")
 	}
-	for _, name := range e.pkg.PersonaFiles {
-		data, err := fs.ReadFile(e.cfg.World, name)
-		if err != nil {
-			return fmt.Errorf("read persona record %s: %w", name, err)
-		}
-		record, err := decodePersona(data)
-		if err != nil {
-			return fmt.Errorf("decode persona record %s: %w", name, err)
-		}
+	if err := validateCachedPersonas(e.plan, e.personas); err != nil {
+		return err
+	}
+	manager, err := sspersona.NewManager(e.client)
+	if err != nil {
+		return fmt.Errorf("open the persona bucket: %w", err)
+	}
+	for index := range e.personas {
+		record := &e.personas[index]
 		if err := manager.Upsert(ctx, record); err != nil {
+			name := e.plan.Experience.PersonaFiles[index]
 			return fmt.Errorf("seed persona record %s: %w", name, err)
 		}
+		name := e.plan.Experience.PersonaFiles[index]
 		e.log().Info("seeded a world persona fragment", "file", name, "id", record.ID, "roles", record.Roles)
 	}
 	return nil

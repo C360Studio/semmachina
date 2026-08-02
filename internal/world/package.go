@@ -232,13 +232,22 @@ func loadJSONDir(
 // file. Upstream escapes non-predicate message/state fields with a `$` prefix
 // (processor/rule/config_validation.go validateConditionFields); so does this.
 func checkRuleFile(data []byte) error {
+	_, err := DecodeRuleDefinitions(data)
+	return err
+}
+
+// DecodeRuleDefinitions applies the package's complete rule-file preflight and
+// returns the production definitions boot may activate. Keeping decoding,
+// predicate syntax, and the world/engine authority boundary in this one gate
+// prevents runtime composition from growing a weaker second interpretation.
+func DecodeRuleDefinitions(data []byte) ([]rule.Definition, error) {
 	if !json.Valid(data) {
-		return errors.New("is not well-formed JSON")
+		return nil, errors.New("is not well-formed JSON")
 	}
 
-	definitions, err := decodeRuleDefinitions(data)
+	definitions, err := decodeRuleDefinitionsJSON(data)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, definition := range definitions {
 		for index, condition := range definition.Conditions {
@@ -246,7 +255,7 @@ func checkRuleFile(data []byte) error {
 				continue
 			}
 			if _, err := ssvocab.ParsePredicate(condition.Field); err != nil {
-				return fmt.Errorf(
+				return nil, fmt.Errorf(
 					"rule %q condition[%d] field %q is not a canonical three-segment lower-kebab "+
 						"predicate (entity ids may carry underscores and uppercase, predicates may not): %w",
 					definition.ID, index, condition.Field, err)
@@ -257,19 +266,19 @@ func checkRuleFile(data []byte) error {
 		// about — reporting the typo as a boundary violation would send them
 		// looking for the wrong thing.
 		if err := checkRuleScope(definition); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return definitions, nil
 }
 
-// decodeRuleDefinitions decodes a rule file into the production Definition type,
+// decodeRuleDefinitionsJSON decodes a rule file into the production Definition type,
 // accepting an array or a single object exactly as the rule loader does
 // (processor/rule/rule_loader.go loadRuleDefinitionsFromFiles). Decoding into
 // the real type rather than a local mirror is what keeps the field names from
 // drifting; a gate that read a `conditions` array the loader does not would
 // check nothing.
-func decodeRuleDefinitions(data []byte) ([]rule.Definition, error) {
+func decodeRuleDefinitionsJSON(data []byte) ([]rule.Definition, error) {
 	var definitions []rule.Definition
 	if err := json.Unmarshal(data, &definitions); err == nil {
 		return definitions, nil
@@ -308,13 +317,26 @@ func DecodePersonaRecord(data []byte) (*persona.Persona, error) {
 	if err := decoder.Decode(&record); err != nil {
 		return nil, err
 	}
-	if err := record.Validate(); err != nil {
+	if err := ValidatePersonaRecord(&record); err != nil {
 		return nil, err
 	}
+	return &record, nil
+}
+
+// ValidatePersonaRecord applies the semantic half of DecodePersonaRecord to an
+// already-decoded record. Boot uses it to validate every owned cached record
+// before the first persistent write.
+func ValidatePersonaRecord(record *persona.Persona) error {
+	if record == nil {
+		return errors.New("the persona record is nil")
+	}
+	if err := record.Validate(); err != nil {
+		return err
+	}
 	if len(record.Roles) == 0 {
-		return nil, errors.New(
+		return errors.New(
 			"the persona record declares no roles, so its text would be prepended to EVERY persona's prompt; " +
 				"a world's adjudicator voice reaching the narrator is a world speaking in the wrong mouth")
 	}
-	return &record, nil
+	return nil
 }

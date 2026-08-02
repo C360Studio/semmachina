@@ -119,10 +119,12 @@ type Engine struct {
 	results   *egress.Results
 	lifecycle *lifecycle.Manager
 
-	pkg      *world.Package
-	plan     *world.Plan
-	sceneID  string
-	playerID string
+	pkg       *world.Package
+	plan      *world.Plan
+	personas  []sspersona.Persona
+	mechanics []selectedMechanicsDefinition
+	sceneID   string
+	playerID  string
 
 	instantiation campaign.Instantiation
 
@@ -824,17 +826,17 @@ func maxPersonaTimeout() time.Duration {
 	return longest * time.Duration(maxPersonaIterations()+1)
 }
 
-// startRules loads this engine's own turn-sequencing pack into the real rule
-// processor.
+// startRules loads the fixed engine turn-sequencing pack and the selected world
+// mechanics into one real rule processor.
 //
 // The pack is INLINE rather than a file path: a deployment must not be able to
 // boot with half a turn loop because somebody forgot to copy a directory, and a
 // missing rules file would present as a game that accepts actions and never
 // adjudicates them.
 func (e *Engine) startRules(ctx context.Context) error {
-	raw, err := rulepack.ProcessorConfig()
+	raw, err := e.ruleProcessorConfig()
 	if err != nil {
-		return fmt.Errorf("build the turn-sequencing rule configuration: %w", err)
+		return fmt.Errorf("build the rule processor configuration: %w", err)
 	}
 	// Cleared BEFORE Start, so the readback that follows asks "did the processor
 	// write a status after this boot deleted the old one?" — a question whose

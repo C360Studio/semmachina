@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	sspersona "github.com/c360studio/semstreams/persona"
 	"gopkg.in/yaml.v3"
 
 	enginepersona "github.com/c360studio/semmachina/internal/persona"
@@ -296,6 +297,14 @@ func personaCoverageForFiles(fsys fs.FS, files []string) (personaRoleCoverage, e
 		if err != nil {
 			return 0, fmt.Errorf("%s: decode persona roles from %s: %w", PacksFile, file, err)
 		}
+		coverage |= personaCoverageForRecords([]sspersona.Persona{*record})
+	}
+	return coverage, nil
+}
+
+func personaCoverageForRecords(records []sspersona.Persona) personaRoleCoverage {
+	var coverage personaRoleCoverage
+	for _, record := range records {
 		for _, role := range record.Roles {
 			switch enginepersona.Role(role) {
 			case enginepersona.RoleAdjudicator:
@@ -305,7 +314,29 @@ func personaCoverageForFiles(fsys fs.FS, files []string) (personaRoleCoverage, e
 			}
 		}
 	}
-	return coverage, nil
+	return coverage
+}
+
+// ValidatePersonaRoleCoverage rechecks that construction-bound persona values
+// collectively serve both engine-required roles.
+func ValidatePersonaRoleCoverage(pack string, records []sspersona.Persona) error {
+	return validatePersonaCoverage(pack, personaCoverageForRecords(records))
+}
+
+func validatePersonaCoverage(pack string, coverage personaRoleCoverage) error {
+	var missing []string
+	if coverage&coversAdjudicator == 0 {
+		missing = append(missing, string(enginepersona.RoleAdjudicator))
+	}
+	if coverage&coversNarrator == 0 {
+		missing = append(missing, string(enginepersona.RoleNarrator))
+	}
+	if len(missing) != 0 {
+		return fmt.Errorf(
+			"instance experience persona pack %q is missing required role(s): %s",
+			pack, strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 func (p *Package) resolveExperience(selection ExperienceSelection) (ResolvedExperience, error) {
@@ -337,17 +368,8 @@ func (p *Package) resolveExperience(selection ExperienceSelection) (ResolvedExpe
 			personaPack, PacksFile)
 	}
 	if coverage, known := catalog.personaCoverage[personaPack]; known {
-		var missing []string
-		if coverage&coversAdjudicator == 0 {
-			missing = append(missing, string(enginepersona.RoleAdjudicator))
-		}
-		if coverage&coversNarrator == 0 {
-			missing = append(missing, string(enginepersona.RoleNarrator))
-		}
-		if len(missing) != 0 {
-			return ResolvedExperience{}, fmt.Errorf(
-				"instance experience persona pack %q is missing required role(s): %s",
-				personaPack, strings.Join(missing, ", "))
+		if err := validatePersonaCoverage(personaPack, coverage); err != nil {
+			return ResolvedExperience{}, err
 		}
 	}
 	mechanicsFiles, ok := catalog.MechanicsPacks[mechanicsPack]

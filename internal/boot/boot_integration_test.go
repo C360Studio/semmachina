@@ -1624,3 +1624,86 @@ func TestBoot_SeedsTheWorldsPersonaFragments(t *testing.T) {
 		}
 	}
 }
+
+func TestBoot_SeedsOnlySelectedPersonaFragments(t *testing.T) {
+	cfg := bootConfig(t)
+	selectedAdjudicator := "selection-" + cfg.WorldNS + "-adjudicator"
+	selectedNarrator := "selection-" + cfg.WorldNS + "-narrator"
+	unselected := "selection-" + cfg.WorldNS + "-unselected"
+	mutated := "selection-" + cfg.WorldNS + "-mutated-after-new"
+	worldFS := selectedPersonaWorld(t, selectedAdjudicator, selectedNarrator, unselected)
+	cfg.World = worldFS
+
+	engine := newTestEngine(t, cfg)
+	worldFS["personas/selected-adjudicator.json"] = &fstest.MapFile{Data: personaRecord(mutated, "adjudicator")}
+	t.Cleanup(engine.Stop)
+	if err := engine.StartThrough(t.Context(), boot.StepPersonas); err != nil {
+		t.Fatalf("boot through %s: %v", boot.StepPersonas, err)
+	}
+
+	manager, err := sspersona.NewManager(requireBroker(t).Client)
+	if err != nil {
+		t.Fatalf("open the persona bucket: %v", err)
+	}
+	stored, err := manager.List(t.Context())
+	if err != nil {
+		t.Fatalf("list personas: %v", err)
+	}
+	for _, id := range []string{selectedAdjudicator, selectedNarrator} {
+		if stored[id] == nil {
+			t.Errorf("selected persona %q was not seeded", id)
+		}
+	}
+	if stored[unselected] != nil {
+		t.Fatalf("unselected persona %q was seeded from the package-wide inventory", unselected)
+	}
+	if stored[mutated] != nil {
+		t.Fatalf("persona %q replaced the construction-bound selected record", mutated)
+	}
+}
+
+func selectedPersonaWorld(t *testing.T, adjudicatorID, narratorID, unselectedID string) fstest.MapFS {
+	t.Helper()
+	source, err := fixtures.StarterWorld()
+	if err != nil {
+		t.Fatalf("StarterWorld: %v", err)
+	}
+	worldFS := make(fstest.MapFS)
+	if err := fs.WalkDir(source, ".", func(name string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		data, readErr := fs.ReadFile(source, name)
+		if readErr != nil {
+			return readErr
+		}
+		worldFS[name] = &fstest.MapFile{Data: data}
+		return nil
+	}); err != nil {
+		t.Fatalf("copy starter world: %v", err)
+	}
+	worldFS["personas/selected-adjudicator.json"] = &fstest.MapFile{Data: personaRecord(adjudicatorID, "adjudicator")}
+	worldFS["personas/selected-narrator.json"] = &fstest.MapFile{Data: personaRecord(narratorID, "narrator")}
+	worldFS["personas/unselected.json"] = &fstest.MapFile{Data: personaRecord(unselectedID, "narrator")}
+	worldFS[world.PacksFile] = &fstest.MapFile{Data: []byte(`version: 1
+defaults:
+  persona_pack: selected
+  mechanics_pack: empty
+persona_packs:
+  selected:
+    files:
+      - personas/selected-adjudicator.json
+      - personas/selected-narrator.json
+  unselected:
+    files:
+      - personas/selected-adjudicator.json
+      - personas/unselected.json
+mechanics_packs:
+  empty:
+    files: []
+`)}
+	return worldFS
+}

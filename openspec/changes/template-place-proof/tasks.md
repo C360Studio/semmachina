@@ -40,12 +40,21 @@
 
 ## 4. Boot Composition
 
-- [ ] 4.1 Add failing tests proving boot seeds only selected persona files and unselected files have
+- [x] 4.1 Add failing tests proving boot seeds only selected persona files and unselected files have
   no effect
-- [ ] 4.2 Add failing tests proving selected world rules combine with fixed engine definitions,
+- [x] 4.2 Add failing tests proving selected world rules combine with fixed engine definitions,
   duplicate IDs fail, and package rules still cannot reach turn/persona/model/engine state
-- [ ] 4.3 Implement selected persona seeding and selected rule composition in the existing boot
+- [x] 4.3 Implement selected persona seeding and selected rule composition in the existing boot
   sequence without a new lifecycle, component, stream, KV bucket, or rule processor
+  - Named configuration selection resolves or refuses before broker access, and engine
+    construction binds only the selected persona and mechanics content.
+  - The aggregate persona-role gate runs before side effects. Selected rules compose
+    deterministically with fixed engine rules in the same processor, with primary and related
+    patterns narrowed to the selected instance.
+  - Duplicate IDs and runtime-invalid definitions produce focused diagnostics. Independent Go
+    review APPROVED the slice; focused boot/persona, full world, CLI compilation, and diff gates
+    passed.
+  - Durable campaign selection provenance and restart matching remain open under task 4.4.
 - [ ] 4.4 Add failing campaign-provenance tests for atomic fresh selection records, exact restart
   match, changed selection, missing/partial provenance, and the explicit existing-world migration
   refusal; then implement the read gate before persona seeding or rule startup
