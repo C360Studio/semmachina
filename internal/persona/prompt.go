@@ -33,6 +33,10 @@ type ArtifactReader interface {
 	GetAction(ctx context.Context, ref content.Ref) (*payload.PlayerAction, error)
 	// GetVerdict reads the stored verdict back.
 	GetVerdict(ctx context.Context, ref content.Ref) (*payload.Verdict, error)
+	GetKnowledgeReceipt(ctx context.Context, ref content.Ref) (*content.KnowledgeReceipt, error)
+	GetTestimony(ctx context.Context, ref content.Ref) (*content.Testimony, error)
+	GetCompanionStageRecord(ctx context.Context, ref content.Ref) (*payload.CompanionStageRecord, error)
+	GetCompanionDecision(ctx context.Context, ref content.Ref) (*payload.CompanionDecision, error)
 }
 
 // The claim above, enforced by the compiler rather than by a doc comment.
@@ -223,9 +227,15 @@ func (b *Builder) Narrate(ctx context.Context, view *epistemic.Projection) (Task
 	if view == nil {
 		return TaskRequest{}, errors.New("rendering a narration prompt requires an assembled view")
 	}
-	if view.Purpose != epistemic.PurposeNarrator {
-		return TaskRequest{}, fmt.Errorf("narration prompt requires %s projection, got %s",
-			epistemic.PurposeNarrator, view.Purpose)
+	if view.Purpose != epistemic.PurposeNarrator && view.Purpose != epistemic.PurposeDenouement {
+		return TaskRequest{}, fmt.Errorf("narration prompt requires %s or %s projection, got %s",
+			epistemic.PurposeNarrator, epistemic.PurposeDenouement, view.Purpose)
+	}
+	if view.Purpose == epistemic.PurposeNarrator && view.HasSolution {
+		return TaskRequest{}, errors.New("ordinary narrator projection must not carry canonical solution")
+	}
+	if view.Purpose == epistemic.PurposeDenouement && !view.HasSolution {
+		return TaskRequest{}, errors.New("denouement projection must carry its authorized canonical solution")
 	}
 	if err := validateProjectionForPrompt(view); err != nil {
 		return TaskRequest{}, err
@@ -250,6 +260,10 @@ func (b *Builder) Narrate(ctx context.Context, view *epistemic.Projection) (Task
 	if err != nil {
 		return TaskRequest{}, err
 	}
+	narrationContext, err := b.narrationContext(ctx, view)
+	if err != nil {
+		return TaskRequest{}, err
+	}
 
 	var out strings.Builder
 	writeWorld(&out, view)
@@ -257,6 +271,12 @@ func (b *Builder) Narrate(ctx context.Context, view *epistemic.Projection) (Task
 	out.WriteString(quoteAction(action.Text))
 	out.WriteString("\n\n")
 	outcome.write(&out)
+	narrationContext.write(&out)
+	if view.Purpose == epistemic.PurposeDenouement {
+		out.WriteString("\n# Authorized canonical solution\n\n")
+		fmt.Fprintf(&out, "culprit: %s\nmethod: %s\nmotive: %s\n",
+			view.Solution.Culprit, view.Solution.Method, view.Solution.Motive)
+	}
 	out.WriteString("\nVoice this outcome and exit through ")
 	out.WriteString(NarrationToolName)
 	out.WriteString(".\n")
@@ -264,6 +284,146 @@ func (b *Builder) Narrate(ctx context.Context, view *epistemic.Projection) (Task
 	return TaskRequest{
 		Identity: identity, ResumeAttempt: resumeAttempt, Band: outcome.Band, Prompt: out.String(),
 	}, nil
+}
+
+type narrationArtifactContext struct {
+	revelations []narrationRevelation
+	companion   *payload.CompanionDecision
+}
+
+type narrationRevelation struct {
+	evidenceID string
+	testimony  *content.Testimony
+}
+
+func (b *Builder) narrationContext(
+	ctx context.Context,
+	view *epistemic.Projection,
+) (narrationArtifactContext, error) {
+	knowledgeRef, err := soleRef(view, vocabulary.TurnKnowledgeRef)
+	if err != nil {
+		return narrationArtifactContext{}, fmt.Errorf("resolve committed narration knowledge: %w", err)
+	}
+	receipt, err := b.artifacts.GetKnowledgeReceipt(ctx, knowledgeRef)
+	if err != nil {
+		return narrationArtifactContext{}, fmt.Errorf("resolve knowledge receipt for turn %s: %w", view.TurnID, err)
+	}
+	if err := receipt.Validate(); err != nil {
+		return narrationArtifactContext{}, fmt.Errorf("knowledge receipt at %s is invalid: %w", knowledgeRef, err)
+	}
+	if receipt.TurnID != view.TurnID {
+		return narrationArtifactContext{}, fmt.Errorf("knowledge receipt at %s belongs to turn %s, not %s",
+			knowledgeRef, receipt.TurnID, view.TurnID)
+	}
+
+	result := narrationArtifactContext{}
+	for _, entry := range receipt.Entries {
+		if entry.RecipientID != view.Actor.CharacterID {
+			continue
+		}
+		if _, ok := view.Entity(entry.EvidenceID); !ok {
+			return narrationArtifactContext{}, fmt.Errorf(
+				"knowledge receipt cites evidence %s outside the acting character's authorized projection",
+				entry.EvidenceID)
+		}
+		revelation := narrationRevelation{evidenceID: entry.EvidenceID}
+		if entry.TestimonyRef != "" {
+			testimonyRef, err := content.ParseRef(entry.TestimonyRef)
+			if err != nil {
+				return narrationArtifactContext{}, fmt.Errorf("parse testimony reference: %w", err)
+			}
+			testimony, err := b.artifacts.GetTestimony(ctx, testimonyRef)
+			if err != nil {
+				return narrationArtifactContext{}, fmt.Errorf("resolve testimony for evidence %s: %w", entry.EvidenceID, err)
+			}
+			if err := testimony.Validate(); err != nil {
+				return narrationArtifactContext{}, fmt.Errorf("testimony at %s is invalid: %w", testimonyRef, err)
+			}
+			if testimony.TurnID != view.TurnID || testimony.DecisionID != receipt.DecisionID ||
+				testimony.RecipientID != entry.RecipientID || testimony.EvidenceID != entry.EvidenceID {
+				return narrationArtifactContext{}, fmt.Errorf("testimony at %s does not match its receipt entry identity", testimonyRef)
+			}
+			if _, ok := view.Entity(testimony.SourceActorID); !ok {
+				return narrationArtifactContext{}, fmt.Errorf(
+					"testimony source %s is outside the authorized narrator projection", testimony.SourceActorID)
+			}
+			revelation.testimony = testimony
+		}
+		result.revelations = append(result.revelations, revelation)
+	}
+
+	stageRef, err := soleRef(view, vocabulary.TurnCompanionStageRef)
+	if err != nil {
+		return narrationArtifactContext{}, fmt.Errorf("resolve committed companion stage: %w", err)
+	}
+	stage, err := b.artifacts.GetCompanionStageRecord(ctx, stageRef)
+	if err != nil {
+		return narrationArtifactContext{}, fmt.Errorf("resolve companion stage for turn %s: %w", view.TurnID, err)
+	}
+	if err := stage.Validate(); err != nil {
+		return narrationArtifactContext{}, fmt.Errorf("companion stage at %s is invalid: %w", stageRef, err)
+	}
+	if stage.TurnID != view.TurnID || stage.PlayerID != view.Actor.PlayerID {
+		return narrationArtifactContext{}, fmt.Errorf("companion stage at %s does not match turn/player identity", stageRef)
+	}
+	decisionObjects := view.Turn.Objects(vocabulary.TurnCompanionDecisionRef)
+	if stage.Status == payload.CompanionStageNoActiveBond || stage.Status == payload.CompanionStageNoTrigger {
+		if len(decisionObjects) != 0 {
+			return narrationArtifactContext{}, errors.New("no-decision companion stage carries a decision reference")
+		}
+		return result, nil
+	}
+	decisionRef, err := soleRef(view, vocabulary.TurnCompanionDecisionRef)
+	if err != nil {
+		return narrationArtifactContext{}, fmt.Errorf("resolve committed companion decision: %w", err)
+	}
+	if decisionRef.String() != stage.DecisionRef {
+		return narrationArtifactContext{}, fmt.Errorf("companion decision reference %s disagrees with stage %s",
+			decisionRef, stage.DecisionRef)
+	}
+	decision, err := b.artifacts.GetCompanionDecision(ctx, decisionRef)
+	if err != nil {
+		return narrationArtifactContext{}, fmt.Errorf("resolve companion decision for turn %s: %w", view.TurnID, err)
+	}
+	if err := decision.Validate(); err != nil {
+		return narrationArtifactContext{}, fmt.Errorf("companion decision at %s is invalid: %w", decisionRef, err)
+	}
+	if decision.TurnID != view.TurnID || decision.PlayerID != view.Actor.PlayerID ||
+		decision.CompanionID != stage.CompanionID {
+		return narrationArtifactContext{}, fmt.Errorf("companion decision at %s does not match stage turn/player/companion identity", decisionRef)
+	}
+	for _, evidenceID := range decision.EvidenceRefs {
+		if _, ok := view.Entity(evidenceID); !ok {
+			return narrationArtifactContext{}, fmt.Errorf(
+				"companion decision cites evidence %s outside the authorized narrator projection", evidenceID)
+		}
+	}
+	result.companion = decision
+	return result, nil
+}
+
+func (c narrationArtifactContext) write(out *strings.Builder) {
+	if len(c.revelations) > 0 {
+		out.WriteString("\n# Committed revelations to voice\n\n")
+		for _, revelation := range c.revelations {
+			fmt.Fprintf(out, "- evidence: %s\n", revelation.evidenceID)
+			if revelation.testimony != nil {
+				fmt.Fprintf(out, "  attributed testimony from %s: %s\n",
+					revelation.testimony.SourceActorID, revelation.testimony.Prose)
+			}
+		}
+	}
+	if c.companion != nil {
+		out.WriteString("\n# Committed companion decision to voice\n\n")
+		fmt.Fprintf(out, "companion: %s\nkind: %s\n", c.companion.CompanionID, c.companion.Kind)
+		if c.companion.HintLevel != "" {
+			fmt.Fprintf(out, "hint level: %s\n", c.companion.HintLevel)
+		}
+		for _, evidenceID := range c.companion.EvidenceRefs {
+			fmt.Fprintf(out, "evidence: %s\n", evidenceID)
+		}
+		out.WriteString("The narrator may author the companion's dialogue, but must add no evidence or decision.\n")
+	}
 }
 
 func validateProjectionForPrompt(projection *epistemic.Projection) error {

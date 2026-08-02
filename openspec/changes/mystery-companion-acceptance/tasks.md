@@ -120,7 +120,7 @@
     selection, and serialized advances are implemented. The knowledge-driven reset remains
     blocked: it requires a revision-bearing authoritative entity read plus
     expected-revision/conditional graph mutation. This reset gap belongs to 8.1, not 8.5,
-    and no external SemStreams issue has been filed for it.
+    and is tracked by [SemStreams issue #851](https://github.com/C360Studio/semstreams/issues/851).
   - The current keyed bond lock is process-local and assumes one process per world;
     active-active ladder compare-and-swap is unsupported.
 - [x] 8.2 Implement deterministic `HintLadder` selection using companion-known evidence
@@ -142,18 +142,33 @@
     exact-resident companion stage outcome plus graph reference is proven across retries.
     Literal at-most-one provider call across a process crash remains blocked: it requires
     a durable atomic `TaskID → LoopID → initial RequestID` claim and idempotent request
-    publication. No external SemStreams issue has been filed for this gap.
+    publication. The exact crash window and acceptance criteria are recorded on
+    [SemStreams issue #807](https://github.com/C360Studio/semstreams/issues/807).
 
 ## 9. Narration and Player Protocol
 
-- [ ] 9.1 Extend narration to voice only committed case revelations and companion
+- [x] 9.1 Extend narration to voice only committed case revelations and companion
   decisions from the player-authorized projection
-- [ ] 9.2 Add denouement-purpose narration and prove canonical solution canaries remain
+  - Narrator projections alone carry the exact committed refs; prompt assembly resolves
+    and identity-validates their resident `KnowledgeReceipt`, `Testimony`,
+    `CompanionStageRecord`, and `CompanionDecision`, actor-filters revelations, requires
+    projected evidence, and fails closed on missing or mismatched artifacts.
+- [x] 9.2 Add denouement-purpose narration and prove canonical solution canaries remain
   unavailable before a correct accusation
-- [ ] 9.3 Add `CompanionResolution` with closed kind and conditional hint validation; pin
+  - Ordinary narration excludes solution canaries. Denouement narration accepts and
+    renders them only through the existing exact correct-accusation router plus lifecycle
+    and accusation-authorizer gates.
+- [x] 9.3 Add `CompanionResolution` with closed kind and conditional hint validation; pin
   no active bond as absent and an active `silent` decision as a present silent summary
-- [ ] 9.4 Pin the new player/v1 fields, closed sets, delivery identity, and retrieval
+  - `CompanionResolution` reuses the closed decision kinds and requires `hint_level` if
+    and only if kind is `hint`; no-active-bond and no-trigger stages omit it, while
+    committed `silent` and exhausted decisions remain present.
+- [x] 9.4 Pin the new player/v1 fields, closed sets, delivery identity, and retrieval
   round-trip in protocol tests
+  - Player/v1 pins the exact `companion_resolution` field and nested field set. Production
+    `TurnResult` decoding round-trips it, delivery and retrieval compose the same summary,
+    and a completed turn missing its companion-stage reference fails closed. Architecture
+    and backend review approved the result after the barrier fix.
 
 ## 10. Acceptance and Live Smoke
 

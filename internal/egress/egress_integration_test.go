@@ -413,6 +413,22 @@ func (w *egressWorld) resolvedTurn(
 	}
 
 	w.advance(t, turnID, entityID, vocabulary.PhaseCompanion)
+	companionRecord := &payload.CompanionStageRecord{
+		TurnID: turnID, PlayerID: playerID, Status: payload.CompanionStageNoActiveBond,
+	}
+	companionRef, err := w.content.PutCompanionStageRecord(t.Context(), entityID, companionRecord)
+	if err != nil {
+		t.Fatalf("store no-active-bond companion stage: %v", err)
+	}
+	companionTriples, err := companionRecord.Triples(
+		entityID, companionRef.String(), "egress-integration", action.ArrivedAt,
+	)
+	if err != nil {
+		t.Fatalf("project no-active-bond companion stage: %v", err)
+	}
+	if _, err := w.graph.MergeTriples(t.Context(), entityID, companionTriples); err != nil {
+		t.Fatalf("record no-active-bond companion stage: %v", err)
+	}
 	w.advance(t, turnID, entityID, vocabulary.PhaseNarrating)
 	w.execute(t, w.narrationTool, agentic.ToolCall{
 		ID: "call-" + actionID, Name: persona.NarrationToolName,

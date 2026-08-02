@@ -58,6 +58,105 @@ func TestTurnResult_FailedShapeRoundTripsThroughTheProductionDecoder(t *testing.
 	}
 }
 
+func TestCompanionResolution_ValidatesTheClosedPublicShape(t *testing.T) {
+	validHint := func() *payload.CompanionResolution {
+		return &payload.CompanionResolution{
+			CompanionID: testAlly,
+			Kind:        payload.CompanionDecisionHint,
+			HintLevel:   vocabulary.HintLevelConnect,
+		}
+	}
+
+	for name, mutate := range map[string]func(*payload.CompanionResolution){
+		"missing companion": func(r *payload.CompanionResolution) { r.CompanionID = "" },
+		"unknown kind":      func(r *payload.CompanionResolution) { r.Kind = "aside" },
+		"hint missing level": func(r *payload.CompanionResolution) {
+			r.HintLevel = ""
+		},
+		"hint unknown level": func(r *payload.CompanionResolution) {
+			r.HintLevel = "obvious"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := validHint()
+			mutate(candidate)
+			if err := candidate.Validate(); err == nil {
+				t.Fatal("invalid companion resolution was accepted")
+			}
+		})
+	}
+
+	for _, kind := range payload.CompanionDecisionKinds() {
+		t.Run(string(kind), func(t *testing.T) {
+			candidate := validHint()
+			candidate.Kind = kind
+			if kind != payload.CompanionDecisionHint {
+				candidate.HintLevel = ""
+			}
+			if err := candidate.Validate(); err != nil {
+				t.Fatalf("registered kind %q was rejected: %v", kind, err)
+			}
+		})
+	}
+}
+
+func TestCompanionResolution_HintLevelIsPresentExactlyForHint(t *testing.T) {
+	for _, kind := range payload.CompanionDecisionKinds() {
+		if kind == payload.CompanionDecisionHint {
+			continue
+		}
+		t.Run(string(kind), func(t *testing.T) {
+			resolution := &payload.CompanionResolution{
+				CompanionID: testAlly,
+				Kind:        kind,
+				HintLevel:   vocabulary.HintLevelNudge,
+			}
+			if err := resolution.Validate(); err == nil {
+				t.Fatal("a non-hint companion resolution carrying hint_level was accepted")
+			}
+		})
+	}
+}
+
+func TestTurnResult_CompanionResolutionJSONOptionality(t *testing.T) {
+	for name, tc := range map[string]struct {
+		companion   *payload.CompanionResolution
+		wantPresent bool
+	}{
+		"no companion stage summary": {companion: nil, wantPresent: false},
+		"active silent companion": {
+			companion:   &payload.CompanionResolution{CompanionID: testAlly, Kind: payload.CompanionDecisionSilent},
+			wantPresent: true,
+		},
+		"active hinting companion": {
+			companion: &payload.CompanionResolution{
+				CompanionID: testAlly, Kind: payload.CompanionDecisionHint, HintLevel: vocabulary.HintLevelConnect,
+			},
+			wantPresent: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := validTurnResult()
+			result.CompanionResolution = tc.companion
+			body, err := json.Marshal(result)
+			if err != nil {
+				t.Fatalf("marshal result: %v", err)
+			}
+			var wire map[string]json.RawMessage
+			if err := json.Unmarshal(body, &wire); err != nil {
+				t.Fatalf("decode result JSON: %v", err)
+			}
+			_, present := wire["companion_resolution"]
+			if present != tc.wantPresent {
+				t.Fatalf("companion_resolution presence = %v, want %v: %s", present, tc.wantPresent, body)
+			}
+			if _, shortened := wire["companion"]; shortened {
+				t.Fatalf("public result used the uncontracted shortened key companion: %s", body)
+			}
+		})
+	}
+}
+
 // One type, both endings, and the phase is what says which arrived. A result
 // carrying a phase the turn is still PASSING THROUGH would tell a player their
 // turn is over while it runs.

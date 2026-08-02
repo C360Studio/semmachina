@@ -299,12 +299,17 @@ func validSubmitAction() *payload.SubmitAction {
 // makes the band agreement in TurnResolution.Validate a real assertion here.
 func validTurnResult() *payload.TurnResult {
 	return &payload.TurnResult{
-		Protocol:     payload.PlayerProtocolV1,
-		TurnID:       testTurnID,
-		ActionID:     testActionID,
-		PlayerID:     testPlayerID,
-		Phase:        vocabulary.PhaseComplete,
-		Resolution:   validTurnResolution(),
+		Protocol:   payload.PlayerProtocolV1,
+		TurnID:     testTurnID,
+		ActionID:   testActionID,
+		PlayerID:   testPlayerID,
+		Phase:      vocabulary.PhaseComplete,
+		Resolution: validTurnResolution(),
+		CompanionResolution: &payload.CompanionResolution{
+			CompanionID: testAlly,
+			Kind:        payload.CompanionDecisionHint,
+			HintLevel:   vocabulary.HintLevelConnect,
+		},
 		NarrationRef: testNarrationRef,
 		ResolvedAt:   testTime,
 	}

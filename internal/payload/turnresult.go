@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/c360studio/semstreams/message"
@@ -90,6 +91,39 @@ type TurnResolution struct {
 	// in the auto band and has none; nil is that fact rather than an empty roll,
 	// which would render as a card claiming a total of zero.
 	Roll *TurnRoll `json:"roll,omitempty"`
+}
+
+// CompanionResolution is the player-facing structural summary of a committed
+// companion decision. Companion dialogue remains in the referenced narration;
+// this summary carries only the bounded fields a client can reason about.
+type CompanionResolution struct {
+	CompanionID string                `json:"companion_id"`
+	Kind        CompanionDecisionKind `json:"kind"`
+	HintLevel   vocabulary.HintLevel  `json:"hint_level,omitempty"`
+}
+
+// Validate enforces the same closed decision vocabulary as the committed
+// CompanionDecision and makes hint_level present exactly for a hint.
+func (r *CompanionResolution) Validate() error {
+	if r == nil {
+		return errors.New("companion resolution is required")
+	}
+	if err := requireEntityID("companion_id", r.CompanionID); err != nil {
+		return err
+	}
+	if !slices.Contains(companionDecisionKinds, r.Kind) {
+		return fmt.Errorf("kind %q is not a registered companion decision kind", r.Kind)
+	}
+	if r.Kind == CompanionDecisionHint {
+		if _, err := vocabulary.ParseHintLevel(string(r.HintLevel)); err != nil {
+			return fmt.Errorf("hint_level is required and must be closed when kind is hint: %w", err)
+		}
+		return nil
+	}
+	if r.HintLevel != "" {
+		return fmt.Errorf("hint_level is forbidden when kind is %q", r.Kind)
+	}
+	return nil
 }
 
 // Validate checks the closed vocabularies and — the part that matters — the
@@ -211,6 +245,11 @@ type TurnResult struct {
 	// before it died.
 	Resolution *TurnResolution `json:"resolution,omitempty"`
 
+	// CompanionResolution summarizes a committed active-companion decision.
+	// It is absent for no active bond and for an active bond with no structured
+	// trigger; even a committed silent decision remains present.
+	CompanionResolution *CompanionResolution `json:"companion_resolution,omitempty"`
+
 	// NarrationRef references the narration prose in the content store.
 	//
 	// A REFERENCE and not the prose. Prose is bulky and content-addressed, and
@@ -315,6 +354,11 @@ func (r *TurnResult) Validate() error {
 	if r.Resolution != nil {
 		if err := r.Resolution.Validate(phase == vocabulary.PhaseComplete); err != nil {
 			return fmt.Errorf("resolution: %w", err)
+		}
+	}
+	if r.CompanionResolution != nil {
+		if err := r.CompanionResolution.Validate(); err != nil {
+			return fmt.Errorf("companion_resolution: %w", err)
 		}
 	}
 	if r.ResolvedAt.IsZero() {

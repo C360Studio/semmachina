@@ -26,10 +26,12 @@ const (
 	testTemplate = "starter"
 	testPrefix   = testOrg + ".semmachina." + testWorldNS + "." + testTemplate
 
-	testCampaignID = testPrefix + ".campaign.main"
-	testSceneID    = testPrefix + ".scene.gatehouse"
-	testPlayerID   = testPrefix + ".player.pat"
-	testOtherID    = testPrefix + ".player.alex"
+	testCampaignID  = testPrefix + ".campaign.main"
+	testSceneID     = testPrefix + ".scene.gatehouse"
+	testPlayerID    = testPrefix + ".player.pat"
+	testOtherID     = testPrefix + ".player.alex"
+	testCompanionID = testPrefix + ".character.kit"
+	testBondID      = testPrefix + ".companion-bond.pat-kit"
 
 	testActionID     = "act-1"
 	testTurnID       = "turn-act-1"
@@ -108,6 +110,17 @@ func (b *turnBuilder) rolled(roll *payload.RollResult) *turnBuilder {
 
 func (b *turnBuilder) applied(batch *payload.EffectBatch) *turnBuilder {
 	return b.add(batch.Triples(b.turnEntityID, refFor(vocabulary.TurnEffectsRef, b.turnID), testSource, b.at))
+}
+
+func (b *turnBuilder) companion(record *payload.CompanionStageRecord, stageRef, decisionRef string) *turnBuilder {
+	b.add(record.Triples(b.turnEntityID, stageRef, testSource, b.at))
+	if decisionRef != "" {
+		b.triples = append(b.triples, message.Triple{
+			Subject: b.turnEntityID, Predicate: vocabulary.TurnCompanionDecisionRef.String(), Object: decisionRef,
+			Source: testSource, Timestamp: b.at, Confidence: 1, Context: b.turnEntityID,
+		})
+	}
+	return b
 }
 
 func (b *turnBuilder) narrated() *turnBuilder {
@@ -283,16 +296,21 @@ func turnIDOf(turnEntityID string) string {
 }
 
 type fakeArtifacts struct {
-	rolls      map[string]*payload.RollResult
-	narrations map[string]*content.Narration
-	rollReads  int
-	proseReads int
+	rolls              map[string]*payload.RollResult
+	narrations         map[string]*content.Narration
+	companionStages    map[string]*payload.CompanionStageRecord
+	companionDecisions map[string]*payload.CompanionDecision
+	rollReads          int
+	proseReads         int
+	companionReads     int
 }
 
 func newFakeArtifacts() *fakeArtifacts {
 	return &fakeArtifacts{
-		rolls:      map[string]*payload.RollResult{},
-		narrations: map[string]*content.Narration{},
+		rolls:              map[string]*payload.RollResult{},
+		narrations:         map[string]*content.Narration{},
+		companionStages:    map[string]*payload.CompanionStageRecord{},
+		companionDecisions: map[string]*payload.CompanionDecision{},
 	}
 }
 
@@ -312,6 +330,33 @@ func (a *fakeArtifacts) GetNarration(_ context.Context, ref content.Ref) (*conte
 		return nil, fmt.Errorf("resolve %s: %w", ref, content.ErrArtifactNotFound)
 	}
 	return narration, nil
+}
+
+func (a *fakeArtifacts) GetCompanionStageRecord(
+	_ context.Context,
+	ref content.Ref,
+) (*payload.CompanionStageRecord, error) {
+	a.companionReads++
+	record, ok := a.companionStages[ref.String()]
+	if !ok {
+		return nil, fmt.Errorf("resolve %s: %w", ref, content.ErrArtifactNotFound)
+	}
+	clone := *record
+	return &clone, nil
+}
+
+func (a *fakeArtifacts) GetCompanionDecision(
+	_ context.Context,
+	ref content.Ref,
+) (*payload.CompanionDecision, error) {
+	a.companionReads++
+	decision, ok := a.companionDecisions[ref.String()]
+	if !ok {
+		return nil, fmt.Errorf("resolve %s: %w", ref, content.ErrArtifactNotFound)
+	}
+	clone := *decision
+	clone.EvidenceRefs = append([]string(nil), decision.EvidenceRefs...)
+	return &clone, nil
 }
 
 // fakeDirectory answers the ONE question the router may ask. It deliberately
@@ -418,16 +463,35 @@ func newHarness(t *testing.T) *harness {
 
 // completedTurn stores a fully resolved turn plus the artifacts it references.
 func (h *harness) completedTurn(t *testing.T, turnID, playerID string, at time.Time) *graph.EntityState {
+	return h.completedTurnWithCompanion(t, turnID, playerID, at, &payload.CompanionStageRecord{
+		TurnID: turnID, PlayerID: playerID, Status: payload.CompanionStageNoActiveBond,
+	}, nil)
+}
+
+func (h *harness) completedTurnWithCompanion(
+	t *testing.T,
+	turnID, playerID string,
+	at time.Time,
+	record *payload.CompanionStageRecord,
+	decision *payload.CompanionDecision,
+) *graph.EntityState {
 	t.Helper()
 	verdict := testVerdict(turnID, true)
 	roll := testRoll(turnID)
 	batch := payload.NewEffectBatch(turnID, roll.Band, nil)
+	stageRef := refFor(vocabulary.TurnCompanionStageRef, turnID)
+	decisionRef := ""
+	if decision != nil {
+		decisionRef = refFor(vocabulary.TurnCompanionDecisionRef, turnID)
+		record.DecisionRef = decisionRef
+	}
 
 	state := newTurn(t, turnID).
 		accepted(playerID).
 		adjudicated(verdict).
 		rolled(roll).
 		applied(batch).
+		companion(record, stageRef, decisionRef).
 		narrated().
 		phase(vocabulary.PhaseComplete, at).
 		build()
@@ -435,6 +499,10 @@ func (h *harness) completedTurn(t *testing.T, turnID, playerID string, at time.T
 	h.graph.putTurn(state)
 	h.artifacts.rolls[refFor(vocabulary.TurnRollRef, turnID)] = roll
 	h.artifacts.narrations[refFor(vocabulary.TurnNarrationRef, turnID)] = testNarration(turnID, roll.Band)
+	h.artifacts.companionStages[stageRef] = record
+	if decision != nil {
+		h.artifacts.companionDecisions[decisionRef] = decision
+	}
 	return state
 }
 

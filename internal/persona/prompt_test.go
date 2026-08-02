@@ -31,6 +31,8 @@ func newPromptFixture(t *testing.T, turnTriples ...message.Triple) *promptFixtur
 	artifacts := newFakeArtifacts(&journal{})
 
 	actionRef := refFor(t, vocabulary.TurnActionRef)
+	knowledgeRef := refFor(t, vocabulary.TurnKnowledgeRef)
+	companionStageRef := refFor(t, vocabulary.TurnCompanionStageRef)
 	artifacts.actions[actionRef.Key] = &payload.PlayerAction{
 		ActionID:   testActionID,
 		PlayerID:   testPlayerID,
@@ -40,12 +42,20 @@ func newPromptFixture(t *testing.T, turnTriples ...message.Triple) *promptFixtur
 		ArrivedAt:  testTime,
 		Channel:    payload.ChannelBinding{Adapter: vocabulary.AdapterWebSocket, ReplyTo: "conn-1"},
 	}
+	artifacts.knowledge[knowledgeRef.Key] = &content.KnowledgeReceipt{
+		TurnID: testTurnID, Status: content.KnowledgeNotApplicable, Entries: []content.KnowledgeReceiptEntry{},
+	}
+	artifacts.companionStages[companionStageRef.Key] = &payload.CompanionStageRecord{
+		TurnID: testTurnID, PlayerID: testPlayerID, Status: payload.CompanionStageNoActiveBond,
+	}
 
 	turn := projectedEntity(testTurnEntityID, append([]message.Triple{
 		fact(vocabulary.TurnPhaseCurrent, string(vocabulary.PhaseAdjudicating)),
 		fact(vocabulary.TurnActionRef, actionRef.String()),
 		fact(vocabulary.TurnActionPlayer, testPlayerID),
 		fact(vocabulary.TurnActionScene, testSceneID),
+		fact(vocabulary.TurnKnowledgeRef, knowledgeRef.String()),
+		fact(vocabulary.TurnCompanionStageRef, companionStageRef.String()),
 	}, turnTriples...)...)
 
 	builder, err := persona.NewBuilder(artifacts)
@@ -154,6 +164,61 @@ func rollingVerdict() *payload.Verdict {
 		},
 		Rationale: "The winch will move for a crowbar, but not quietly.",
 	}
+}
+
+const narratorEvidenceID = "c360.semmachina.world1.starter.evidence.scrap"
+
+func addNarratorArtifacts(t *testing.T, fixture *promptFixture) {
+	t.Helper()
+	knowledgeRef := refFor(t, vocabulary.TurnKnowledgeRef)
+	testimonyRef := refFor(t, vocabulary.TurnNarrationRef)
+	decisionID := "case-decision-1"
+	fixture.artifacts.knowledge[knowledgeRef.Key] = &content.KnowledgeReceipt{
+		TurnID: testTurnID, DecisionID: decisionID, Status: content.KnowledgeCommitted,
+		Entries: content.SortedKnowledgeEntries([]content.KnowledgeReceiptEntry{
+			{
+				RecipientID: testCharacterID, EvidenceID: narratorEvidenceID,
+				KnowledgeID:  "c360.semmachina.world1.starter.knowledge.rook-scrap",
+				RevelationID: "c360.semmachina.world1.starter.revelation.rook-scrap",
+				TestimonyRef: testimonyRef.String(),
+			},
+			{
+				RecipientID: testSentryID, EvidenceID: "c360.semmachina.world1.starter.evidence.foreign-canary",
+				KnowledgeID:  "c360.semmachina.world1.starter.knowledge.hollis-foreign",
+				RevelationID: "c360.semmachina.world1.starter.revelation.hollis-foreign",
+			},
+		}),
+	}
+	fixture.artifacts.testimony[testimonyRef.Key] = &content.Testimony{
+		TurnID: testTurnID, DecisionID: decisionID,
+		BeliefID: "c360.semmachina.world1.starter.belief.hollis-scrap", SourceActorID: testSentryID,
+		RecipientID: testCharacterID, EvidenceID: narratorEvidenceID,
+		Stance: vocabulary.BeliefAffirms, Prose: "Hollis admits the brass scrap came from the winch.",
+	}
+	fixture.view.Neighbours = append(fixture.view.Neighbours, entityWith(narratorEvidenceID,
+		triple(narratorEvidenceID, vocabulary.WorldEntityKind, string(vocabulary.EntityKindEvidence)),
+		triple(narratorEvidenceID, vocabulary.WorldEntityName, "a stamped brass scrap"),
+	))
+
+	stageRef := refFor(t, vocabulary.TurnCompanionStageRef)
+	decisionRef := refFor(t, vocabulary.TurnCompanionDecisionRef)
+	decision := &payload.CompanionDecision{
+		TurnID: testTurnID, ContextRef: testSceneID, PlayerID: testPlayerID,
+		CompanionID: testSentryID, Kind: payload.CompanionDecisionHint,
+		HintLevel: vocabulary.HintLevelConnect, EvidenceRefs: []string{narratorEvidenceID},
+	}
+	decision.DecisionID = payload.CompanionDecisionID(
+		decision.TurnID, decision.ContextRef, decision.PlayerID, decision.CompanionID)
+	fixture.artifacts.companionDecisions[decisionRef.Key] = decision
+	fixture.artifacts.companionStages[stageRef.Key] = &payload.CompanionStageRecord{
+		TurnID: testTurnID, PlayerID: testPlayerID, CompanionID: testSentryID,
+		BondID: "c360.semmachina.world1.starter.companion-bond.solo-hollis",
+		Status: payload.CompanionStageDecision, TriggerKind: vocabulary.CompanionTriggerPlayerHint,
+		TriggerSource: vocabulary.CompanionTriggerSourceCaseDecision, DecisionRef: decisionRef.String(),
+	}
+	fixture.view.Turn.Facts = append(fixture.view.Turn.Facts, epistemic.Fact{
+		Predicate: vocabulary.TurnCompanionDecisionRef, Object: decisionRef.String(),
+	})
 }
 
 // ------------------------------------------------------------- adjudicator
@@ -450,6 +515,107 @@ func TestPromptBuilderRejectsAnOversizedSerializedProjection(t *testing.T) {
 }
 
 // ---------------------------------------------------------------- narrator
+
+func TestNarratePrompt_UsesOnlyCommittedAuthorizedRevelationAndCompanionArtifacts(t *testing.T) {
+	fixture := newPromptFixture(t,
+		fact(vocabulary.TurnRollBand, string(vocabulary.BandPartial)),
+		fact(vocabulary.TurnRollTotal, 8),
+		fact(vocabulary.TurnEffectsBatch, payload.BatchIDForTurn(testTurnID)),
+	)
+	fixture.storeVerdict(t, rollingVerdict())
+	addNarratorArtifacts(t, fixture)
+
+	request, err := fixture.builder.Narrate(t.Context(), fixture.view)
+	if err != nil {
+		t.Fatalf("Narrate: %v", err)
+	}
+	for _, want := range []string{
+		narratorEvidenceID, "a stamped brass scrap",
+		"Hollis admits the brass scrap came from the winch.",
+		testSentryID, string(payload.CompanionDecisionHint), string(vocabulary.HintLevelConnect),
+	} {
+		if !strings.Contains(request.Prompt, want) {
+			t.Fatalf("narrator prompt lacks committed authorized context %q:\n%s", want, request.Prompt)
+		}
+	}
+	if strings.Contains(request.Prompt, "foreign-canary") {
+		t.Fatalf("narrator prompt included another recipient's receipt entry:\n%s", request.Prompt)
+	}
+}
+
+func TestNarratePrompt_FailsClosedOnMissingOrMismatchedCommittedArtifacts(t *testing.T) {
+	for name, mutate := range map[string]func(*testing.T, *promptFixture){
+		"missing knowledge receipt": func(t *testing.T, f *promptFixture) {
+			delete(f.artifacts.knowledge, refFor(t, vocabulary.TurnKnowledgeRef).Key)
+		},
+		"receipt belongs to another turn": func(t *testing.T, f *promptFixture) {
+			f.artifacts.knowledge[refFor(t, vocabulary.TurnKnowledgeRef).Key].TurnID = "turn-act-2"
+		},
+		"stage belongs to another player": func(t *testing.T, f *promptFixture) {
+			f.artifacts.companionStages[refFor(t, vocabulary.TurnCompanionStageRef).Key].PlayerID =
+				"c360.semmachina.world1.starter.player.foreign"
+		},
+		"decision reference disagrees": func(t *testing.T, f *promptFixture) {
+			f.artifacts.companionStages[refFor(t, vocabulary.TurnCompanionStageRef).Key].DecisionRef =
+				"obj://TEST_CONTENT/turn/turn-act-2/companion-decision"
+		},
+		"decision cites unauthorized evidence": func(t *testing.T, f *promptFixture) {
+			f.artifacts.companionDecisions[refFor(t, vocabulary.TurnCompanionDecisionRef).Key].EvidenceRefs =
+				[]string{"c360.semmachina.world1.starter.evidence.secret-canary"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := newPromptFixture(t,
+				fact(vocabulary.TurnRollBand, string(vocabulary.BandPartial)),
+				fact(vocabulary.TurnRollTotal, 8),
+				fact(vocabulary.TurnEffectsBatch, payload.BatchIDForTurn(testTurnID)),
+			)
+			fixture.storeVerdict(t, rollingVerdict())
+			addNarratorArtifacts(t, fixture)
+			mutate(t, fixture)
+			if _, err := fixture.builder.Narrate(t.Context(), fixture.view); err == nil {
+				t.Fatal("mismatched committed artifact chain produced a narration prompt")
+			}
+		})
+	}
+}
+
+func TestNarratePrompt_DisclosesSolutionOnlyForDenouementPurpose(t *testing.T) {
+	const solutionCanary = "c360.semmachina.world1.starter.character.solution-canary"
+	for name, tc := range map[string]struct {
+		purpose      epistemic.Purpose
+		wantSolution bool
+	}{
+		"ordinary narrator":     {purpose: epistemic.PurposeNarrator},
+		"authorized denouement": {purpose: epistemic.PurposeDenouement, wantSolution: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := newPromptFixture(t,
+				fact(vocabulary.TurnRollBand, string(vocabulary.BandPartial)),
+				fact(vocabulary.TurnRollTotal, 8),
+				fact(vocabulary.TurnEffectsBatch, payload.BatchIDForTurn(testTurnID)),
+			)
+			fixture.storeVerdict(t, rollingVerdict())
+			fixture.view.Purpose = tc.purpose
+			fixture.view.HasSolution = tc.wantSolution
+			if tc.wantSolution {
+				fixture.view.Solution = epistemic.Solution{
+					Culprit: solutionCanary,
+					Method:  "c360.semmachina.world1.starter.item.solution-method-canary",
+					Motive:  "c360.semmachina.world1.starter.item.solution-motive-canary",
+				}
+			}
+			request, err := fixture.builder.Narrate(t.Context(), fixture.view)
+			if err != nil {
+				t.Fatalf("Narrate: %v", err)
+			}
+			if strings.Contains(request.Prompt, solutionCanary) != tc.wantSolution {
+				t.Fatalf("solution canary presence = %v, want %v:\n%s",
+					strings.Contains(request.Prompt, solutionCanary), tc.wantSolution, request.Prompt)
+			}
+		})
+	}
+}
 
 func TestNarratePrompt_CarriesTheCommittedOutcomeAndTheChangeItMade(t *testing.T) {
 	fixture := newPromptFixture(t,

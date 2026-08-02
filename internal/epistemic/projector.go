@@ -376,10 +376,14 @@ func (p *Projector) hydrate(ctx context.Context, ids []string) ([]graph.EntitySt
 }
 
 func publicProjection(view *scene.View, purpose Purpose) *Projection {
+	turnPredicates := publicTurnPredicates
+	if purpose == PurposeNarrator || purpose == PurposeDenouement {
+		turnPredicates = narrationTurnPredicates
+	}
 	projection := &Projection{
 		Purpose: purpose, TurnID: view.TurnID, TurnEntityID: view.TurnEntityID, SceneID: view.SceneID,
 		Actor: Actor{PlayerID: view.Actor.PlayerID, CharacterID: view.Actor.CharacterID},
-		Turn:  projectSceneEntity(view.Turn, publicTurnPredicates),
+		Turn:  projectSceneEntity(view.Turn, turnPredicates),
 		Scene: projectSceneEntity(view.Scene, publicWorldPredicates),
 	}
 	for _, member := range view.Members {
@@ -555,6 +559,17 @@ var publicTurnPredicates = predicateSet(
 	vocabulary.TurnFailureReason,
 	vocabulary.TurnFailureRef,
 )
+
+var narrationTurnPredicates = func() map[vocabulary.Predicate]bool {
+	allowed := make(map[vocabulary.Predicate]bool, len(publicTurnPredicates)+3)
+	for predicate := range publicTurnPredicates {
+		allowed[predicate] = true
+	}
+	allowed[vocabulary.TurnKnowledgeRef] = true
+	allowed[vocabulary.TurnCompanionStageRef] = true
+	allowed[vocabulary.TurnCompanionDecisionRef] = true
+	return allowed
+}()
 
 var evidencePredicates = predicateSet(
 	vocabulary.WorldEntityName,

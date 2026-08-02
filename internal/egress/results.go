@@ -71,13 +71,15 @@ type TurnReader interface {
 
 // ArtifactReader resolves the references a result carries.
 //
-// Two methods, and only two, because those are the artifacts a PLAYER is shown:
-// the roll behind the resolution card, and the prose. The verdict body, the
-// effect batch and the stored action are never delivered, so this package is not
-// given a way to fetch them.
+// These are only the artifacts needed to compose the public result: the roll
+// behind the resolution card, the prose, and the exact prose-free companion
+// stage/decision chain behind an optional companion summary. The verdict body,
+// effect batch and stored action are never delivered.
 type ArtifactReader interface {
 	GetRoll(ctx context.Context, ref content.Ref) (*payload.RollResult, error)
 	GetNarration(ctx context.Context, ref content.Ref) (*content.Narration, error)
+	GetCompanionStageRecord(ctx context.Context, ref content.Ref) (*payload.CompanionStageRecord, error)
+	GetCompanionDecision(ctx context.Context, ref content.Ref) (*payload.CompanionDecision, error)
 }
 
 // The claims above, enforced by the compiler rather than by doc comments.
@@ -424,10 +426,100 @@ func (r *Results) compose(
 	if result.Resolution, err = r.resolution(ctx, state, manifest); err != nil {
 		return nil, err
 	}
+	if result.CompanionResolution, err = r.companionResolution(ctx, state, manifest); err != nil {
+		return nil, err
+	}
 	if err := result.Validate(); err != nil {
 		return nil, fmt.Errorf("turn %s does not compose a coherent result: %w", turnEntityID, err)
 	}
 	return result, nil
+}
+
+func (r *Results) companionResolution(
+	ctx context.Context,
+	state *graph.EntityState,
+	manifest *payload.TurnManifest,
+) (*payload.CompanionResolution, error) {
+	stageReference, err := soleString(state, vocabulary.TurnCompanionStageRef)
+	if err != nil {
+		return nil, err
+	}
+	if stageReference == "" {
+		if manifest.Phase == vocabulary.PhaseComplete {
+			return nil, fmt.Errorf("complete turn %s carries no %s",
+				manifest.TurnID, vocabulary.TurnCompanionStageRef)
+		}
+		return nil, nil
+	}
+	stageRef, err := content.ParseRef(stageReference)
+	if err != nil {
+		return nil, fmt.Errorf("turn %s records an unresolvable companion stage reference: %w", manifest.TurnID, err)
+	}
+	record, err := r.artifacts.GetCompanionStageRecord(ctx, stageRef)
+	if err != nil {
+		return nil, fmt.Errorf("resolve the companion stage for turn %s: %w", manifest.TurnID, err)
+	}
+	if err := record.Validate(); err != nil {
+		return nil, fmt.Errorf("turn %s companion stage at %s is invalid: %w", manifest.TurnID, stageRef, err)
+	}
+	if record.TurnID != manifest.TurnID || record.PlayerID != manifest.PlayerID {
+		return nil, fmt.Errorf(
+			"companion stage at %s belongs to turn %s/player %s, not turn %s/player %s",
+			stageRef, record.TurnID, record.PlayerID, manifest.TurnID, manifest.PlayerID)
+	}
+
+	decisionReference, err := soleString(state, vocabulary.TurnCompanionDecisionRef)
+	if err != nil {
+		return nil, err
+	}
+	switch record.Status {
+	case payload.CompanionStageNoActiveBond, payload.CompanionStageNoTrigger:
+		if decisionReference != "" {
+			return nil, fmt.Errorf(
+				"turn %s companion stage status %q forbids decision reference %s",
+				manifest.TurnID, record.Status, decisionReference)
+		}
+		return nil, nil
+	case payload.CompanionStageDecision, payload.CompanionStageExhausted:
+		if decisionReference == "" {
+			return nil, fmt.Errorf("turn %s companion stage status %q requires a decision reference",
+				manifest.TurnID, record.Status)
+		}
+	default:
+		return nil, fmt.Errorf("turn %s companion stage has unsupported status %q", manifest.TurnID, record.Status)
+	}
+	if decisionReference != record.DecisionRef {
+		return nil, fmt.Errorf(
+			"turn %s companion decision reference %s disagrees with stage record reference %s",
+			manifest.TurnID, decisionReference, record.DecisionRef)
+	}
+	decisionRef, err := content.ParseRef(decisionReference)
+	if err != nil {
+		return nil, fmt.Errorf("turn %s records an unresolvable companion decision reference: %w", manifest.TurnID, err)
+	}
+	decision, err := r.artifacts.GetCompanionDecision(ctx, decisionRef)
+	if err != nil {
+		return nil, fmt.Errorf("resolve the companion decision for turn %s: %w", manifest.TurnID, err)
+	}
+	if err := decision.Validate(); err != nil {
+		return nil, fmt.Errorf("turn %s companion decision at %s is invalid: %w", manifest.TurnID, decisionRef, err)
+	}
+	if decision.TurnID != manifest.TurnID || decision.PlayerID != manifest.PlayerID ||
+		decision.CompanionID != record.CompanionID {
+		return nil, fmt.Errorf(
+			"companion decision at %s has turn/player/companion %s/%s/%s, want %s/%s/%s",
+			decisionRef, decision.TurnID, decision.PlayerID, decision.CompanionID,
+			manifest.TurnID, manifest.PlayerID, record.CompanionID)
+	}
+	summary := &payload.CompanionResolution{
+		CompanionID: decision.CompanionID,
+		Kind:        decision.Kind,
+		HintLevel:   decision.HintLevel,
+	}
+	if err := summary.Validate(); err != nil {
+		return nil, fmt.Errorf("turn %s companion summary is invalid: %w", manifest.TurnID, err)
+	}
+	return summary, nil
 }
 
 // resolution builds the resolution card's data, or nil for a turn that was never

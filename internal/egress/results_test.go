@@ -2,6 +2,8 @@ package egress_test
 
 import (
 	"errors"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +16,139 @@ import (
 	"github.com/c360studio/semmachina/internal/turn"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
+
+func committedCompanion(
+	turnID, playerID string,
+	kind payload.CompanionDecisionKind,
+	hint vocabulary.HintLevel,
+) (*payload.CompanionStageRecord, *payload.CompanionDecision) {
+	decision := &payload.CompanionDecision{
+		TurnID: turnID, ContextRef: testSceneID, PlayerID: playerID, CompanionID: testCompanionID,
+		Kind: kind, HintLevel: hint, EvidenceRefs: []string{},
+	}
+	decision.DecisionID = payload.CompanionDecisionID(turnID, testSceneID, playerID, testCompanionID)
+	record := &payload.CompanionStageRecord{
+		TurnID: turnID, PlayerID: playerID, CompanionID: testCompanionID, BondID: testBondID,
+		Status: payload.CompanionStageDecision, TriggerKind: vocabulary.CompanionTriggerWarning,
+		TriggerSource: vocabulary.CompanionTriggerSourceResolvedRisk,
+	}
+	return record, decision
+}
+
+func TestByTurn_CompanionResolutionFollowsTheExactCommittedStage(t *testing.T) {
+	for name, tc := range map[string]struct {
+		record   *payload.CompanionStageRecord
+		decision *payload.CompanionDecision
+		want     *payload.CompanionResolution
+	}{
+		"no active bond is omitted": {
+			record: &payload.CompanionStageRecord{
+				TurnID: testTurnID, PlayerID: testPlayerID, Status: payload.CompanionStageNoActiveBond,
+			},
+		},
+		"active bond without trigger is omitted": {
+			record: &payload.CompanionStageRecord{
+				TurnID: testTurnID, PlayerID: testPlayerID, CompanionID: testCompanionID, BondID: testBondID,
+				Status: payload.CompanionStageNoTrigger, TriggerKind: vocabulary.CompanionTriggerNone,
+				TriggerSource: vocabulary.CompanionTriggerSourceNone,
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			h.completedTurnWithCompanion(t, testTurnID, testPlayerID, testTime, tc.record, tc.decision)
+			got := h.mustDeliver(t, testTurnID).Result.CompanionResolution
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("companion resolution = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+
+	for name, tc := range map[string]struct {
+		kind payload.CompanionDecisionKind
+		hint vocabulary.HintLevel
+	}{
+		"active silent decision remains present": {kind: payload.CompanionDecisionSilent},
+		"hint preserves its level":               {kind: payload.CompanionDecisionHint, hint: vocabulary.HintLevelConnect},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			record, decision := committedCompanion(testTurnID, testPlayerID, tc.kind, tc.hint)
+			if tc.kind == payload.CompanionDecisionHint {
+				decision.EvidenceRefs = []string{testPrefix + ".evidence.scrap"}
+			}
+			h.completedTurnWithCompanion(t, testTurnID, testPlayerID, testTime, record, decision)
+
+			got := h.mustDeliver(t, testTurnID).Result.CompanionResolution
+			want := &payload.CompanionResolution{CompanionID: testCompanionID, Kind: tc.kind, HintLevel: tc.hint}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("companion resolution = %#v, want %#v", got, want)
+			}
+		})
+	}
+}
+
+func TestByTurn_CompanionResolutionIsIdenticalAcrossRetrievalKeys(t *testing.T) {
+	h := newHarness(t)
+	record, decision := committedCompanion(testTurnID, testPlayerID, payload.CompanionDecisionSilent, "")
+	h.completedTurnWithCompanion(t, testTurnID, testPlayerID, testTime, record, decision)
+
+	byTurn := h.mustDeliver(t, testTurnID)
+	byAction, err := h.results.ByAction(t.Context(), testActionID)
+	if err != nil {
+		t.Fatalf("ByAction: %v", err)
+	}
+	if !reflect.DeepEqual(byTurn.Result, byAction.Result) {
+		t.Fatalf("canonical result changed across retrieval paths:\nby turn: %#v\nby action: %#v", byTurn.Result, byAction.Result)
+	}
+}
+
+func TestByTurn_CompanionArtifactsFailClosedOnMissingOrMismatchedIdentity(t *testing.T) {
+	mutations := map[string]func(*harness, *payload.CompanionStageRecord, *payload.CompanionDecision){
+		"missing stage artifact": func(h *harness, _ *payload.CompanionStageRecord, _ *payload.CompanionDecision) {
+			delete(h.artifacts.companionStages, refFor(vocabulary.TurnCompanionStageRef, testTurnID))
+		},
+		"stage belongs to another player": func(_ *harness, record *payload.CompanionStageRecord, _ *payload.CompanionDecision) {
+			record.PlayerID = testOtherID
+		},
+		"decision belongs to another turn": func(_ *harness, _ *payload.CompanionStageRecord, decision *payload.CompanionDecision) {
+			decision.TurnID = "turn-act-2"
+		},
+		"decision names another companion": func(_ *harness, _ *payload.CompanionStageRecord, decision *payload.CompanionDecision) {
+			decision.CompanionID = testPrefix + ".character.wren"
+		},
+		"decision reference disagrees with stage": func(_ *harness, record *payload.CompanionStageRecord, _ *payload.CompanionDecision) {
+			record.DecisionRef = refFor(vocabulary.TurnCompanionDecisionRef, "turn-act-2")
+		},
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			record, decision := committedCompanion(testTurnID, testPlayerID, payload.CompanionDecisionSilent, "")
+			h.completedTurnWithCompanion(t, testTurnID, testPlayerID, testTime, record, decision)
+			mutate(h, record, decision)
+			if _, err := h.results.ByTurn(t.Context(), testTurnID); err == nil {
+				t.Fatal("malformed companion artifact chain composed a public result")
+			}
+		})
+	}
+}
+
+func TestByTurn_CompleteTurnWithoutACompanionStageReferenceFailsClosed(t *testing.T) {
+	h := newHarness(t)
+	state := h.completedTurn(t, testTurnID, testPlayerID, testTime)
+	state.Triples = slices.DeleteFunc(state.Triples, func(triple message.Triple) bool {
+		return triple.Predicate == vocabulary.TurnCompanionStageRef.String()
+	})
+
+	_, err := h.results.ByTurn(t.Context(), testTurnID)
+	if err == nil {
+		t.Fatal("a complete turn with no companion-stage reference composed a public result")
+	}
+	if !strings.Contains(err.Error(), vocabulary.TurnCompanionStageRef.String()) {
+		t.Fatalf("missing-stage failure %q does not name %s", err, vocabulary.TurnCompanionStageRef)
+	}
+}
 
 func TestByTurn_ComposesTheWholeResolutionCardFromDurableState(t *testing.T) {
 	h := newHarness(t)
@@ -236,15 +371,21 @@ func TestByTurn_AnswersForBothShapesOfFailedTurn(t *testing.T) {
 func TestByTurn_ANoRollTurnBandsAutoAndCarriesNoDice(t *testing.T) {
 	h := newHarness(t)
 	verdict := testVerdict(testTurnID, false)
+	stageRef := refFor(vocabulary.TurnCompanionStageRef, testTurnID)
+	companionRecord := &payload.CompanionStageRecord{
+		TurnID: testTurnID, PlayerID: testPlayerID, Status: payload.CompanionStageNoActiveBond,
+	}
 	h.graph.putTurn(newTurn(t, testTurnID).
 		accepted(testPlayerID).
 		adjudicated(verdict).
 		applied(payload.NewEffectBatch(testTurnID, vocabulary.BandAuto, nil)).
+		companion(companionRecord, stageRef, "").
 		narrated().
 		phase(vocabulary.PhaseComplete, testTime).
 		build())
 	h.artifacts.narrations[refFor(vocabulary.TurnNarrationRef, testTurnID)] =
 		testNarration(testTurnID, vocabulary.BandAuto)
+	h.artifacts.companionStages[stageRef] = companionRecord
 
 	delivery := h.mustDeliver(t, testTurnID)
 	if delivery.Result.Resolution.Band != vocabulary.BandAuto {

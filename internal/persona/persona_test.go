@@ -66,11 +66,15 @@ func (j *journal) add(entry string) { j.entries = append(j.entries, entry) }
 type fakeArtifacts struct {
 	journal *journal
 
-	actions    map[string]*payload.PlayerAction
-	verdicts   map[string]*payload.Verdict
-	decisions  map[string]*payload.CaseDecisionRecord
-	narrations map[string]*content.Narration
-	failures   map[string]*content.FailureDetail
+	actions            map[string]*payload.PlayerAction
+	verdicts           map[string]*payload.Verdict
+	decisions          map[string]*payload.CaseDecisionRecord
+	knowledge          map[string]*content.KnowledgeReceipt
+	testimony          map[string]*content.Testimony
+	companionStages    map[string]*payload.CompanionStageRecord
+	companionDecisions map[string]*payload.CompanionDecision
+	narrations         map[string]*content.Narration
+	failures           map[string]*content.FailureDetail
 
 	verdictErr   error
 	narrationErr error
@@ -83,12 +87,16 @@ type fakeArtifacts struct {
 
 func newFakeArtifacts(j *journal) *fakeArtifacts {
 	return &fakeArtifacts{
-		journal:    j,
-		actions:    map[string]*payload.PlayerAction{},
-		verdicts:   map[string]*payload.Verdict{},
-		decisions:  map[string]*payload.CaseDecisionRecord{},
-		narrations: map[string]*content.Narration{},
-		failures:   map[string]*content.FailureDetail{},
+		journal:            j,
+		actions:            map[string]*payload.PlayerAction{},
+		verdicts:           map[string]*payload.Verdict{},
+		decisions:          map[string]*payload.CaseDecisionRecord{},
+		knowledge:          map[string]*content.KnowledgeReceipt{},
+		testimony:          map[string]*content.Testimony{},
+		companionStages:    map[string]*payload.CompanionStageRecord{},
+		companionDecisions: map[string]*payload.CompanionDecision{},
+		narrations:         map[string]*content.Narration{},
+		failures:           map[string]*content.FailureDetail{},
 	}
 }
 
@@ -203,6 +211,53 @@ func (a *fakeArtifacts) GetAction(_ context.Context, ref content.Ref) (*payload.
 		return nil, fmt.Errorf("resolve %s: %w", ref, content.ErrArtifactNotFound)
 	}
 	return stored, nil
+}
+
+func (a *fakeArtifacts) GetKnowledgeReceipt(
+	_ context.Context,
+	ref content.Ref,
+) (*content.KnowledgeReceipt, error) {
+	stored, ok := a.knowledge[ref.Key]
+	if !ok {
+		return nil, fmt.Errorf("resolve %s: %w", ref, content.ErrArtifactNotFound)
+	}
+	clone := *stored
+	clone.Entries = append([]content.KnowledgeReceiptEntry(nil), stored.Entries...)
+	return &clone, nil
+}
+
+func (a *fakeArtifacts) GetTestimony(_ context.Context, ref content.Ref) (*content.Testimony, error) {
+	stored, ok := a.testimony[ref.Key]
+	if !ok {
+		return nil, fmt.Errorf("resolve %s: %w", ref, content.ErrArtifactNotFound)
+	}
+	clone := *stored
+	return &clone, nil
+}
+
+func (a *fakeArtifacts) GetCompanionStageRecord(
+	_ context.Context,
+	ref content.Ref,
+) (*payload.CompanionStageRecord, error) {
+	stored, ok := a.companionStages[ref.Key]
+	if !ok {
+		return nil, fmt.Errorf("resolve %s: %w", ref, content.ErrArtifactNotFound)
+	}
+	clone := *stored
+	return &clone, nil
+}
+
+func (a *fakeArtifacts) GetCompanionDecision(
+	_ context.Context,
+	ref content.Ref,
+) (*payload.CompanionDecision, error) {
+	stored, ok := a.companionDecisions[ref.Key]
+	if !ok {
+		return nil, fmt.Errorf("resolve %s: %w", ref, content.ErrArtifactNotFound)
+	}
+	clone := *stored
+	clone.EvidenceRefs = append([]string(nil), stored.EvidenceRefs...)
+	return &clone, nil
 }
 
 func (a *fakeArtifacts) PutFailureDetail(

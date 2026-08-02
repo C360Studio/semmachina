@@ -309,6 +309,36 @@ func TestClosedPurposeCanaryMatrix(t *testing.T) {
 	}
 }
 
+func TestNarrationPurposesAloneReceiveCommittedKnowledgeAndCompanionReferences(t *testing.T) {
+	refs := map[vocabulary.Predicate]string{
+		vocabulary.TurnKnowledgeRef:         "obj://SEMMACHINA_CONTENT/turn/turn-act-1/knowledge",
+		vocabulary.TurnCompanionStageRef:    "obj://SEMMACHINA_CONTENT/turn/turn-act-1/companion-stage",
+		vocabulary.TurnCompanionDecisionRef: "obj://SEMMACHINA_CONTENT/turn/turn-act-1/companion-decision",
+	}
+	for purpose, audience := range map[epistemic.Purpose]epistemic.AuthenticatedAudience{
+		epistemic.PurposePublicAdjudicator: publicAudience(),
+		epistemic.PurposeNarrator:          narratorAudience(),
+	} {
+		t.Run(string(purpose), func(t *testing.T) {
+			scenes, graphReader := fixture()
+			for predicate, ref := range refs {
+				scenes.view.Turn.Triples = append(scenes.view.Turn.Triples, fact(predicate, ref))
+			}
+			projection := mustProject(t, scenes, graphReader, audience)
+			for predicate, want := range refs {
+				got := projection.Turn.Objects(predicate)
+				if purpose == epistemic.PurposeNarrator {
+					if len(got) != 1 || got[0] != want {
+						t.Fatalf("narrator %s = %v, want exact committed ref %q", predicate, got, want)
+					}
+				} else if len(got) != 0 {
+					t.Fatalf("%s projection received narrator-only %s = %v", purpose, predicate, got)
+				}
+			}
+		})
+	}
+}
+
 func TestScopedCaseAndBeliefsIgnoreASecondWorld(t *testing.T) {
 	const (
 		foreignCase     = "other.semmachina.world.pack.case.foreign"
