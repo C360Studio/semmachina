@@ -64,8 +64,12 @@ func TestRuleProcessorConfig_ComposesOnlySelectedMechanicsAfterFixedEngineRules(
 	normalized := got
 	normalized.InlineRules = baseline.InlineRules
 	normalized.EntityWatchBuckets = baseline.EntityWatchBuckets
+	if !got.EnableGraphIntegration {
+		t.Fatal("selected remove_triple mechanics did not enable the processor's graph mutation lane")
+	}
+	normalized.EnableGraphIntegration = baseline.EnableGraphIntegration
 	if !reflect.DeepEqual(normalized, baseline) {
-		t.Fatal("world mechanics changed fixed processor settings outside inline rules and watch patterns")
+		t.Fatal("world mechanics changed fixed processor settings outside inline rules, watch patterns, and the required graph lane")
 	}
 	if gotIDs := []string{
 		got.InlineRules[len(baseline.InlineRules)].ID,
@@ -77,6 +81,83 @@ func TestRuleProcessorConfig_ComposesOnlySelectedMechanicsAfterFixedEngineRules(
 		if definition.ID == "unselected-runtime-invalid" {
 			t.Fatal("an unselected mechanics file entered the runtime rule configuration")
 		}
+	}
+}
+
+func TestRuleProcessorConfig_EnablesGraphIntegrationOnlyForGraphMutatingSelectedActions(t *testing.T) {
+	registerRuleSelectionPredicates(t)
+	for _, tc := range []struct {
+		name      string
+		action    string
+		wantGraph bool
+	}{
+		{
+			name:      "remove triple",
+			action:    `{"type":"remove_triple","predicate":"world.location.current","max_iterations":1}`,
+			wantGraph: true,
+		},
+		{
+			name:      "ordinary publish",
+			action:    `{"type":"publish","subject":"world.gatehouse.bell","max_iterations":1}`,
+			wantGraph: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			definition := fmt.Sprintf(`{"id":"selected-action","type":"expression","name":"selected action",`+
+				`"enabled":true,"entity":{"pattern":"*.semmachina.*.*.item.*"},`+
+				`"conditions":[{"field":"item.attribute.quantity","operator":"lte","value":0}],`+
+				`"logic":"and","on_enter":[%s]}`, tc.action)
+			engine := ruleSelectionEngine(t, []string{"rules/selected.json"}, map[string]string{
+				"rules/selected.json": definition,
+			})
+			raw, err := engine.ruleProcessorConfig()
+			if err != nil {
+				t.Fatalf("ruleProcessorConfig: %v", err)
+			}
+			var config rule.Config
+			if err := json.Unmarshal(raw, &config); err != nil {
+				t.Fatalf("decode composed config: %v", err)
+			}
+			if config.EnableGraphIntegration != tc.wantGraph {
+				t.Fatalf("EnableGraphIntegration = %t, want %t", config.EnableGraphIntegration, tc.wantGraph)
+			}
+		})
+	}
+}
+
+func TestDefinitionMutatesGraph_InspectsEveryExecutableActionList(t *testing.T) {
+	graphActions := []string{
+		rule.ActionTypeAddTriple,
+		rule.ActionTypeRemoveTriple,
+		rule.ActionTypeUpdateTriple,
+		rule.ActionTypeReplaceOwned,
+	}
+	for _, actionType := range graphActions {
+		action := rule.Action{Type: actionType}
+		for _, tc := range []struct {
+			name string
+			set  func(*rule.Definition)
+		}{
+			{"on_enter", func(def *rule.Definition) { def.OnEnter = []rule.Action{action} }},
+			{"on_exit", func(def *rule.Definition) { def.OnExit = []rule.Action{action} }},
+			{"while_true", func(def *rule.Definition) { def.WhileTrue = []rule.Action{action} }},
+			{"on_recovery", func(def *rule.Definition) { def.OnRecovery = []rule.Action{action} }},
+			{"cron actions", func(def *rule.Definition) { def.Actions = []rule.Action{action} }},
+		} {
+			t.Run(actionType+"/"+tc.name, func(t *testing.T) {
+				var definition rule.Definition
+				tc.set(&definition)
+				if !definitionMutatesGraph(definition) {
+					t.Fatal("graph-mutating action was missed")
+				}
+			})
+		}
+	}
+	if definitionMutatesGraph(rule.Definition{
+		OnEnter: []rule.Action{{Type: rule.ActionTypePublish}},
+		OnExit:  []rule.Action{{Type: rule.ActionTypeUpdateKV}},
+	}) {
+		t.Fatal("non-graph actions enabled graph integration")
 	}
 }
 

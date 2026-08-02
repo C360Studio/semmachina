@@ -1,0 +1,22 @@
+version: 1
+defaults:
+  persona_pack: default
+  mechanics_pack: default
+persona_packs:
+  default:
+    files:
+      - personas/adjudicator.json
+      - personas/companion.json
+      - personas/narrator.json
+  alternate:
+    files:
+      - personas/adjudicator.json
+      - personas/companion.json
+      - personas/narrator-alternate.json
+mechanics_packs:
+  default:
+    files:
+      - rules/10-wounded-earns-mercy.json
+  alternate:
+    files:
+      - rules/20-wounded-drops-gear.json

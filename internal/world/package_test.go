@@ -1,7 +1,9 @@
 package world_test
 
 import (
+	"encoding/json"
 	"io/fs"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -386,6 +388,153 @@ func TestStarterWorld_ResolvesIntoAValidPlan(t *testing.T) {
 	}
 }
 
+func TestStarterWorld_DeclaresTwoSelectableExperiencePairs(t *testing.T) {
+	pkg := starterPackage(t)
+	if pkg.Catalog.DefaultPersonaPack != "default" || pkg.Catalog.DefaultMechanicsPack != "default" {
+		t.Fatalf("starter defaults = persona %q mechanics %q, want default/default",
+			pkg.Catalog.DefaultPersonaPack, pkg.Catalog.DefaultMechanicsPack)
+	}
+	wantPersonas := map[string][]string{
+		"default": {
+			"personas/adjudicator.json", "personas/companion.json", "personas/narrator.json",
+		},
+		"alternate": {
+			"personas/adjudicator.json", "personas/companion.json", "personas/narrator-alternate.json",
+		},
+	}
+	wantMechanics := map[string][]string{
+		"default":   {"rules/10-wounded-earns-mercy.json"},
+		"alternate": {"rules/20-wounded-drops-gear.json"},
+	}
+	for name, want := range wantPersonas {
+		if got := pkg.Catalog.PersonaPacks[name]; !slices.Equal(got, want) {
+			t.Errorf("persona pack %q = %v, want %v", name, got, want)
+		}
+	}
+	for name, want := range wantMechanics {
+		if got := pkg.Catalog.MechanicsPacks[name]; !slices.Equal(got, want) {
+			t.Errorf("mechanics pack %q = %v, want %v", name, got, want)
+		}
+	}
+
+	for _, tc := range []struct {
+		pack, narrator, marker, absentMarker, mechanic string
+	}{
+		{"default", "personas/narrator.json", "[starter-narrator:plain]", "[starter-narrator:alternate]", "rules/10-wounded-earns-mercy.json"},
+		{"alternate", "personas/narrator-alternate.json", "[starter-narrator:alternate]", "[starter-narrator:plain]", "rules/20-wounded-drops-gear.json"},
+	} {
+		plan, err := pkg.Resolve(world.InstanceConfig{
+			Org: "c360", WorldNS: "fixture-" + tc.pack,
+			Player:     world.PlayerBinding{LocalID: "p1", Name: "Coby", Character: "local:rook"},
+			Experience: world.ExperienceSelection{PersonaPack: tc.pack, MechanicsPack: tc.pack},
+		})
+		if err != nil {
+			t.Fatalf("resolve %s experience: %v", tc.pack, err)
+		}
+		if plan.Experience.PersonaPack != tc.pack || plan.Experience.MechanicsPack != tc.pack ||
+			!slices.Equal(plan.Experience.MechanicsFiles, []string{tc.mechanic}) {
+			t.Errorf("resolved %s experience = %+v", tc.pack, plan.Experience)
+		}
+		data, err := fs.ReadFile(mustStarterFS(t), tc.narrator)
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.narrator, err)
+		}
+		var narrator struct {
+			ID      string `json:"id"`
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(data, &narrator); err != nil {
+			t.Fatalf("decode %s: %v", tc.narrator, err)
+		}
+		if narrator.ID != "starter/narrator" {
+			t.Errorf("%s id = %q, want starter/narrator so serial boot replaces the record", tc.narrator, narrator.ID)
+		}
+		if !strings.Contains(narrator.Content, tc.marker) || strings.Contains(narrator.Content, tc.absentMarker) {
+			t.Errorf("%s content does not uniquely carry marker %q", tc.narrator, tc.marker)
+		}
+	}
+}
+
+func TestStarterWorld_ExperienceMechanicsAreSingleBoundedWorldReactions(t *testing.T) {
+	fsys := mustStarterFS(t)
+	for _, tc := range []struct {
+		file, id, predicate string
+	}{
+		{"rules/10-wounded-earns-mercy.json", "starter_wounded_earns_mercy", "world.relation.hostile-to"},
+		{"rules/20-wounded-drops-gear.json", "starter_wounded_drops_gear", "world.relation.carries"},
+	} {
+		data, err := fs.ReadFile(fsys, tc.file)
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.file, err)
+		}
+		var definition struct {
+			ID      string `json:"id"`
+			Type    string `json:"type"`
+			Enabled bool   `json:"enabled"`
+			Entity  struct {
+				Pattern string `json:"pattern"`
+			} `json:"entity"`
+			Conditions []struct {
+				Field, Operator string
+				Value           any
+			} `json:"conditions"`
+			OnEnter []struct {
+				Type, Predicate string
+				MaxIterations   *int `json:"max_iterations"`
+			} `json:"on_enter"`
+			WhileTrue       []any `json:"while_true"`
+			OnRecovery      []any `json:"on_recovery"`
+			RerunOnRecovery bool  `json:"rerun_on_recovery"`
+		}
+		if err := json.Unmarshal(data, &definition); err != nil {
+			t.Fatalf("decode %s: %v", tc.file, err)
+		}
+		if definition.ID != tc.id || definition.Type != "expression" || !definition.Enabled {
+			t.Errorf("%s identity/type/enabled = %q/%q/%t", tc.file, definition.ID, definition.Type, definition.Enabled)
+		}
+		if definition.Entity.Pattern != "*.semmachina.*.*.character.rook" {
+			t.Errorf("%s pattern = %q", tc.file, definition.Entity.Pattern)
+		}
+		if len(definition.Conditions) != 1 || definition.Conditions[0].Field != "character.status.current" ||
+			definition.Conditions[0].Operator != "eq" || definition.Conditions[0].Value != "wounded" {
+			t.Errorf("%s conditions = %+v", tc.file, definition.Conditions)
+		}
+		if len(definition.OnEnter) != 1 || definition.OnEnter[0].Type != "remove_triple" ||
+			definition.OnEnter[0].Predicate != tc.predicate || definition.OnEnter[0].MaxIterations == nil ||
+			*definition.OnEnter[0].MaxIterations != 1 {
+			t.Errorf("%s on_enter = %+v", tc.file, definition.OnEnter)
+		}
+		if len(definition.WhileTrue) != 0 || len(definition.OnRecovery) != 0 || definition.RerunOnRecovery {
+			t.Errorf("%s declares a recovery/repeat path", tc.file)
+		}
+	}
+}
+
+func TestStarterWorld_NorthRoadRemainsATopologyOnlyControl(t *testing.T) {
+	pkg := starterPackage(t)
+	for _, entity := range pkg.Entities {
+		if entity.LocalID != "north-road" {
+			continue
+		}
+		for _, fact := range entity.Facts {
+			if fact.Predicate == vocabulary.GeoLocationLatitude || fact.Predicate == vocabulary.GeoLocationLongitude {
+				t.Fatalf("north-road carries coordinate %s; it must remain the topology-only control", fact.Predicate)
+			}
+		}
+		return
+	}
+	t.Fatal("starter world has no north-road location")
+}
+
+func mustStarterFS(t *testing.T) fs.FS {
+	t.Helper()
+	fsys, err := fixtures.StarterWorld()
+	if err != nil {
+		t.Fatalf("fixtures.StarterWorld: %v", err)
+	}
+	return fsys
+}
+
 // Embedding is the reason a binary can ship a world at all, so the embed must
 // carry the whole package and not, say, silently drop a dotfile-adjacent
 // directory.
@@ -397,9 +546,14 @@ func TestFixtures_EmbedCarriesTheWholeStarterPackage(t *testing.T) {
 	for _, name := range []string{
 		world.ManifestFile,
 		world.EntitiesFile,
+		world.PacksFile,
 		"rules/00-spent-supplies.json",
+		"rules/10-wounded-earns-mercy.json",
+		"rules/20-wounded-drops-gear.json",
 		"personas/adjudicator.json",
+		"personas/companion.json",
 		"personas/narrator.json",
+		"personas/narrator-alternate.json",
 	} {
 		if _, err := fs.Stat(fsys, name); err != nil {
 			t.Fatalf("embedded starter world is missing %s: %v", name, err)

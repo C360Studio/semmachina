@@ -154,6 +154,13 @@ func withCampaignSeed(seed campaign.Seed) worldOption {
 	return func(cfg *boot.Config) { cfg.CampaignSeed = seed }
 }
 
+// withExperience selects one package-authored voice/mechanics pair before boot.
+func withExperience(personaPack, mechanicsPack string) worldOption {
+	return func(cfg *boot.Config) {
+		cfg.Experience = boot.ExperienceConfig{PersonaPack: personaPack, MechanicsPack: mechanicsPack}
+	}
+}
+
 // newWorld builds an instance and boots it.
 //
 // The namespace is the caller's and is fixed per test rather than generated,

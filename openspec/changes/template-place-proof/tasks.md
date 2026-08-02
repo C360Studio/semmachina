@@ -69,13 +69,26 @@
 
 ## 5. Template and Tunability Acceptance
 
-- [ ] 5.1 Author two persona packs and two bounded mechanics overlays in the unchanged starter
+- [x] 5.1 Author two persona packs and two bounded mechanics overlays in the unchanged starter
   template, including one topology-only location as an optional-geometry control
-- [ ] 5.2 Add one deterministic integration/E2E proof that two namespaces instantiate the same
+- [x] 5.2 Add one deterministic integration/E2E proof that two namespaces instantiate the same
   template with disjoint IDs, different selected voice, and materially different world-state
   consequences from identical input while the fixed turn-stage path remains unchanged
-- [ ] 5.3 Prove restart preserves the selected experience and never re-imports or switches a living
+- [x] 5.3 Prove restart preserves the selected experience and never re-imports or switches a living
   world implicitly
+  - The unchanged starter fixture exposes two selectable persona/mechanics pairs and retains
+    `north-road` as the topology-only optional-geometry control.
+  - Acceptance runs the pairs serially because `PERSONAS` is global; it does not claim concurrent
+    voice isolation. Both runs use the same fixture, player action, scripted model output, and
+    wounded effect intent, while each narrator prompt contains only its selected voice marker.
+  - The mechanics selections remove different graph relations. Both runs retain the identical fixed
+    stage sequence after normalizing only `entity_id` and `timestamp`.
+  - Same-selection restart preserves entity revisions, experience provenance, and the import marker.
+    A changed selection is refused by World before Persona or Rules can mutate shared state.
+  - Boot graph integration activates only for selected graph-mutating mechanics; empty and
+    publish-only packs preserve the baseline processor configuration.
+  - Architecture conditionally APPROVED the slice, and independent Go review APPROVED it. Focused
+    world, mock-model, boot, deterministic E2E, and diff gates passed.
 
 ## 6. Quality Gates
 

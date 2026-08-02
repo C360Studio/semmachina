@@ -1,0 +1,23 @@
+{
+  "id": "starter_wounded_drops_gear",
+  "type": "expression",
+  "name": "A wounded Rook drops his gear",
+  "description": "A bounded structural world reaction: once Rook is wounded, the relationships recording what he carries are removed.",
+  "enabled": true,
+  "entity": {"pattern": "*.semmachina.*.*.character.rook"},
+  "conditions": [
+    {
+      "field": "character.status.current",
+      "operator": "eq",
+      "value": "wounded"
+    }
+  ],
+  "logic": "and",
+  "on_enter": [
+    {
+      "type": "remove_triple",
+      "predicate": "world.relation.carries",
+      "max_iterations": 1
+    }
+  ]
+}

@@ -18,6 +18,7 @@ import (
 // corresponds to a case the turn loop has to survive.
 var requiredScenarios = []string{
 	"no-roll",
+	"experience-selection",
 	"miss",
 	"partial",
 	"full",

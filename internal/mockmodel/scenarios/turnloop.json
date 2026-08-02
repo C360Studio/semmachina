@@ -72,6 +72,62 @@
       ]
     },
     {
+      "name": "experience-selection",
+      "description": "A token-free no-roll turn shared by both starter experience selections. The verdict makes Rook wounded; the selected mechanics pack supplies the distinguishing structural reaction while the scripted narration remains byte-identical.",
+      "scripts": [
+        {
+          "role": "adjudicator",
+          "steps": [
+            {
+              "kind": "tool_call",
+              "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+              "tool_calls": [
+                {
+                  "name": "submit_verdict",
+                  "arguments": {
+                    "scalars": {
+                      "plausibility": "certain",
+                      "risk": "none",
+                      "consequence": "none",
+                      "requires_roll": false
+                    },
+                    "modifiers": [],
+                    "bands": {
+                      "auto": [
+                        {
+                          "type": "set_status",
+                          "target": "c360.semmachina.world1.starter.character.rook",
+                          "status": "wounded"
+                        }
+                      ]
+                    },
+                    "rationale": "The scripted acceptance isolates experience selection: both worlds receive the same wounded status intent."
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "role": "narrator",
+          "steps": [
+            {
+              "kind": "tool_call",
+              "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+              "tool_calls": [
+                {
+                  "name": "submit_narration",
+                  "arguments": {
+                    "prose": "Rook catches himself against the cold gatehouse wall. He straightens slowly, one hand pressed to the wound."
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "miss",
       "description": "A rolled turn narrated as a miss. The adjudicator step is identical across the three band scenarios by design — the band is the dice's answer, not the persona's — so the run must choose a seed and turn id that roll 6 or under.",
       "scripts": [

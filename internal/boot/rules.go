@@ -52,6 +52,14 @@ func (e *Engine) ruleProcessorConfig() (json.RawMessage, error) {
 				"selected mechanics file %s rule %q failed runtime validation: %w",
 				selected.file, definition.ID, err)
 		}
+		if definitionMutatesGraph(definition) {
+			// The fixed turn pack only publishes stage triggers, so its base
+			// configuration deliberately leaves graph integration off. Selected
+			// mechanics can additionally author structural graph reactions; those
+			// actions need the processor's real triple mutator rather than the
+			// otherwise-valid no-op executor.
+			config.EnableGraphIntegration = true
+		}
 		config.InlineRules = append(config.InlineRules, definition)
 		if !seenPatterns[definition.Entity.Pattern] {
 			watchPatterns = append(watchPatterns, definition.Entity.Pattern)
@@ -67,4 +75,25 @@ func (e *Engine) ruleProcessorConfig() (json.RawMessage, error) {
 		return nil, fmt.Errorf("encode the composed rule configuration: %w", err)
 	}
 	return raw, nil
+}
+
+func definitionMutatesGraph(definition rule.Definition) bool {
+	for _, actions := range [][]rule.Action{
+		definition.OnEnter,
+		definition.OnExit,
+		definition.WhileTrue,
+		definition.OnRecovery,
+		definition.Actions,
+	} {
+		for _, action := range actions {
+			switch action.Type {
+			case rule.ActionTypeAddTriple,
+				rule.ActionTypeRemoveTriple,
+				rule.ActionTypeUpdateTriple,
+				rule.ActionTypeReplaceOwned:
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -1,0 +1,23 @@
+{
+  "id": "starter_wounded_earns_mercy",
+  "type": "expression",
+  "name": "A wounded Rook earns mercy",
+  "description": "A bounded structural world reaction: once Rook is wounded, existing hostility toward him is removed.",
+  "enabled": true,
+  "entity": {"pattern": "*.semmachina.*.*.character.rook"},
+  "conditions": [
+    {
+      "field": "character.status.current",
+      "operator": "eq",
+      "value": "wounded"
+    }
+  ],
+  "logic": "and",
+  "on_enter": [
+    {
+      "type": "remove_triple",
+      "predicate": "world.relation.hostile-to",
+      "max_iterations": 1
+    }
+  ]
+}
