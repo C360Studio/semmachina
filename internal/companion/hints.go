@@ -79,6 +79,25 @@ func SelectHintEvidence(
 	for _, entity := range projection.Entities() {
 		authorized[entity.ID] = true
 	}
+	known, err := knowledgeEvidenceIDs(records, companionID)
+	if err != nil {
+		return nil, err
+	}
+	candidates := make([]string, 0, len(known))
+	for _, evidence := range known {
+		if authorized[evidence] {
+			candidates = append(candidates, evidence)
+		}
+	}
+	slices.Sort(candidates)
+	candidates = slices.Compact(candidates)
+	if len(candidates) < count {
+		return candidates, nil
+	}
+	return slices.Clone(candidates[:count]), nil
+}
+
+func knowledgeEvidenceIDs(records []graph.EntityState, companionID string) ([]string, error) {
 	candidates := make([]string, 0, len(records))
 	for index := range records {
 		record := &records[index]
@@ -116,16 +135,10 @@ func SelectHintEvidence(
 		if err != nil || id.Type != string(vocabulary.EntityKindEvidence) {
 			return nil, fmt.Errorf("knowledge record %s evidence %q is not canonical evidence", record.ID, evidence)
 		}
-		if authorized[evidence] {
-			candidates = append(candidates, evidence)
-		}
+		candidates = append(candidates, evidence)
 	}
 	slices.Sort(candidates)
-	candidates = slices.Compact(candidates)
-	if len(candidates) < count {
-		return candidates, nil
-	}
-	return slices.Clone(candidates[:count]), nil
+	return slices.Compact(candidates), nil
 }
 
 func soleRecordString(state *graph.EntityState, predicate vocabulary.Predicate) (string, error) {

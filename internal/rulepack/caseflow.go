@@ -6,7 +6,6 @@ import (
 	"github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 
-	"github.com/c360studio/semmachina/internal/caseflow"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -33,7 +32,7 @@ func CaseLifecycleDefinitions() ([]rule.Definition, error) {
 	for _, edge := range caseEdges {
 		action := rule.Action{
 			Type:     rule.ActionTypeLifecycleTransition,
-			Workflow: caseflow.WorkflowName,
+			Workflow: vocabulary.CaseWorkflowName,
 			Phase:    string(edge.to),
 		}
 		definition := rule.Definition{

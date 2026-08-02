@@ -77,13 +77,15 @@ const (
 	FailureKnowledgeUnauthorized FailureReason = "knowledge-unauthorized"
 	// FailureAccusationInvalid reports foreign, malformed, or colliding accusation state.
 	FailureAccusationInvalid FailureReason = "accusation-invalid"
+	// FailureCaseProgressInvalid reports permanently invalid deterministic case-progress state.
+	FailureCaseProgressInvalid FailureReason = "case-progress-invalid"
 )
 
 var failureReasonEnum = newEnum(KindFailureReason,
 	FailureEffectInvalid, FailureEffectEntityMissing,
 	FailureEffectEntityKind, FailureEffectCommitIncomplete,
 	FailurePersonaCapExhausted, FailurePersonaLoopFailed, FailureTurnStranded,
-	FailureKnowledgeUnauthorized, FailureAccusationInvalid)
+	FailureKnowledgeUnauthorized, FailureAccusationInvalid, FailureCaseProgressInvalid)
 
 // FailureReasons returns the closed failure-reason set.
 func FailureReasons() []FailureReason { return failureReasonEnum.all() }

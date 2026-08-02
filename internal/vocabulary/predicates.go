@@ -50,6 +50,8 @@ const (
 	TurnKnowledgeRef Predicate = "turn.knowledge.ref"
 	// TurnAccusationRef references the complete universal accusation record.
 	TurnAccusationRef Predicate = "turn.accusation.ref"
+	// TurnCaseProgressRef witnesses deterministic lifecycle receipt handling.
+	TurnCaseProgressRef Predicate = "turn.case-progress.ref"
 
 	// TurnVerdictPlausibility is the rule-matched plausibility scalar.
 	TurnVerdictPlausibility Predicate = "turn.verdict.plausibility"
@@ -376,6 +378,7 @@ var allPredicates = []Predicate{
 	TurnCompanionTriggerSource,
 	TurnKnowledgeRef,
 	TurnAccusationRef,
+	TurnCaseProgressRef,
 	TurnVerdictPlausibility,
 	TurnVerdictRisk,
 	TurnVerdictConsequence,

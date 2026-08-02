@@ -168,6 +168,10 @@ func (w *pendingWorld) publishAccusation(t *testing.T, turnID string) string {
 	return w.publishAuxiliary(t, turnID, rulepack.SubjectAccusation, "accusation")
 }
 
+func (w *pendingWorld) publishCaseProgress(t *testing.T, turnID string) string {
+	return w.publishAuxiliary(t, turnID, rulepack.SubjectCaseProgress, "case progress")
+}
+
 func (w *pendingWorld) publishAuxiliary(t *testing.T, turnID, subject, label string) string {
 	t.Helper()
 	entityID := w.prefix + turnID
@@ -244,6 +248,10 @@ func (w *pendingWorld) consumeKnowledge(t *testing.T, want int) {
 
 func (w *pendingWorld) consumeAccusation(t *testing.T, want int) {
 	w.consumeAuxiliary(t, rulepack.AccusationConsumerName, rulepack.SubjectAccusation, "accusation", want)
+}
+
+func (w *pendingWorld) consumeCaseProgress(t *testing.T, want int) {
+	w.consumeAuxiliary(t, rulepack.CaseProgressConsumerName, rulepack.SubjectCaseProgress, "case progress", want)
 }
 
 func (w *pendingWorld) consumeAuxiliary(t *testing.T, consumerName, subject, label string, want int) {
@@ -408,6 +416,29 @@ func TestWorkQueues_ReportsOnlyKnowledgeNoGranterHasFinished(t *testing.T) {
 	}
 	if pending[done] != 0 {
 		t.Errorf("acknowledged knowledge trigger for %s reported %d times", done, pending[done])
+	}
+}
+
+func TestWorkQueues_ReportsOnlyCaseProgressNoComponentHasFinished(t *testing.T) {
+	world := startPendingWorld(t)
+
+	done := world.publishCaseProgress(t, "progress-done")
+	world.consumeCaseProgress(t, 1)
+	waiting := world.publishCaseProgress(t, "progress-waiting")
+
+	view := world.view(t)
+	if err := view.Settle(t.Context()); err != nil {
+		t.Fatalf("Settle: %v", err)
+	}
+	pending, err := view.Pending(t.Context())
+	if err != nil {
+		t.Fatalf("Pending: %v", err)
+	}
+	if pending[waiting] != 1 {
+		t.Errorf("unacknowledged case progress trigger for %s reported %d times, want 1", waiting, pending[waiting])
+	}
+	if pending[done] != 0 {
+		t.Errorf("acknowledged case progress trigger for %s reported %d times", done, pending[done])
 	}
 }
 

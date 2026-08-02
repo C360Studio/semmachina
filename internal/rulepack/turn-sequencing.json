@@ -98,6 +98,27 @@
     ]
   },
   {
+    "id": "turn-knowledge-committed-records-case-progress",
+    "type": "expression",
+    "name": "Committed decision and knowledge record deterministic case progress",
+    "description": "The rule matches only structural artifacts. The progress component loads their content and records either one deterministic lifecycle event or an exact no-op barrier.",
+    "enabled": true,
+    "logic": "and",
+    "entity": { "pattern": "*.semmachina.*.*.turn.*" },
+    "conditions": [
+      { "field": "turn.phase.current", "operator": "eq", "value": "applying", "required": false },
+      { "field": "turn.effects.batch", "operator": "ne", "value": "", "required": false },
+      { "field": "turn.case-decision.ref", "operator": "ne", "value": "", "required": false },
+      { "field": "turn.knowledge.ref", "operator": "ne", "value": "", "required": false }
+    ],
+    "on_enter": [
+      { "type": "publish", "subject": "semmachina.turn.case-progress", "max_iterations": 3 }
+    ],
+    "on_recovery": [
+      { "type": "publish", "subject": "semmachina.turn.case-progress", "max_iterations": 3 }
+    ]
+  },
+  {
     "id": "turn-committed-effects-enter-companion",
     "type": "expression",
     "name": "Committed effects enter the companion stage",
@@ -109,7 +130,8 @@
       { "field": "turn.phase.current", "operator": "eq", "value": "applying", "required": false },
       { "field": "turn.effects.batch", "operator": "ne", "value": "", "required": false },
       { "field": "turn.knowledge.ref", "operator": "ne", "value": "", "required": false },
-      { "field": "turn.accusation.ref", "operator": "ne", "value": "", "required": false }
+      { "field": "turn.accusation.ref", "operator": "ne", "value": "", "required": false },
+      { "field": "turn.case-progress.ref", "operator": "ne", "value": "", "required": false }
     ],
     "on_enter": [
       { "type": "publish", "subject": "semmachina.turn.companion", "max_iterations": 1 }

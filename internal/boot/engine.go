@@ -77,6 +77,8 @@ const (
 	StepKnowledge StepID = "knowledge"
 	// StepAccusation binds the deterministic verifier consumer before rules can publish to it.
 	StepAccusation StepID = "accusation"
+	// StepCaseProgress binds deterministic lifecycle receipt handling before rules publish to it.
+	StepCaseProgress StepID = "case-progress"
 	// StepRules starts the rule processor that IS the turn's state machine.
 	StepRules StepID = "rules"
 	// StepResume runs the boot-time stranded-turn pass.
@@ -365,14 +367,20 @@ func (e *Engine) steps() []Step {
 			Run:   e.startAccusation,
 		},
 		{
+			ID:    StepCaseProgress,
+			Needs: []StepID{StepStageStream, StepGraph, StepWorld, StepLifecycle},
+			Run:   e.startCaseProgress,
+		},
+		{
 			ID: StepRules,
 			// The stage stream must exist before a rule can fire: the pack's
 			// actions publish stage triggers, and a JetStream publish into a
 			// subject no stream captures reaches no durable consumer while
 			// reporting success. The world must be instantiated because the pack
 			// matches turn entities against a world the stages will read.
-			Needs: []StepID{StepStageStream, StepGraph, StepWorld, StepLifecycle, StepKnowledge, StepAccusation},
-			Run:   e.startRules,
+			Needs: []StepID{StepStageStream, StepGraph, StepWorld, StepLifecycle, StepKnowledge, StepAccusation,
+				StepCaseProgress},
+			Run: e.startRules,
 		},
 		{
 			ID: StepResume,
@@ -382,7 +390,8 @@ func (e *Engine) steps() []Step {
 			// rather than read "nothing in flight" and re-trigger every turn whose
 			// persona is mid-flight. And the rule processor must have STARTED:
 			// its bootstrap replay publishes into the set the pass reads.
-			Needs: []StepID{StepRules, StepStageStream, StepAgentStream, StepAgentic, StepWorld, StepKnowledge, StepAccusation},
+			Needs: []StepID{StepRules, StepStageStream, StepAgentStream, StepAgentic, StepWorld, StepKnowledge,
+				StepAccusation, StepCaseProgress},
 			Check: e.checkResumePreconditions,
 			Run:   e.reconcileStrandedTurns,
 		},
@@ -895,6 +904,22 @@ func (e *Engine) startAccusation(ctx context.Context) error {
 	return consumer.Start(ctx)
 }
 
+func (e *Engine) startCaseProgress(ctx context.Context) error {
+	lifecycleRecorder, err := caseflow.NewRecorder(e.graph)
+	if err != nil {
+		return err
+	}
+	progressor, err := caseflow.NewProgressor(e.graph, e.content, lifecycleRecorder)
+	if err != nil {
+		return err
+	}
+	consumer, err := caseflow.NewProgressConsumer(e.client, progressor, e.recorder, e.turnIdentity())
+	if err != nil {
+		return err
+	}
+	return consumer.Start(ctx)
+}
+
 // checkResumePreconditions is every external fact the stranded-turn pass needs
 // that this boot can actually read.
 func (e *Engine) checkResumePreconditions(ctx context.Context) error {
@@ -976,9 +1001,14 @@ func (e *Engine) startStages(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	narrationEvidence, err := companion.NewNarrationResolver(e.graph, e.content, authority)
+	if err != nil {
+		return err
+	}
 	projector, err := epistemic.NewProjector(assembler, e.graph, scope,
 		epistemic.WithDenouementAuthorizer(denouement),
-		epistemic.WithCompanionBondValidator(authority))
+		epistemic.WithCompanionBondValidator(authority),
+		epistemic.WithNarrationEvidenceResolver(narrationEvidence))
 	if err != nil {
 		return err
 	}

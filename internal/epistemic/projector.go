@@ -99,6 +99,7 @@ type Projector struct {
 	maxProjectionBytes    int
 	denouement            DenouementAuthorizer
 	companionBonds        CompanionBondValidator
+	narrationEvidence     NarrationEvidenceResolver
 }
 
 // NewProjector builds one projector over bounded NATS-direct readers.
@@ -212,6 +213,9 @@ func (p *Projector) Project(
 		if err := p.addRevelations(ctx, projection, actorID, audience.turnID); err != nil {
 			return nil, err
 		}
+		if err := p.addNarrationEvidence(ctx, projection, audience); err != nil {
+			return nil, err
+		}
 	case PurposeCasekeeper:
 		if err := p.addCasekeeperState(ctx, projection, audience.targetActorIDs); err != nil {
 			return nil, err
@@ -224,6 +228,9 @@ func (p *Projector) Project(
 			return nil, err
 		}
 		if err := p.authorizeDenouement(ctx, projection, audience.authorizerRef); err != nil {
+			return nil, err
+		}
+		if err := p.addNarrationEvidence(ctx, projection, audience); err != nil {
 			return nil, err
 		}
 	}

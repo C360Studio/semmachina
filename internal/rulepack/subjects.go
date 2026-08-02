@@ -48,11 +48,17 @@ const SubjectKnowledge = StageSubjectPrefix + "knowledge"
 // TURN_STAGES durability but is not a turn StagePhase.
 const SubjectAccusation = StageSubjectPrefix + "accusation"
 
+// SubjectCaseProgress requests deterministic case lifecycle receipt handling.
+const SubjectCaseProgress = StageSubjectPrefix + "case-progress"
+
 // KnowledgeConsumerName is the separate durable bound by KnowledgeGranter.
 const KnowledgeConsumerName = "semmachina-knowledge-granter"
 
 // AccusationConsumerName is the verifier's separate durable.
 const AccusationConsumerName = "semmachina-accusation-verifier"
+
+// CaseProgressConsumerName is the deterministic progress component's durable.
+const CaseProgressConsumerName = "semmachina-case-progress"
 
 // stagePhases are the phases a stage runner ENTERS, in turn order.
 //

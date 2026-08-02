@@ -52,6 +52,68 @@ func TestTurnLoopScenarios_ShipEveryCaseTheSuiteNeeds(t *testing.T) {
 	}
 }
 
+func TestBellweatherScenarios_ShipTheNineTurnAcceptanceBudget(t *testing.T) {
+	fixture, err := mockmodel.BellweatherScenariosIn("bellweather-e2e")
+	if err != nil {
+		t.Fatalf("load Bellweather scenario pack: %v", err)
+	}
+	scenario, ok := fixture.Scenario("bellweather-acceptance")
+	if !ok {
+		t.Fatalf("Bellweather pack scenarios = %v, want bellweather-acceptance", fixture.ScenarioNames())
+	}
+	wantSteps := map[string]int{"casekeeper": 9, "adjudicator": 9, "narrator": 9}
+	for _, script := range scenario.Scripts {
+		want, declared := wantSteps[script.Role]
+		if !declared {
+			t.Fatalf("Bellweather pack scripts unexpected model role %q", script.Role)
+		}
+		if len(script.Steps) != want {
+			t.Fatalf("Bellweather role %s has %d steps, want %d", script.Role, len(script.Steps), want)
+		}
+		delete(wantSteps, script.Role)
+	}
+	if len(wantSteps) != 0 {
+		t.Fatalf("Bellweather pack is missing role budgets %v", wantSteps)
+	}
+	var casekeeper *mockmodel.Script
+	for index := range scenario.Scripts {
+		if scenario.Scripts[index].Role == "casekeeper" {
+			casekeeper = &scenario.Scripts[index]
+			break
+		}
+	}
+	if casekeeper == nil || len(casekeeper.Steps[3].ToolCalls) != 1 {
+		t.Fatal("Bellweather share turn is missing its single case decision")
+	}
+	var share struct {
+		Kind       payload.CaseDecisionKind `json:"kind"`
+		TargetRefs []string                 `json:"target_refs"`
+		RevealRefs []string                 `json:"reveal_refs"`
+	}
+	if err := json.Unmarshal(casekeeper.Steps[3].ToolCalls[0].Arguments, &share); err != nil {
+		t.Fatalf("decode Bellweather share turn: %v", err)
+	}
+	prefix := "c360.semmachina.bellweather-e2e.bellweather-maze."
+	if share.Kind != payload.CaseDecisionShare ||
+		!slices.Equal(share.TargetRefs, []string{prefix + "character.kit-finch"}) ||
+		!slices.Equal(share.RevealRefs, []string{prefix + "evidence.evidence-sedative"}) {
+		t.Fatalf("Bellweather share turn = %#v; want Rowan's newly learned sedative evidence shared with Kit", share)
+	}
+	for _, forbidden := range []string{"submit_companion_decision", "solution-canary"} {
+		for _, script := range scenario.Scripts {
+			for _, step := range script.Steps {
+				encoded, marshalErr := json.Marshal(step)
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				if strings.Contains(string(encoded), forbidden) {
+					t.Fatalf("explicit-hint pack spends or fabricates forbidden %q", forbidden)
+				}
+			}
+		}
+	}
+}
+
 // The pack is data for a contract defined elsewhere, and the failure mode that
 // costs the most is a scripted verdict that no executor could ever accept. So
 // every scripted verdict is decoded into the canonical payload and validated

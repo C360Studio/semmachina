@@ -7,6 +7,7 @@ import (
 
 	"github.com/c360studio/semstreams/processor/rule"
 
+	"github.com/c360studio/semmachina/internal/caseflow"
 	"github.com/c360studio/semmachina/internal/rulepack"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
@@ -31,6 +32,14 @@ func TestCaseLifecycleRulesAreExactAndRecoverySafe(t *testing.T) {
 		}
 		if len(definition.OnEnter) != 1 || definition.OnEnter[0].Type != rule.ActionTypeLifecycleTransition {
 			t.Fatalf("rule %q actions = %+v", definition.ID, definition.OnEnter)
+		}
+		if caseflow.WorkflowName != vocabulary.CaseWorkflowName {
+			t.Fatalf("caseflow workflow alias = %q, vocabulary = %q",
+				caseflow.WorkflowName, vocabulary.CaseWorkflowName)
+		}
+		if definition.OnEnter[0].Workflow != vocabulary.CaseWorkflowName {
+			t.Fatalf("rule %q workflow = %q; want %q", definition.ID,
+				definition.OnEnter[0].Workflow, vocabulary.CaseWorkflowName)
 		}
 	}
 }

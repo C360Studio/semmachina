@@ -328,7 +328,29 @@ func TestBoot_BellweatherCasekeeperProjectionReachesTheActualModelCallBody(t *te
 			t.Fatalf("production casekeeper Call.Body leaked unauthorized canary %q: %s", forbidden, call.Body)
 		}
 	}
-	awaitBellweatherTurnSettled(t, cfg, response.TurnID)
+	failed := awaitBellweatherTurnFailed(t, cfg, response.TurnID)
+	if got := fmt.Sprint(testinfra.FirstObject(failed, vocabulary.TurnFailureReason.String())); got != string(vocabulary.FailureCaseProgressInvalid) {
+		t.Fatalf("investigate-first turn failure = %q, want %q", got, vocabulary.FailureCaseProgressInvalid)
+	}
+	if got := testinfra.FirstObject(failed, vocabulary.TurnCaseProgressRef.String()); got != nil {
+		t.Fatalf("failed investigate-first turn carried case-progress ref %v", got)
+	}
+	caseState, err := graphStore(t).GetEntity(t.Context(), prefix+".case.bellweather-case")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(testinfra.FirstObject(caseState, vocabulary.CaseLifecyclePhase.String())); got != string(vocabulary.CasePhaseColdOpen) {
+		t.Fatalf("case phase after invalid investigate-first turn = %q, want cold_open", got)
+	}
+	awaitStageConsumersSettled(t, time.Now().Add(30*time.Second))
+	engine.Stop()
+
+	// The global durable may retain old messages across sequential world boots.
+	// A later world must terminate this already-handled delivery by identity
+	// before its world-bound content store or recorder sees it.
+	later := bootConfig(t)
+	startEngine(t, later)
+	requireStagesIdle(t, jetStream(t))
 }
 
 func bellweatherPrivateWireFixture(t *testing.T, prefix string) *mockmodel.Fixture {
@@ -377,7 +399,7 @@ func bellweatherPrivateWireFixture(t *testing.T, prefix string) *mockmodel.Fixtu
 	return fixture
 }
 
-func awaitBellweatherTurnSettled(t *testing.T, cfg boot.Config, turnID string) {
+func awaitBellweatherTurnFailed(t *testing.T, cfg boot.Config, turnID string) *graph.EntityState {
 	t.Helper()
 	identity := turn.Identity{Org: cfg.Org, WorldNS: cfg.WorldNS, Template: "bellweather-maze"}
 	entityID, err := identity.EntityID(turnID)
@@ -394,14 +416,13 @@ func awaitBellweatherTurnSettled(t *testing.T, cfg boot.Config, turnID string) {
 			))
 			switch phase {
 			case vocabulary.PhaseComplete:
-				awaitStageConsumersSettled(t, deadline)
-				return
+				t.Fatalf("invalid investigate-first Bellweather turn unexpectedly completed: %v", state)
 			case vocabulary.PhaseFailed:
-				t.Fatalf("Bellweather wire-proof turn failed: %v", state)
+				return state
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("Bellweather wire-proof turn %s did not reach complete: %v", entityID, readErr)
+			t.Fatalf("Bellweather wire-proof turn %s did not reach failed: %v", entityID, readErr)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -424,6 +445,24 @@ func awaitStageConsumersSettled(t *testing.T, deadline time.Time) {
 			if info.NumPending != 0 || info.NumAckPending != 0 {
 				settled = false
 				break
+			}
+		}
+		if settled {
+			for _, name := range []string{
+				rulepack.KnowledgeConsumerName, rulepack.AccusationConsumerName, rulepack.CaseProgressConsumerName,
+			} {
+				consumer, err := js.Consumer(t.Context(), rulepack.StageStream, name)
+				if err != nil {
+					t.Fatalf("read auxiliary consumer %s while settling Bellweather turn: %v", name, err)
+				}
+				info, err := consumer.Info(t.Context())
+				if err != nil {
+					t.Fatalf("inspect auxiliary consumer %s while settling Bellweather turn: %v", name, err)
+				}
+				if info.NumPending != 0 || info.NumAckPending != 0 {
+					settled = false
+					break
+				}
 			}
 		}
 		if settled {
@@ -1107,8 +1146,9 @@ func requireStagesIdle(t *testing.T, js jetstream.JetStream) {
 		}
 	}
 	for label, name := range map[string]string{
-		"knowledge":  rulepack.KnowledgeConsumerName,
-		"accusation": rulepack.AccusationConsumerName,
+		"knowledge":     rulepack.KnowledgeConsumerName,
+		"accusation":    rulepack.AccusationConsumerName,
+		"case-progress": rulepack.CaseProgressConsumerName,
 	} {
 		consumer, err := js.Consumer(t.Context(), rulepack.StageStream, name)
 		if err != nil {

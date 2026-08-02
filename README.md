@@ -18,7 +18,8 @@ collection during play, replayable into long-form manuscript.
 
 | Document | What it holds |
 |---|---|
-| [`docs/proposals/fiction-first-rpg.md`](docs/proposals/fiction-first-rpg.md) | Founding document — idea review and engine decomposition |
+| [`Founding proposal`](docs/proposals/fiction-first-rpg.md) | Idea review and engine decomposition |
+| [`Gemini smoke runbook`](docs/runbooks/bellweather-gemini-smoke.md) | Operator-only paid smoke |
 | [`openspec/project.md`](openspec/project.md) | Purpose, product boundary (game repo vs engine asks), conventions |
 | [`CLAUDE.md`](CLAUDE.md) | Working context for AI-assisted development |
 

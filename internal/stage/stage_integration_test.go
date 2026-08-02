@@ -271,7 +271,7 @@ func (l *loop) startRules(t *testing.T) {
 	t.Cleanup(func() { _ = processor.Stop(5 * time.Second) })
 }
 
-// startAuxiliaryConsumers mirrors production boot: both universal-barrier
+// startAuxiliaryConsumers mirrors production boot: all universal-barrier
 // consumers bind before the rule processor is allowed to publish their work.
 // Neither consumer is a turn stage or a member of rulepack.StagePhases.
 func (l *loop) startAuxiliaryConsumers(
@@ -321,6 +321,20 @@ func (l *loop) startAuxiliaryConsumers(
 	if err := accusationConsumer.Start(context.Background()); err != nil {
 		t.Fatalf("start accusation consumer: %v", err)
 	}
+
+	progressor, err := caseflow.NewProgressor(l.graph, artifacts, lifecycleRecorder)
+	if err != nil {
+		t.Fatalf("NewProgressor(caseflow): %v", err)
+	}
+	progressConsumer, err := caseflow.NewProgressConsumer(l.harness.Client, progressor, l.recorder, turn.Identity{
+		Org: testOrg, WorldNS: l.namespace, Template: testTemplate,
+	})
+	if err != nil {
+		t.Fatalf("NewProgressConsumer(caseflow): %v", err)
+	}
+	if err := progressConsumer.Start(context.Background()); err != nil {
+		t.Fatalf("start case progress consumer: %v", err)
+	}
 }
 
 // startStages binds every actual turn stage to the stage stream.
@@ -339,8 +353,13 @@ func (l *loop) startStages(t *testing.T, artifacts *content.Store) {
 	if err != nil {
 		t.Fatalf("NewAuthority(companion): %v", err)
 	}
+	narrationEvidence, err := companion.NewNarrationResolver(l.graph, artifacts, authority)
+	if err != nil {
+		t.Fatalf("NewNarrationResolver(companion): %v", err)
+	}
 	projector, err := epistemic.NewProjector(assembler, l.graph, scope,
-		epistemic.WithCompanionBondValidator(authority))
+		epistemic.WithCompanionBondValidator(authority),
+		epistemic.WithNarrationEvidenceResolver(narrationEvidence))
 	if err != nil {
 		t.Fatalf("NewProjector: %v", err)
 	}

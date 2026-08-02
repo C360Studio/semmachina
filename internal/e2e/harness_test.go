@@ -133,6 +133,7 @@ func requireBroker(t *testing.T) *natsclient.TestClient {
 // identifiers everything else is asserted against.
 type world struct {
 	ns       string
+	template string
 	cfg      boot.Config
 	mock     *mockmodel.Handler
 	wire     *wireLog
@@ -213,11 +214,54 @@ func newWorldUnstarted(t *testing.T, ns, scenario string, opts ...worldOption) *
 
 	return &world{
 		ns:       ns,
+		template: templateID,
 		cfg:      cfg,
 		mock:     handler,
 		wire:     wire,
 		identity: turn.Identity{Org: cfg.Org, WorldNS: ns, Template: templateID},
 	}
+}
+
+// newBellweatherWorld boots the authored mystery through the same broker,
+// socket, engine, model endpoint, and capture machinery as every other e2e turn.
+func newBellweatherWorld(t *testing.T, ns string, opts ...worldOption) *world {
+	t.Helper()
+	client := requireBroker(t)
+	fixture, err := mockmodel.BellweatherScenariosIn(ns)
+	if err != nil {
+		t.Fatalf("rebind Bellweather scenario pack onto %q: %v", ns, err)
+	}
+	handler, err := mockmodel.New(fixture, "bellweather-acceptance")
+	if err != nil {
+		t.Fatalf("start Bellweather scripted model: %v", err)
+	}
+	wire := &wireLog{}
+	server := httptest.NewServer(wire.wrap(handler))
+	t.Cleanup(server.Close)
+	pkg, err := fixtures.BellweatherMaze()
+	if err != nil {
+		t.Fatalf("BellweatherMaze: %v", err)
+	}
+	const bellweatherTemplate = "bellweather-maze"
+	cfg := boot.Config{
+		NATSURL: client.URL, Org: "c360", WorldNS: ns, SceneLocalID: "fete-green",
+		Player: boot.PlayerConfig{
+			LocalID: playerLocalID, Name: "The Player", Character: "local:rowan-vale", Credential: testCredential,
+		},
+		Companion: &boot.CompanionConfig{
+			Character: "local:kit-finch", Policy: vocabulary.CompanionPolicyBoundedInitiative,
+		},
+		Models: mockModels(server.URL), World: pkg, Registry: testRegistry(t), Logger: quietLogger(),
+		Socket: playersocket.Config{Addr: "127.0.0.1:0"}, ContentBucket: "E2E_" + strings.ToUpper(ns),
+		ReadyTimeout: 45 * time.Second, ReadyPoll: 100 * time.Millisecond,
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	w := &world{ns: ns, template: bellweatherTemplate, cfg: cfg, mock: handler, wire: wire,
+		identity: turn.Identity{Org: cfg.Org, WorldNS: ns, Template: bellweatherTemplate}}
+	w.boot(t)
+	return w
 }
 
 // boot starts a fresh engine over this world's configuration.
@@ -252,7 +296,7 @@ func (w *world) crash() {
 
 // entity composes one starter-world entity id in this world's namespace.
 func (w *world) entity(kind, localID string) string {
-	return fmt.Sprintf("c360.semmachina.%s.%s.%s.%s", w.ns, templateID, kind, localID)
+	return fmt.Sprintf("c360.semmachina.%s.%s.%s.%s", w.ns, w.template, kind, localID)
 }
 
 // turnEntity composes a turn entity id in this world's namespace.
@@ -405,6 +449,8 @@ type client struct {
 	conn   *websocket.Conn
 	frames chan *playersocket.Frame
 	closed chan struct{}
+	rawMu  sync.Mutex
+	raw    [][]byte
 }
 
 func (w *world) dial(t *testing.T) *client {
@@ -447,12 +493,25 @@ func (c *client) read() {
 		if err := json.Unmarshal(data, &frame); err != nil {
 			return
 		}
+		c.rawMu.Lock()
+		c.raw = append(c.raw, append([]byte(nil), data...))
+		c.rawMu.Unlock()
 		select {
 		case c.frames <- &frame:
 		case <-c.closed:
 			return
 		}
 	}
+}
+
+func (c *client) rawFrames() [][]byte {
+	c.rawMu.Lock()
+	defer c.rawMu.Unlock()
+	out := make([][]byte, len(c.raw))
+	for index := range c.raw {
+		out[index] = append([]byte(nil), c.raw[index]...)
+	}
+	return out
 }
 
 func (c *client) close() {

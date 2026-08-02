@@ -84,3 +84,18 @@ tasks:
         msg: "GEMINI_API_KEY is empty — copy .env.example to .env and fill it in, or export it."
     cmds:
       - go run ./cmd/semmachina -config configs/instance.gemini36-flash.example.json
+
+  smoke:gemini:bellweather:
+    desc: |
+      Operator-only paid Gemini smoke through Bellweather production boot and WebSocket I/O.
+      Runs two bounded provider turn chains: body observation, then an explicit Kit hint request.
+    preconditions:
+      - sh: test "$SEMMACHINA_PAID_SMOKE" = "1"
+        msg: "Paid smoke is disabled — set SEMMACHINA_PAID_SMOKE=1 explicitly."
+      - sh: test -n "$GEMINI_API_KEY"
+        msg: "GEMINI_API_KEY is empty — copy .env.example to .env and fill it in, or export it."
+    cmds:
+      - >-
+        go run ./cmd/bellweather-smoke
+        -config configs/instance.gemini36-flash.bellweather.example.json
+        -world fixtures/worlds/bellweather-maze

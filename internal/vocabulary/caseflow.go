@@ -1,5 +1,8 @@
 package vocabulary
 
+// CaseWorkflowName is the shared lifecycle registration key for mystery cases.
+const CaseWorkflowName = "mystery-case"
+
 // CasePhase is the durable phase of a mystery case.
 type CasePhase string
 

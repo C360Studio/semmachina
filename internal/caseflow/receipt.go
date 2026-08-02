@@ -40,6 +40,22 @@ type ReceiptOutcome struct {
 	To       vocabulary.CasePhase
 }
 
+// IllegalTransitionError is permanent committed case state: the event requires
+// a lifecycle phase the case has not yet reached. Retrying the same receipt
+// cannot change that prerequisite.
+type IllegalTransitionError struct {
+	CaseEntityID string
+	EventID      string
+	Kind         vocabulary.CaseLifecycleEventKind
+	Current      vocabulary.CasePhase
+	Required     vocabulary.CasePhase
+}
+
+func (e *IllegalTransitionError) Error() string {
+	return fmt.Sprintf("case %s event %s (%s) is out of order: current phase %s, required phase %s",
+		e.CaseEntityID, e.EventID, e.Kind, e.Current, e.Required)
+}
+
 // Recorder projects component-owned events onto the case entity. It never
 // writes case.lifecycle.phase; the lifecycle Manager is the sole phase writer.
 // Record's duplicate check is a read followed by a merge, not a CAS condition,
@@ -93,9 +109,8 @@ func (r *Recorder) Record(ctx context.Context, request TransitionRequest) (Recei
 		return ReceiptOutcome{From: from, To: to}, nil
 	}
 	if currentRank < fromRank {
-		return ReceiptOutcome{}, fmt.Errorf(
-			"case %s event %s (%s) is out of order: current phase %s, required phase %s",
-			request.CaseEntityID, request.EventID, request.Kind, current, from)
+		return ReceiptOutcome{}, &IllegalTransitionError{CaseEntityID: request.CaseEntityID,
+			EventID: request.EventID, Kind: request.Kind, Current: current, Required: from}
 	}
 
 	at := r.now().UTC()

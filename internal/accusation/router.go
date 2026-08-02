@@ -18,7 +18,9 @@ type ProjectionService interface {
 
 // NarrationRouter is a boot-only adapter. It upgrades only a narrator request
 // carrying a valid, identity-bound correct result; Projector independently
-// rechecks denouement phase and the real DenouementAuthorizer.
+// rechecks denouement phase and the real DenouementAuthorizer. Companion-cited
+// evidence stays inside Projector's separately injected companion resolver;
+// this accusation adapter never reads or augments that evidence.
 type NarrationRouter struct {
 	graph  ReadGraph
 	store  RecordStore

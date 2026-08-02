@@ -10,6 +10,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	ssvocab "github.com/c360studio/semstreams/vocabulary"
 
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/graphio"
@@ -148,10 +149,21 @@ func TestExactEntitySemantics_AllowsOnlyEnumeratedFrameworkIdentityFacts(t *test
 	}
 	got = want.Clone()
 	got.Triples = append(got.Triples, message.Triple{
-		Subject: id, Predicate: "foreign.audit.marker", Object: "unexpected",
+		Subject: id, Predicate: ssvocab.EntityIndexingProfile, Object: ssvocab.IndexingProfileControl,
 	})
-	if err := exactEntitySemantics(got, want); err == nil {
-		t.Fatal("foreign extra predicate passed exact semantic verification")
+	if err := exactEntitySemantics(got, want); err != nil {
+		t.Fatalf("graph-ingest indexing-profile stamp changed owned semantics: %v", err)
+	}
+	for _, predicate := range []string{
+		"foreign.audit.marker", "core.identity.unapproved", "provenance.audit.unapproved",
+	} {
+		got = want.Clone()
+		got.Triples = append(got.Triples, message.Triple{
+			Subject: id, Predicate: predicate, Object: "unexpected",
+		})
+		if err := exactEntitySemantics(got, want); err == nil {
+			t.Fatalf("foreign extra predicate %s passed exact semantic verification", predicate)
+		}
 	}
 	got = want.Clone()
 	got.Triples[1].Object = testSuspect

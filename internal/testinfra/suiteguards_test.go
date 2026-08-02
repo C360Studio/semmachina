@@ -154,6 +154,9 @@ var (
 		"configs/instance.gemini36-flash.example.json": {
 			geminiLiveEndpoint: true,
 		},
+		"configs/instance.gemini36-flash.bellweather.example.json": {
+			geminiLiveEndpoint: true,
+		},
 	}
 )
 
@@ -226,8 +229,19 @@ func TestEndpointScan_WouldActuallyFindARemoteURL(t *testing.T) {
 	if !allowedRemoteURLs["configs/instance.gemini36-flash.example.json"][geminiLiveEndpoint] {
 		t.Fatal("the committed Gemini live-smoke example is not covered by its exact-file exception")
 	}
+	if !allowedRemoteURLs["configs/instance.gemini36-flash.bellweather.example.json"][geminiLiveEndpoint] {
+		t.Fatal("the Bellweather Gemini paid-smoke example is not covered by its exact-file exception")
+	}
 	if allowedRemoteURLs["configs/instance.example.json"][geminiLiveEndpoint] {
 		t.Fatal("the Gemini live endpoint is allowed in the default instance configuration")
+	}
+	if allowedRemoteURLs["cmd/bellweather-smoke/main.go"][geminiLiveEndpoint] {
+		t.Fatal("the Gemini live endpoint is allowed in executable smoke source")
+	}
+	for file, endpoints := range allowedRemoteURLs {
+		if len(endpoints) != 1 || !endpoints[geminiLiveEndpoint] {
+			t.Fatalf("remote endpoint exception for %s is broader than the one exact Gemini URL: %v", file, endpoints)
+		}
 	}
 	loopback, err := url.Parse(matches[1])
 	if err != nil {

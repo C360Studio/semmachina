@@ -63,6 +63,19 @@ type fakeProjectionGraph struct {
 	journal *[]string
 }
 
+type fakeNarrationEvidence struct {
+	ids      []string
+	err      error
+	requests []epistemic.NarrationEvidenceRequest
+}
+
+func (f *fakeNarrationEvidence) AuthorizedNarrationEvidence(
+	_ context.Context, request epistemic.NarrationEvidenceRequest,
+) ([]string, error) {
+	f.requests = append(f.requests, request)
+	return slices.Clone(f.ids), f.err
+}
+
 func (f *fakeProjectionGraph) EntitiesByPredicateValue(
 	_ context.Context, predicate, value string, limit int,
 ) ([]string, error) {
@@ -324,7 +337,21 @@ func TestNarrationPurposesAloneReceiveCommittedKnowledgeAndCompanionReferences(t
 			for predicate, ref := range refs {
 				scenes.view.Turn.Triples = append(scenes.view.Turn.Triples, fact(predicate, ref))
 			}
-			projection := mustProject(t, scenes, graphReader, audience)
+			authority, err := companion.NewAuthority(graphReader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resolver := &fakeNarrationEvidence{}
+			projector, err := epistemic.NewProjector(scenes, graphReader, scopeForFixture(t),
+				epistemic.WithCompanionBondValidator(authority),
+				epistemic.WithNarrationEvidenceResolver(resolver))
+			if err != nil {
+				t.Fatal(err)
+			}
+			projection, err := projector.Project(t.Context(), audience)
+			if err != nil {
+				t.Fatal(err)
+			}
 			for predicate, want := range refs {
 				got := projection.Turn.Objects(predicate)
 				if purpose == epistemic.PurposeNarrator {
@@ -334,6 +361,63 @@ func TestNarrationPurposesAloneReceiveCommittedKnowledgeAndCompanionReferences(t
 				} else if len(got) != 0 {
 					t.Fatalf("%s projection received narrator-only %s = %v", purpose, predicate, got)
 				}
+			}
+		})
+	}
+}
+
+func TestNarratorHydratesOnlyResolverAuthorizedCompanionEvidence(t *testing.T) {
+	scenes, graphReader := fixture()
+	scenes.view.Turn.Triples = append(scenes.view.Turn.Triples,
+		fact(vocabulary.TurnCompanionStageRef, "obj://SEMMACHINA_CONTENT/turn/turn-act-1/companion-stage"))
+	const uncited = "acme.semmachina.keep.starter.evidence.companion-uncited"
+	graphReader.states[uncited] = state(uncited,
+		fact(vocabulary.WorldEntityKind, string(vocabulary.EntityKindEvidence)),
+		fact(vocabulary.WorldEntityName, "UNCITED-COMPANION-CANARY"))
+	resolver := &fakeNarrationEvidence{ids: []string{otherEvidence}}
+	projector, err := epistemic.NewProjector(scenes, graphReader, scopeForFixture(t),
+		epistemic.WithNarrationEvidenceResolver(resolver))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection, err := projector.Project(t.Context(), narratorAudience())
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	if _, ok := projection.Entity(otherEvidence); !ok {
+		t.Fatal("resolver-authorized companion evidence was not hydrated")
+	}
+	if _, ok := projection.Entity(uncited); ok {
+		t.Fatal("uncited companion knowledge crossed the narration boundary")
+	}
+	if len(resolver.requests) != 1 || resolver.requests[0].Purpose != epistemic.PurposeNarrator ||
+		resolver.requests[0].TurnID != turnID || resolver.requests[0].TurnEntityID != turnEntity ||
+		resolver.requests[0].PlayerID != playerID || resolver.requests[0].ContextRef != sceneID {
+		t.Fatalf("narration resolver request = %#v", resolver.requests)
+	}
+	body := string(mustBytes(t, projection))
+	if strings.Contains(body, string(vocabulary.EvidenceTruthStatusCurrent)) {
+		t.Fatalf("companion evidence hydration exposed private predicates: %s", body)
+	}
+}
+
+func TestNarratorCompanionEvidenceFailsClosedOnResolverAndHydrationViolations(t *testing.T) {
+	for name, ids := range map[string][]string{
+		"unsorted":          {revealedEvidence, otherEvidence},
+		"duplicate":         {otherEvidence, otherEvidence},
+		"missing":           {"acme.semmachina.keep.starter.evidence.missing"},
+		"wrong kind":        {actorID},
+		"solution identity": {motiveID},
+	} {
+		t.Run(name, func(t *testing.T) {
+			scenes, graphReader := fixture()
+			projector, err := epistemic.NewProjector(scenes, graphReader, scopeForFixture(t),
+				epistemic.WithNarrationEvidenceResolver(&fakeNarrationEvidence{ids: ids}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := projector.Project(t.Context(), narratorAudience()); err == nil {
+				t.Fatal("invalid companion narration evidence was projected")
 			}
 		})
 	}

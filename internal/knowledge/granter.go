@@ -14,6 +14,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	ssvocab "github.com/c360studio/semstreams/vocabulary"
 
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/graphio"
@@ -261,7 +262,8 @@ func exactEntitySemantics(got, want *graph.EntityState) error {
 
 func frameworkManagedPredicate(predicate string) bool {
 	switch predicate {
-	case graph.PredStubMarker, graph.PredStubReferencedBy, graph.PredStubOwner:
+	case graph.PredStubMarker, graph.PredStubReferencedBy, graph.PredStubOwner,
+		ssvocab.EntityIndexingProfile:
 		return true
 	default:
 		return false

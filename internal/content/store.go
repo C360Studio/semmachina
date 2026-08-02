@@ -554,6 +554,29 @@ func (s *Store) GetKnowledgeReceipt(ctx context.Context, ref Ref) (*KnowledgeRec
 	return receipt, nil
 }
 
+// PutCaseProgressRecord stores the deterministic lifecycle/no-op result before
+// its reference is eligible to land on the turn entity.
+func (s *Store) PutCaseProgressRecord(
+	ctx context.Context, turnEntityID string, record *CaseProgressRecord,
+) (Ref, error) {
+	if record == nil {
+		return Ref{}, errors.New("storing case progress requires a record")
+	}
+	if err := payload.RequireTurnEntityID(record.TurnID, turnEntityID); err != nil {
+		return Ref{}, err
+	}
+	return s.put(ctx, vocabulary.TurnCaseProgressRef, SubjectTurn, record.TurnID, record)
+}
+
+// GetCaseProgressRecord reads one deterministic lifecycle/no-op result.
+func (s *Store) GetCaseProgressRecord(ctx context.Context, ref Ref) (*CaseProgressRecord, error) {
+	record := &CaseProgressRecord{}
+	if err := s.get(ctx, vocabulary.TurnCaseProgressRef, ref, record); err != nil {
+		return nil, err
+	}
+	return record, nil
+}
+
 // PutTestimony stores attributed prose under its deterministic revelation identity.
 func (s *Store) PutTestimony(ctx context.Context, testimonyID string, testimony *Testimony) (Ref, error) {
 	if testimony == nil {

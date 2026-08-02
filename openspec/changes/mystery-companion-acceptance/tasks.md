@@ -19,11 +19,15 @@
   `cold_open → discovery → investigation → accusation → denouement` phase graph
 - [x] 2.2 Implement and register `CaseState` as a SemStreams lifecycle participant with
   lifecycle-manager-exclusive phase writes
-- [ ] 2.3 Add recovery and duplicate-event tests proving one legal transition per
+- [x] 2.3 Add recovery and duplicate-event tests proving one legal transition per
   structured case event
-  - Local duplicate/stale receipt no-op and built-in rule recovery parity are covered;
-    production duplicate delivery awaits the event producers and durable delivery path in
-    groups 4 and 6.
+  - The production case-progress consumer maps identity-validated decisions and knowledge
+    receipts to typed lifecycle events or an exact no-op barrier. Typed poison fails the turn,
+    the auxiliary durable participates in queue-clean recovery checks, and sequential redelivery
+    converges on the resident progress record and receipt.
+  - Lifecycle receipt creation is a read followed by a merge, not a conditional graph write;
+    this proves sequential redelivery convergence and makes no concurrent exactly-once or CAS
+    claim.
 
 ## 3. Epistemic Projection Safety
 
@@ -32,14 +36,17 @@
   companion, public adjudicator, narrator, denouement, verifier, and operator purposes
 - [x] 3.2 Implement the centralized closed-purpose `EpistemicProjector` with bounded reads
   and complete omission of unauthorized entities and identifiers
+  - Companion-aware narration resolves only committed companion and knowledge artifacts, then
+    renders them through the same centralized purpose-scoped projection boundary.
 - [x] 3.3 Route adjudicator and narrator prompt assembly exclusively through the projector,
   pin public-adjudicator acting-actor knowledge and exclusions, and remove the
   audience-agnostic scene view as a direct persona input
-- [ ] 3.4 Assert canaries at projector, serialized prompt, mock-model request, and player
+- [x] 3.4 Assert canaries at projector, serialized prompt, mock-model request, and player
   egress boundaries before player-facing or full Bellweather E2E acceptance
-  - Projector, serialized-prompt, and actual mock-model `Call.Body` canary boundaries are
-    complete. Raw player-egress byte assertions remain and must close before player-facing
-    or full Bellweather E2E acceptance.
+  - Purpose-scoped projector output, serialized request bodies, mock-provider response bodies,
+    and raw WebSocket delivery and retrieval frames carry unique positive and negative canaries.
+    Authorized revealed evidence appears after commitment; culprit, hidden motive, solution
+    predicates, and their unique text remain absent until the authorized denouement.
 
 ## 4. Case Decisions and Interpretation Stage
 
@@ -172,14 +179,29 @@
 
 ## 10. Acceptance and Live Smoke
 
-- [ ] 10.1 Script the deterministic mock-model Bellweather path through discovery,
+- [x] 10.1 Script the deterministic mock-model Bellweather path through discovery,
   investigation, testimony, sharing, all hint levels, wrong accusation, correct
   accusation, and denouement
-- [ ] 10.2 Add one full-stack mock E2E asserting case progression, companion behavior,
+  - The nine-turn fixture observes the body, investigates the fete green, questions Beatrice,
+    shares the learned sedative evidence with Kit, advances all three bounded hints, and resolves
+    wrong then correct accusations through denouement.
+- [x] 10.2 Add one full-stack mock E2E asserting case progression, companion behavior,
   idempotency, and secret canaries with unique IDs and text values at every boundary
-- [ ] 10.3 Add an opt-in Taskfile Gemini smoke for one short investigation and Kit
+  - The full-stack proof checks authoritative case phases, actor-scoped knowledge, testimony,
+    companion hint levels, deterministic accusations, fixed model-call budgets, sequential
+    redelivery, queue settlement, one logical delivery, and stable committed artifacts.
+  - Unique authorized and secret controls are checked at purpose-scoped projector output,
+    serialized model requests, mock responses, and raw WebSocket delivery/retrieval bytes.
+- [x] 10.3 Add an opt-in Taskfile Gemini smoke for one short investigation and Kit
   exchange, loading `.env` without printing the key and excluding it from CI
-- [ ] 10.4 Document active polling and fast-abort checks for the paid Gemini smoke
+  - `task smoke:gemini:bellweather` requires both `SEMMACHINA_PAID_SMOKE=1` and a non-empty
+    `GEMINI_API_KEY`; it is absent from the default task and GitHub Actions.
+- [x] 10.4 Document active polling and fast-abort checks for the paid Gemini smoke
+  - `docs/runbooks/bellweather-gemini-smoke.md` covers prerequisites, the fresh namespace,
+    two bounded provider turn chains, authoritative polling, wedge and egress aborts, the
+    absolute timeout, terminal evidence, teardown, cost, CI exclusion, and secret-safe diagnosis.
+  - The paid smoke has not been run. Running it remains a separate, explicitly authorized
+    operator action under task 11.4.
 
 ## 11. Quality Gates and Acceptance
 

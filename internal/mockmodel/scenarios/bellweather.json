@@ -1,0 +1,46 @@
+{
+  "description": "Nine-turn Bellweather acceptance: discovery, investigation, testimony, sharing, bounded deterministic hints, wrong accusation, correct accusation, and denouement.",
+  "roles": [
+    {"name":"casekeeper","match":{"tools":["submit_case_decision"]}},
+    {"name":"adjudicator","match":{"tools":["submit_verdict"]}},
+    {"name":"narrator","match":{"tools":["submit_narration"]}}
+  ],
+  "scenarios": [{
+    "name": "bellweather-acceptance",
+    "scripts": [
+      {"role":"casekeeper","steps":[
+        {"kind":"tool_call","usage":{"prompt_tokens":100,"completion_tokens":20},"tool_calls":[{"name":"submit_case_decision","arguments":{"kind":"observe","target_refs":["c360.semmachina.world1.bellweather-maze.character.victim-harold-wren"],"reveal_refs":[],"culprit_ref":"","method_ref":"","motive_ref":""}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":100,"completion_tokens":20},"tool_calls":[{"name":"submit_case_decision","arguments":{"kind":"investigate","target_refs":["c360.semmachina.world1.bellweather-maze.scene.fete-green"],"reveal_refs":["c360.semmachina.world1.bellweather-maze.evidence.evidence-wire"],"culprit_ref":"","method_ref":"","motive_ref":""}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":100,"completion_tokens":20},"tool_calls":[{"name":"submit_case_decision","arguments":{"kind":"question","target_refs":["c360.semmachina.world1.bellweather-maze.character.beatrice-crome"],"reveal_refs":["c360.semmachina.world1.bellweather-maze.evidence.evidence-sedative"],"culprit_ref":"","method_ref":"","motive_ref":""}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":100,"completion_tokens":20},"tool_calls":[{"name":"submit_case_decision","arguments":{"kind":"share","target_refs":["c360.semmachina.world1.bellweather-maze.character.kit-finch"],"reveal_refs":["c360.semmachina.world1.bellweather-maze.evidence.evidence-sedative"],"culprit_ref":"","method_ref":"","motive_ref":""}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":100,"completion_tokens":20},"tool_calls":[{"name":"submit_case_decision","arguments":{"kind":"request_hint","target_refs":[],"reveal_refs":[],"culprit_ref":"","method_ref":"","motive_ref":""}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":100,"completion_tokens":20},"tool_calls":[{"name":"submit_case_decision","arguments":{"kind":"request_hint","target_refs":[],"reveal_refs":[],"culprit_ref":"","method_ref":"","motive_ref":""}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":100,"completion_tokens":20},"tool_calls":[{"name":"submit_case_decision","arguments":{"kind":"request_hint","target_refs":[],"reveal_refs":[],"culprit_ref":"","method_ref":"","motive_ref":""}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":100,"completion_tokens":20},"tool_calls":[{"name":"submit_case_decision","arguments":{"kind":"accuse","target_refs":[],"reveal_refs":[],"culprit_ref":"c360.semmachina.world1.bellweather-maze.character.eleanor-vale","method_ref":"c360.semmachina.world1.bellweather-maze.item.bell-wire","motive_ref":"c360.semmachina.world1.bellweather-maze.evidence.evidence-ledger"}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":100,"completion_tokens":20},"tool_calls":[{"name":"submit_case_decision","arguments":{"kind":"accuse","target_refs":[],"reveal_refs":[],"culprit_ref":"c360.semmachina.world1.bellweather-maze.character.judith-bell","method_ref":"c360.semmachina.world1.bellweather-maze.item.bell-wire","motive_ref":"c360.semmachina.world1.bellweather-maze.evidence.evidence-motive"}}]}
+      ]},
+      {"role":"adjudicator","steps":[
+        {"kind":"tool_call","usage":{"prompt_tokens":80,"completion_tokens":16},"tool_calls":[{"name":"submit_verdict","arguments":{"scalars":{"plausibility":"certain","risk":"none","consequence":"none","requires_roll":false},"modifiers":[],"bands":{"auto":[]},"rationale":"Direct observation needs no roll."}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":80,"completion_tokens":16},"tool_calls":[{"name":"submit_verdict","arguments":{"scalars":{"plausibility":"certain","risk":"none","consequence":"none","requires_roll":false},"modifiers":[],"bands":{"auto":[]},"rationale":"Careful investigation needs no roll."}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":80,"completion_tokens":16},"tool_calls":[{"name":"submit_verdict","arguments":{"scalars":{"plausibility":"certain","risk":"none","consequence":"none","requires_roll":false},"modifiers":[],"bands":{"auto":[]},"rationale":"The question receives its committed answer."}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":80,"completion_tokens":16},"tool_calls":[{"name":"submit_verdict","arguments":{"scalars":{"plausibility":"certain","risk":"none","consequence":"none","requires_roll":false},"modifiers":[],"bands":{"auto":[]},"rationale":"Sharing known evidence needs no roll."}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":80,"completion_tokens":16},"tool_calls":[{"name":"submit_verdict","arguments":{"scalars":{"plausibility":"certain","risk":"none","consequence":"none","requires_roll":false},"modifiers":[],"bands":{"auto":[]},"rationale":"A bounded hint request needs no roll."}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":80,"completion_tokens":16},"tool_calls":[{"name":"submit_verdict","arguments":{"scalars":{"plausibility":"certain","risk":"none","consequence":"none","requires_roll":false},"modifiers":[],"bands":{"auto":[]},"rationale":"A bounded hint request needs no roll."}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":80,"completion_tokens":16},"tool_calls":[{"name":"submit_verdict","arguments":{"scalars":{"plausibility":"certain","risk":"none","consequence":"none","requires_roll":false},"modifiers":[],"bands":{"auto":[]},"rationale":"A bounded hint request needs no roll."}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":80,"completion_tokens":16},"tool_calls":[{"name":"submit_verdict","arguments":{"scalars":{"plausibility":"certain","risk":"none","consequence":"none","requires_roll":false},"modifiers":[],"bands":{"auto":[]},"rationale":"The complete accusation is structurally accepted."}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":80,"completion_tokens":16},"tool_calls":[{"name":"submit_verdict","arguments":{"scalars":{"plausibility":"certain","risk":"none","consequence":"none","requires_roll":false},"modifiers":[],"bands":{"auto":[]},"rationale":"The complete accusation is structurally accepted."}}]}
+      ]},
+      {"role":"narrator","steps":[
+        {"kind":"tool_call","usage":{"prompt_tokens":90,"completion_tokens":18},"tool_calls":[{"name":"submit_narration","arguments":{"prose":"Harold Wren lies still where the maze path bends out of the fete's sight."}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":90,"completion_tokens":18},"tool_calls":[{"name":"submit_narration","arguments":{"prose":"A bright wire end catches Rowan's eye beside the fete-green maze entrance."}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":90,"completion_tokens":18},"tool_calls":[{"name":"submit_narration","arguments":{"prose":"Beatrice says the missing sedative served a patient yesterday and never touched Harold."}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":90,"completion_tokens":18},"tool_calls":[{"name":"submit_narration","arguments":{"prose":"Kit sets the shared sedative testimony beside the wire and says nothing he cannot support."}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":90,"completion_tokens":18},"tool_calls":[{"name":"submit_narration","arguments":{"prose":"Kit offers one restrained nudge from what he knows."}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":90,"completion_tokens":18},"tool_calls":[{"name":"submit_narration","arguments":{"prose":"Kit connects two earned facts without naming a culprit."}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":90,"completion_tokens":18},"tool_calls":[{"name":"submit_narration","arguments":{"prose":"Kit marks a bounded next step and leaves the conclusion to Rowan."}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":90,"completion_tokens":18},"tool_calls":[{"name":"submit_narration","arguments":{"prose":"The first accusation lands neatly and proves wrong."}}]},
+        {"kind":"tool_call","usage":{"prompt_tokens":90,"completion_tokens":18},"tool_calls":[{"name":"submit_narration","arguments":{"prose":"Judith Bell used the cut bell wire after Harold threatened her churchwarden dismissal; Bellweather's manners finally give way to the truth."}}]}
+      ]}
+    ]
+  }]
+}

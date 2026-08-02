@@ -411,6 +411,7 @@ func TestPack_ApplicationFansInEffectsKnowledgeAndAccusationBeforeNarration(t *t
 	}
 	for _, predicate := range []vocabulary.Predicate{
 		vocabulary.TurnEffectsBatch, vocabulary.TurnKnowledgeRef, vocabulary.TurnAccusationRef,
+		vocabulary.TurnCaseProgressRef,
 	} {
 		if !conditions[predicate.String()] {
 			t.Errorf("narration is not gated on %s", predicate)
@@ -539,6 +540,14 @@ func hopForPhase(t *testing.T, definitions []rule.Definition, phase vocabulary.T
 	t.Helper()
 	var found *rule.Definition
 	for index := range definitions {
+		stageHop := false
+		for _, action := range definitions[index].OnEnter {
+			_, entersStage := rulepack.PhaseForSubject(action.Subject)
+			stageHop = stageHop || entersStage || action.Subject == rulepack.SubjectResolved
+		}
+		if !stageHop {
+			continue
+		}
 		for _, condition := range definitions[index].Conditions {
 			if condition.Field != vocabulary.TurnPhaseCurrent.String() || condition.Operator != "eq" {
 				continue

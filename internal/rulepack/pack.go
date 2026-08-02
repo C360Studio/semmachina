@@ -543,7 +543,8 @@ func checkAction(action rule.Action) error {
 // knownSubject reports whether a subject drives a stage or announces a resolved
 // turn.
 func knownSubject(subject string) bool {
-	if subject == SubjectResolved || subject == SubjectKnowledge || subject == SubjectAccusation {
+	if subject == SubjectResolved || subject == SubjectKnowledge || subject == SubjectAccusation ||
+		subject == SubjectCaseProgress {
 		return true
 	}
 	_, isStage := PhaseForSubject(subject)

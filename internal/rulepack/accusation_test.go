@@ -53,7 +53,7 @@ func TestAccusationUniversalBarrierIsRoutedAndRequiredBeforeNarration(t *testing
 			}
 			for _, required := range []string{
 				vocabulary.TurnEffectsBatch.String(), vocabulary.TurnKnowledgeRef.String(),
-				vocabulary.TurnAccusationRef.String(),
+				vocabulary.TurnAccusationRef.String(), vocabulary.TurnCaseProgressRef.String(),
 			} {
 				if !fields[required] {
 					t.Fatalf("narration can race missing barrier %s: %#v", required, definition.Conditions)
@@ -67,7 +67,7 @@ func TestAccusationUniversalBarrierIsRoutedAndRequiredBeforeNarration(t *testing
 	}
 }
 
-func TestApplyingRuleDoesNotMatchUntilAccusationArtifactLands(t *testing.T) {
+func TestApplyingRuleDoesNotMatchUntilUniversalArtifactsLand(t *testing.T) {
 	declare(t)
 	definitions, err := rulepack.Definitions()
 	if err != nil {
@@ -100,7 +100,16 @@ func TestApplyingRuleDoesNotMatchUntilAccusationArtifactLands(t *testing.T) {
 	state.Triples = append(state.Triples, message.Triple{Subject: entityID,
 		Predicate: vocabulary.TurnAccusationRef.String(), Object: "obj://TEST/turn/turn-one/accusation"})
 	matched, err = evaluator.Evaluate(state, expr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matched {
+		t.Fatal("applying rule matched before turn.case-progress.ref landed")
+	}
+	state.Triples = append(state.Triples, message.Triple{Subject: entityID,
+		Predicate: vocabulary.TurnCaseProgressRef.String(), Object: "obj://TEST/turn/turn-one/case-progress"})
+	matched, err = evaluator.Evaluate(state, expr)
 	if err != nil || !matched {
-		t.Fatalf("applying rule after accusation artifact = %v, %v", matched, err)
+		t.Fatalf("applying rule after all universal artifacts = %v, %v", matched, err)
 	}
 }

@@ -19,6 +19,9 @@ import (
 // StarterWorldPath is the embedded path of the first-party starter world.
 const StarterWorldPath = "worlds/starter"
 
+// BellweatherMazePath is the embedded first-party mystery acceptance world.
+const BellweatherMazePath = "worlds/bellweather-maze"
+
 //go:embed all:worlds
 var worlds embed.FS
 
@@ -29,4 +32,9 @@ func Worlds() fs.FS { return worlds }
 // so a caller sees manifest.yaml at the root exactly as it would from disk.
 func StarterWorld() (fs.FS, error) {
 	return fs.Sub(worlds, StarterWorldPath)
+}
+
+// BellweatherMaze returns the authored mystery package rooted at its manifest.
+func BellweatherMaze() (fs.FS, error) {
+	return fs.Sub(worlds, BellweatherMazePath)
 }

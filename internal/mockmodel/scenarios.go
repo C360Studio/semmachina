@@ -11,6 +11,8 @@ import (
 // turnLoopScenariosPath is the embedded path of the shipped scenario pack.
 const turnLoopScenariosPath = "scenarios/turnloop.json"
 
+const bellweatherScenariosPath = "scenarios/bellweather.json"
+
 // TurnLoopInstancePrefix is the four leading positions of every effect target
 // the shipped pack names: org, platform, world namespace, template.
 //
@@ -21,11 +23,14 @@ const turnLoopScenariosPath = "scenarios/turnloop.json"
 // TurnLoopScenariosIn is the rebinding.
 const TurnLoopInstancePrefix = "c360.semmachina.world1.starter."
 
+// BellweatherInstancePrefix is the authored Bellweather pack's six-part ID prefix.
+const BellweatherInstancePrefix = "c360.semmachina.world1.bellweather-maze."
+
 // The pack is embedded rather than read from disk for the same reason the
 // starter world is: a broken or missing file has to be a test-time failure
 // rather than a run that quietly finds no fixture and covers nothing.
 //
-//go:embed scenarios/turnloop.json
+//go:embed scenarios/*.json
 var scenarios embed.FS
 
 var (
@@ -109,4 +114,24 @@ func TurnLoopScenariosIn(worldNS string) (*Fixture, error) {
 			TurnLoopInstancePrefix, worldNS)
 	}
 	return ParseFixture([]byte(strings.ReplaceAll(string(data), TurnLoopInstancePrefix, rebound)))
+}
+
+// BellweatherScenariosIn returns the nine-turn mystery acceptance pack rebound
+// to one isolated world namespace.
+func BellweatherScenariosIn(worldNS string) (*Fixture, error) {
+	if worldNS == "" {
+		return nil, fmt.Errorf("rebinding the Bellweather scenario pack needs a world namespace")
+	}
+	if strings.Contains(worldNS, ".") {
+		return nil, fmt.Errorf("world namespace %q contains a dot", worldNS)
+	}
+	data, err := fs.ReadFile(scenarios, bellweatherScenariosPath)
+	if err != nil {
+		return nil, fmt.Errorf("read the embedded Bellweather scenario pack: %w", err)
+	}
+	rebound := strings.Replace(BellweatherInstancePrefix, "world1", worldNS, 1)
+	if !strings.Contains(string(data), BellweatherInstancePrefix) {
+		return nil, fmt.Errorf("the Bellweather scenario pack contains no %q", BellweatherInstancePrefix)
+	}
+	return ParseFixture([]byte(strings.ReplaceAll(string(data), BellweatherInstancePrefix, rebound)))
 }

@@ -2,6 +2,7 @@ package caseflow_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -90,6 +91,11 @@ func TestRecordRejectsOutOfOrderReceipt(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "out of order") {
 		t.Fatalf("Record error = %v, want out of order", err)
+	}
+	var illegal *caseflow.IllegalTransitionError
+	if !errors.As(err, &illegal) || illegal.Current != vocabulary.CasePhaseColdOpen ||
+		illegal.Required != vocabulary.CasePhaseInvestigation {
+		t.Fatalf("Record error = %#v, want typed cold_open -> investigation prerequisite", err)
 	}
 	if len(store.writes) != 0 {
 		t.Fatal("out-of-order receipt wrote graph state")

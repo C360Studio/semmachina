@@ -10,7 +10,7 @@ import (
 )
 
 // WorkflowName is the stable lifecycle registration key for mystery cases.
-const WorkflowName = "mystery-case"
+const WorkflowName = vocabulary.CaseWorkflowName
 
 // CaseState is the lifecycle projection of a case graph entity.
 type CaseState struct {
