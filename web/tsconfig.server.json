@@ -1,0 +1,18 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"allowJs": true,
+		"checkJs": true,
+		"noEmit": true,
+		"types": ["node"]
+	},
+	"include": ["server/**/*.ts", "server/**/*.mjs", "src/lib/server/**/*.ts"],
+	"exclude": [
+		"node_modules/**",
+		".svelte-kit/**",
+		".server-build/**",
+		"build/**",
+		"src/lib/server/**/*.test.ts",
+		"src/lib/server/**/*.spec.ts"
+	]
+}

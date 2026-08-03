@@ -11,25 +11,25 @@
 
 ## 2. Secure Server Projection Adapter
 
-- [ ] 2.1 Write RED startup/transport tests for fixed endpoint selection, redirect refusal, normal TLS
+- [x] 2.1 Write RED startup/transport tests for fixed endpoint selection, redirect refusal, normal TLS
   validation, loopback/Unix-local, enforced surface-only network policy, or authenticated-proxy
   posture; prove bare RFC1918/private classification and browser endpoint override are refused.
 - [ ] 2.2 Add deployment acceptance that proves the browser-facing network and an untrusted sibling
   workload cannot directly connect to or read the graph endpoint; document that startup checks
   support but cannot replace firewall/network-policy/proxy enforcement.
-- [ ] 2.3 Write RED principal/scope tests proving production default-deny/no dial before Group 3,
+- [x] 2.3 Write RED principal/scope tests proving production default-deny/no dial before Group 3,
   exact canonical component checks (`world1` never admits `world10`), and whole-response failure on
   any out-of-scope entity or relationship.
-- [ ] 2.4 Write RED raw-boundary tests proving full validation precedes DTO construction; raw bodies,
+- [x] 2.4 Write RED raw-boundary tests proving full validation precedes DTO construction; raw bodies,
   upstream error details, unknown fields/triples, and secret values are never logged, cached,
   returned, or embedded; snake_case/corrected forms normalize and conflicting dual forms fail.
-- [ ] 2.5 Write RED capacity/topology tests for 0..999 success, 1000
+- [x] 2.5 Write RED capacity/topology tests for 0..999 success, 1000
   `projection_capacity_exceeded`, no `spatialSearch`, at most 999 relationship calls, 999 edges per
   location and 998001 total, and whole-map failure on exceeded, malformed, dangling, or unsafe edges.
-- [ ] 2.6 Implement the pure authenticated-principal adapter with fixed transport, exact-ID clock
+- [x] 2.6 Implement the pure authenticated-principal adapter with fixed transport, exact-ID clock
   lookup, bounded exhaustive `entitiesByPrefix`/`relationships` map, complete validation, and closed
   DTO normalization; leave the production principal provider default-deny until Group 3.
-- [ ] 2.7 Track the five focused SemStreams issues: auth/scope
+- [x] 2.7 Track the five focused SemStreams issues: auth/scope
   [#882](https://github.com/C360Studio/semstreams/issues/882), selection minimization
   [#883](https://github.com/C360Studio/semstreams/issues/883), prefix pagination
   [#884](https://github.com/C360Studio/semstreams/issues/884), spatial scope/page
@@ -37,6 +37,9 @@
   [#886](https://github.com/C360Studio/semstreams/issues/886). Record starter-safe local constraints
   separately from public/scale blockers; add no direct NATS, local query/index, silent filter, or
   unrestricted proxy workaround.
+- [x] 2.8 Install adapter-node configuration and projection runtime before listen, keep the lazy
+  chunk registry process-stable, default-deny the projection route, explicitly refuse raw WebSocket
+  upgrades until Group 3, and pass the production-server smoke.
 
 ## 3. Same-Origin Player WebSocket Bridge
 
@@ -56,9 +59,9 @@
 - [ ] 3.6 Write RED resource tests for binary/oversized frames, socket caps, per-direction queue
   bounds, backpressure, slow peers, handshake/idle/liveness deadlines, close propagation, and
   cleanup after every close path.
-- [ ] 3.7 Implement the adapter-node custom server, separate HTTPS creator authentication, bounded
-  opaque session mint/rotation/logout/expiry, fixed raw upgrade route, exact upgrade checks,
-  immutable upstream mapping, secret redaction, bounded relay, and liveness policy as local work.
+- [ ] 3.7 Extend the existing pre-listen adapter-node bootstrap with separate HTTPS creator
+  authentication, bounded opaque session mint/rotation/logout/expiry, the fixed raw upgrade route,
+  exact upgrade checks, immutable upstream mapping, secret redaction, bounded relay, and liveness.
 
 ## 4. Player Session State Machine
 
