@@ -126,6 +126,7 @@ func enumerations() map[string][]string {
 		"Mechanic":               sets[vocabulary.KindMechanic],
 		"RNG":                    sets[vocabulary.KindRNG],
 		"FailureReason":          sets[vocabulary.KindFailureReason],
+		"AuthorizationReason":    sets[vocabulary.KindAuthorizationReason],
 		"RollGateMapping":        sets[vocabulary.KindRollGateMapping],
 		"EvidenceTruthStatus":    sets[vocabulary.KindEvidenceTruthStatus],
 		"EvidenceRevealKind":     sets[vocabulary.KindEvidenceRevealKind],

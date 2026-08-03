@@ -564,6 +564,22 @@ func TestLatest_APlayerWhoHasFinishedNoTurnIsToldSo(t *testing.T) {
 	if !errors.Is(err, egress.ErrNoResult) {
 		t.Fatalf("Latest for a player mid-first-turn = %v, want ErrNoResult", err)
 	}
+	if errors.Is(err, egress.ErrNoTurnHistory) {
+		t.Fatalf("Latest for a player mid-first-turn = %v, must not report an empty turn history", err)
+	}
+}
+
+func TestLatest_APlayerWithNoTurnHistoryIsDistinguishedFromARunningTurn(t *testing.T) {
+	h := newHarness(t)
+	h.graph.player(t, testPlayerID, nil, nil)
+
+	_, err := h.results.Latest(t.Context(), testPlayerID)
+	if !errors.Is(err, egress.ErrNoTurnHistory) {
+		t.Fatalf("Latest for a player with no turn pointers = %v, want ErrNoTurnHistory", err)
+	}
+	if errors.Is(err, egress.ErrNoResult) {
+		t.Fatalf("Latest for a player with no turn pointers = %v, must not look like a running turn", err)
+	}
 }
 
 // A pointer at a turn nothing created must not deny a player the answer their

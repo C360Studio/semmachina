@@ -46,6 +46,9 @@ const (
 	KindRNG Kind = "rng"
 	// KindFailureReason is the machine-readable reason a turn failed.
 	KindFailureReason Kind = "failure_reason"
+	// KindAuthorizationReason is the deterministic reason a knowledge reveal
+	// proposal was refused.
+	KindAuthorizationReason Kind = "authorization_reason"
 	// KindRollGateMapping is the versioned advisory (plausibility, risk) → roll
 	// mapping a recorded expectation was computed under.
 	KindRollGateMapping Kind = "roll_gate_mapping"
@@ -150,6 +153,7 @@ var registeredEnums = []enumSet{
 	mechanicEnum,
 	rngEnum,
 	failureReasonEnum,
+	authorizationReasonEnum,
 	rollGateMappingEnum,
 	evidenceTruthStatusEnum,
 	evidenceRevealKindEnum,

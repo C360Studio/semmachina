@@ -5,6 +5,7 @@
 		createSessionController,
 		type SessionController
 	} from '../player-session/session-controller';
+	import { actionTextViolation } from '../player-v1/parser';
 	import { createSessionState, type SessionState } from '../player-session/session-machine';
 	import { projectSessionView } from '../player-session/session-view';
 	import type { WorldProjection } from '../server/world-projection';
@@ -112,8 +113,9 @@
 
 	function submitAction(): void {
 		const text = actionValue;
-		actionValue = '';
+		if (actionTextViolation(text) !== undefined) return;
 		controller?.dispatch({ type: 'IntentCreated', text, idempotencyKey: keyFactory() });
+		actionValue = '';
 	}
 </script>
 

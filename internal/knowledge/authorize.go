@@ -11,46 +11,40 @@ import (
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
-// AuthorizationReason is the closed reason an untrusted reveal proposal is refused.
-type AuthorizationReason string
+// AuthorizationReason is the shared closed vocabulary reason an untrusted
+// reveal proposal is refused.
+type AuthorizationReason = vocabulary.AuthorizationReason
 
 const (
 	// ReasonWrongTurn means the stored decision artifact belongs to a different
 	// turn than the durable trigger being handled.
-	ReasonWrongTurn AuthorizationReason = "wrong-turn"
+	ReasonWrongTurn = vocabulary.AuthorizationWrongTurn
 	// ReasonWrongCase means the decision names a different case.
-	ReasonWrongCase AuthorizationReason = "wrong-case"
+	ReasonWrongCase = vocabulary.AuthorizationWrongCase
 	// ReasonWrongActor means the decision actor is not the turn's acting actor.
-	ReasonWrongActor AuthorizationReason = "wrong-actor"
+	ReasonWrongActor = vocabulary.AuthorizationWrongActor
 	// ReasonInvalidTarget means the decision's structural target is not admissible.
-	ReasonInvalidTarget AuthorizationReason = "invalid-target"
+	ReasonInvalidTarget = vocabulary.AuthorizationInvalidTarget
 	// ReasonIneligibleReveal means authored eligibility does not admit the evidence.
-	ReasonIneligibleReveal AuthorizationReason = "ineligible-reveal"
+	ReasonIneligibleReveal = vocabulary.AuthorizationIneligibleReveal
 	// ReasonIneligiblePhase means the case has not reached the evidence's minimum phase.
-	ReasonIneligiblePhase AuthorizationReason = "ineligible-phase"
+	ReasonIneligiblePhase = vocabulary.AuthorizationIneligiblePhase
 	// ReasonSolutionLocked means solution evidence was proposed before denouement.
-	ReasonSolutionLocked AuthorizationReason = "solution-locked"
+	ReasonSolutionLocked = vocabulary.AuthorizationSolutionLocked
 	// ReasonQuestionTargetMismatch means the questioned actor holds no matching authored belief.
-	ReasonQuestionTargetMismatch AuthorizationReason = "question-target-mismatch"
+	ReasonQuestionTargetMismatch = vocabulary.AuthorizationQuestionTargetMismatch
 	// ReasonShareSourceUnknown means the sharing actor does not know the evidence.
-	ReasonShareSourceUnknown AuthorizationReason = "share-source-unknown"
+	ReasonShareSourceUnknown = vocabulary.AuthorizationShareSourceUnknown
 	// ReasonShareTargetUnauthorized means the injected bond policy refuses the recipient.
-	ReasonShareTargetUnauthorized AuthorizationReason = "share-target-unauthorized"
+	ReasonShareTargetUnauthorized = vocabulary.AuthorizationShareTargetUnauthorized
 	// ReasonWitnessUnauthorized is reserved for the Group 5.3 witnessed-discovery flow.
-	ReasonWitnessUnauthorized AuthorizationReason = "witness-unauthorized"
+	ReasonWitnessUnauthorized = vocabulary.AuthorizationWitnessUnauthorized
 	// ReasonUnsupportedKind means the decision kind cannot authorize the proposed reveal.
-	ReasonUnsupportedKind AuthorizationReason = "unsupported-kind"
+	ReasonUnsupportedKind = vocabulary.AuthorizationUnsupportedKind
 )
 
-var authorizationReasons = []AuthorizationReason{
-	ReasonWrongTurn, ReasonWrongCase, ReasonWrongActor, ReasonInvalidTarget, ReasonIneligibleReveal,
-	ReasonIneligiblePhase, ReasonSolutionLocked, ReasonQuestionTargetMismatch,
-	ReasonShareSourceUnknown, ReasonShareTargetUnauthorized, ReasonWitnessUnauthorized,
-	ReasonUnsupportedKind,
-}
-
 // AuthorizationReasons returns the complete reason set.
-func AuthorizationReasons() []AuthorizationReason { return slices.Clone(authorizationReasons) }
+func AuthorizationReasons() []AuthorizationReason { return vocabulary.AuthorizationReasons() }
 
 // AuthorizationError is a permanent refusal of the complete proposed batch.
 type AuthorizationError struct {

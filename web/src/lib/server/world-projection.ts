@@ -115,6 +115,7 @@ function validateDatatypeObject(
 		return true;
 	}
 	if (datatype === 'xsd:string') return typeof object === 'string';
+	if (datatype === undefined && typeof object === 'string') return true;
 	if (datatype !== undefined && datatype !== '') return false;
 	return typeof object === 'boolean' || (typeof object === 'number' && Number.isFinite(object));
 }

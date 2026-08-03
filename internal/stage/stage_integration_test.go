@@ -296,7 +296,7 @@ func (l *loop) startAuxiliaryConsumers(
 		t.Fatalf("NewGranter: %v", err)
 	}
 	granterConsumer, err := knowledge.NewConsumer(
-		l.harness.Client, loader, granter, l.recorder, knowledge.DenyShares{})
+		l.harness.Client, loader, granter, l.recorder, artifacts, knowledge.DenyShares{})
 	if err != nil {
 		t.Fatalf("NewConsumer(knowledge): %v", err)
 	}

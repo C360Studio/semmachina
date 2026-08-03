@@ -173,6 +173,34 @@ describe('CreatorSurface', () => {
 		expect(controller.events.at(-1)).toEqual({ type: 'RefusalAcknowledged' });
 	});
 
+	it('does not create an intent or clear invalid action text before a valid dispatch', async () => {
+		const controller = new FakeController();
+		const screen = await render(CreatorSurface, {
+			controllerFactory: () => controller,
+			worldLoader: async () => world,
+			keyFactory: () => 'key-1'
+		});
+		controller.emit(idle());
+		const action = screen.getByRole('textbox', { name: 'What do you do?' });
+		const submit = screen.getByRole('button', { name: 'Submit' });
+		const oversized = '€'.repeat(1366);
+
+		await action.fill(oversized);
+		await expect.element(submit).toBeDisabled();
+		await expect.element(action).toHaveValue(oversized);
+		await expect.element(action).toHaveFocus();
+		expect(controller.events.some((event) => event.type === 'IntentCreated')).toBe(false);
+
+		await action.fill('Open the gate');
+		await submit.click();
+		expect(controller.events.at(-1)).toEqual({
+			type: 'IntentCreated',
+			text: 'Open the gate',
+			idempotencyKey: 'key-1'
+		});
+		await expect.element(action).toHaveValue('');
+	});
+
 	it('renders and focuses only the current machine terminal once per canonical identity', async () => {
 		const controller = new FakeController();
 		const screen = await render(CreatorSurface, {

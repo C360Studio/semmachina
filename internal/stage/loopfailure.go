@@ -394,7 +394,7 @@ func (w *LoopFailureWatcher) CatchUp(ctx context.Context) error {
 func (w *LoopFailureWatcher) Handle(ctx context.Context, data []byte) error {
 	event, err := w.decode(data)
 	if err != nil {
-		w.logger.Error("loop-failure notification refused permanently", "error", err)
+		w.logger.Error("loop-failure notification refused permanently")
 		return natsclient.TerminateDelivery(err)
 	}
 	if event == nil {
@@ -406,8 +406,7 @@ func (w *LoopFailureWatcher) Handle(ctx context.Context, data []byte) error {
 		// Not one of ours. Every loop this engine spawns carries the engine's
 		// injected identity, so a failure event without it belongs to some other
 		// producer sharing the broker.
-		w.logger.Debug("loop failure carries no turn identity; ignoring",
-			"loop", event.LoopID, "role", event.Role, "reason", event.Reason)
+		w.logger.Debug("loop failure carries no turn identity; ignoring")
 		return nil
 	}
 	role, err := roleOf(event.Role)
@@ -428,7 +427,7 @@ func (w *LoopFailureWatcher) Handle(ctx context.Context, data []byte) error {
 				return fmt.Errorf("commit exhausted companion result for turn %s: %w", identity.TurnEntityID, err)
 			}
 			w.logger.Warn("companion exhausted its one iteration; committed silent result and continued narration",
-				"turn", identity.TurnEntityID, "loop", event.LoopID)
+				"turn", identity.TurnEntityID)
 			return nil
 		}
 		return w.recordCapExhaustion(ctx, identity, role, event)
@@ -453,8 +452,8 @@ func (w *LoopFailureWatcher) recordCapExhaustion(
 		return w.reportRecordError(err, identity, "cap exhaustion")
 	}
 	w.logger.Warn("persona exhausted its iteration budget; the turn ended explicitly",
-		"turn", identity.TurnEntityID, "role", role, "loop", event.LoopID,
-		"iterations", event.Iterations, "outcome", transition.Outcome, "phase", transition.Phase)
+		"turn", identity.TurnEntityID, "role", role,
+		"outcome", transition.Outcome, "phase", transition.Phase)
 	return nil
 }
 
@@ -476,9 +475,8 @@ func (w *LoopFailureWatcher) recordLoopFailure(
 		return w.reportRecordError(err, identity, "loop failure")
 	}
 	w.logger.Error("persona loop failed without exiting; the turn ended explicitly",
-		"turn", identity.TurnEntityID, "role", role, "loop", event.LoopID,
-		"reason", event.Reason, "iterations", event.Iterations,
-		"outcome", transition.Outcome, "phase", transition.Phase, "error", event.Error)
+		"turn", identity.TurnEntityID, "role", role,
+		"outcome", transition.Outcome, "phase", transition.Phase)
 	return nil
 }
 
@@ -492,7 +490,7 @@ func (w *LoopFailureWatcher) reportRecordError(err error, identity persona.Ident
 	var lost *persona.DetailLostError
 	if errors.As(err, &lost) {
 		w.logger.Error("turn ended without its explanation",
-			"turn", identity.TurnEntityID, "kind", kind, "phase", lost.Transition.Phase, "error", err)
+			"turn", identity.TurnEntityID, "kind", kind, "phase", lost.Transition.Phase)
 		return nil
 	}
 	return fmt.Errorf("record %s for turn %s: %w", kind, identity.TurnEntityID, err)

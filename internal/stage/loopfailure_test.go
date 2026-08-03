@@ -1,9 +1,11 @@
 package stage_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -153,6 +155,9 @@ func TestLoopFailureWatcher_EndsTheTurnWhenAPersonaExhaustsItsBudget(t *testing.
 	if len(details.stored) != 1 {
 		t.Fatalf("stored %d explanations, want 1", len(details.stored))
 	}
+	if got := details.stored[0].Class; got != content.FailureClassAgentLimit {
+		t.Fatalf("stored class %q, want %q", got, content.FailureClassAgentLimit)
+	}
 }
 
 // The commoner half of the same event. A model error leaves the turn in exactly
@@ -184,8 +189,33 @@ func TestLoopFailureWatcher_EndsTheTurnWhenALoopFailsForAnyOtherReason(t *testin
 	if stored := details.stored[0]; stored.Reason != vocabulary.FailurePersonaLoopFailed {
 		t.Errorf("stored detail carries reason %q, want the closed loop-failed code", stored.Reason)
 	}
+	if got := details.stored[0].Class; got != content.FailureClassAgentRuntime {
+		t.Errorf("stored class %q, want %q", got, content.FailureClassAgentRuntime)
+	}
 	if got := details.stored[0].Message; !strings.Contains(got, "handler_error") {
 		t.Errorf("the stored explanation does not quote the loop's own reason: %q", got)
+	}
+}
+
+func TestLoopFailureWatcher_DoesNotLogOpenFailureFields(t *testing.T) {
+	var logs bytes.Buffer
+	original := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(original) })
+
+	failer := &fakeFailer{transition: turn.Transition{
+		Previous: vocabulary.PhaseAdjudicating, Phase: vocabulary.PhaseFailed, Outcome: turn.OutcomeAdvanced,
+	}}
+	details := &fakeDetails{ref: content.Ref{Instance: "SEMMACHINA_CONTENT", Key: "turn/" + testTurnID + "/failure"}}
+	watcher := newLoopFailureWatcher(t, failer, details)
+	data := loopFailure(t, "handler_error-secret-reason", engineMetadata())
+	if err := watcher.Handle(t.Context(), data); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	for _, forbidden := range []string{"loop-1", "handler_error-secret-reason", "max iterations (3) reached", `"iterations"`} {
+		if strings.Contains(logs.String(), forbidden) {
+			t.Fatalf("logs leaked %q: %s", forbidden, logs.String())
+		}
 	}
 }
 

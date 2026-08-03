@@ -2,11 +2,19 @@ const PLAYER_PROTOCOL = 'player/v1' as const;
 const MAX_ENTITY_ID_BYTES = 256;
 const MAX_ID_SEGMENT_BYTES = 128;
 const MAX_ACTION_ID_BYTES = 123;
-const MAX_ACTION_TEXT_BYTES = 4 * 1024;
+export const MAX_ACTION_TEXT_BYTES = 4 * 1024;
 const MAX_IDEMPOTENCY_KEY_BYTES = 128;
 const MAX_PROSE_BYTES = 16 * 1024;
 const MAX_MODIFIER_NOTE_BYTES = 256;
 const utf8 = new TextEncoder();
+
+export type ActionTextViolation = 'blank' | 'too_long';
+
+export function actionTextViolation(text: string): ActionTextViolation | undefined {
+	if (text.trim() === '') return 'blank';
+	if (byteLength(text) > MAX_ACTION_TEXT_BYTES) return 'too_long';
+	return undefined;
+}
 
 export type ProtocolFailureKind =
 	| 'invalid_json'
@@ -264,14 +272,19 @@ function stringField(record: Record<string, unknown>, key: string, path: string)
 	return value;
 }
 
+function hasOwn(record: Record<string, unknown>, key: string): boolean {
+	return Object.prototype.hasOwnProperty.call(record, key);
+}
+
 function optionalString(
 	record: Record<string, unknown>,
 	key: string,
 	path: string
 ): string | undefined {
+	if (!hasOwn(record, key)) return undefined;
 	const value = record[key];
-	if (value === undefined || value === null) return undefined;
 	if (typeof value !== 'string') invalid(`${path}.${key}`, 'must be a string when present');
+	if (value === '') invalid(`${path}.${key}`, 'must be nonempty when present');
 	return value;
 }
 
@@ -440,8 +453,7 @@ function forbidPresent(
 	path: string
 ): void {
 	for (const key of keys) {
-		if (record[key] !== undefined && record[key] !== null)
-			invalid(`${path}.${key}`, 'must be absent');
+		if (hasOwn(record, key)) invalid(`${path}.${key}`, 'must be absent');
 	}
 }
 
@@ -451,11 +463,12 @@ function parseSubmitRefusal(value: unknown, path: string): SubmitRefusal {
 	const message = requireNonempty(stringField(record, 'message', path), `${path}.message`);
 	const field = optionalString(record, 'field', path);
 	const activeTurnID = optionalString(record, 'active_turn_id', path);
+	const activeTurnPresent = hasOwn(record, 'active_turn_id');
 	if (code === 'turn_in_progress') {
 		if (activeTurnID === undefined)
 			invalid(`${path}.active_turn_id`, 'is required for turn_in_progress');
 		requireIDSegment(activeTurnID, `${path}.active_turn_id`);
-	} else if (activeTurnID !== undefined && activeTurnID !== '') {
+	} else if (activeTurnPresent) {
 		invalid(`${path}.active_turn_id`, 'is allowed only for turn_in_progress');
 	}
 	return {
@@ -475,8 +488,7 @@ function parseSubmitResponse(value: unknown, path: string): SubmitResponse {
 		`${path}.status`
 	);
 	if (status === 'accepted') {
-		if (record.refusal !== undefined && record.refusal !== null)
-			invalid(`${path}.refusal`, 'must be absent');
+		if (hasOwn(record, 'refusal')) invalid(`${path}.refusal`, 'must be absent');
 		const idempotencyKey = requireIdempotencyKey(
 			stringField(record, 'idempotency_key', path),
 			`${path}.idempotency_key`
@@ -588,7 +600,7 @@ function parseRoll(value: unknown, path: string): TurnRoll {
 		return die;
 	}) as [number, number];
 	let modifiers: Modifier[] | undefined;
-	if (record.modifiers !== undefined && record.modifiers !== null) {
+	if (hasOwn(record, 'modifiers')) {
 		if (!Array.isArray(record.modifiers)) invalid(`${path}.modifiers`, 'must be an array');
 		if (record.modifiers.length > 4)
 			invalid(`${path}.modifiers`, 'must contain at most four modifiers');
@@ -618,10 +630,7 @@ function parseResolution(value: unknown, path: string, outcomeRequired: boolean)
 	const verdict = parseVerdict(record.verdict, `${path}.verdict`);
 	const rawBand = optionalString(record, 'band', path);
 	const band = rawBand === undefined ? undefined : closed(rawBand, OUTCOME_BANDS, `${path}.band`);
-	const roll =
-		record.roll === undefined || record.roll === null
-			? undefined
-			: parseRoll(record.roll, `${path}.roll`);
+	const roll = hasOwn(record, 'roll') ? parseRoll(record.roll, `${path}.roll`) : undefined;
 	if (band === undefined) {
 		if (outcomeRequired) invalid(`${path}.band`, 'is required for a completed turn');
 		if (roll !== undefined) invalid(`${path}.roll`, 'is forbidden without a band');
@@ -655,7 +664,7 @@ function parseCompanionResolution(value: unknown, path: string): CompanionResolu
 			hint_level: closed(rawHintLevel, HINT_LEVELS, `${path}.hint_level`)
 		};
 	}
-	if (rawHintLevel !== undefined && rawHintLevel !== '')
+	if (hasOwn(record, 'hint_level'))
 		invalid(`${path}.hint_level`, 'is forbidden for a non-hint decision');
 	return { companion_id: companionID, kind };
 }
@@ -674,17 +683,16 @@ function parseTurnResult(value: unknown, path: string): TurnResult {
 	);
 	let completeResolution: CompletedTurnResolution | undefined;
 	let failedResolution: TurnResolution | undefined;
-	if (record.resolution === undefined || record.resolution === null) {
+	if (!hasOwn(record, 'resolution')) {
 		if (phase === 'complete') invalid(`${path}.resolution`, 'is required for a complete turn');
 	} else if (phase === 'complete') {
 		completeResolution = parseResolution(record.resolution, `${path}.resolution`, true);
 	} else {
 		failedResolution = parseResolution(record.resolution, `${path}.resolution`, false);
 	}
-	const companionResolution =
-		record.companion_resolution === undefined || record.companion_resolution === null
-			? undefined
-			: parseCompanionResolution(record.companion_resolution, `${path}.companion_resolution`);
+	const companionResolution = hasOwn(record, 'companion_resolution')
+		? parseCompanionResolution(record.companion_resolution, `${path}.companion_resolution`)
+		: undefined;
 	const narrationRef = optionalString(record, 'narration_ref', path);
 	if (narrationRef !== undefined && narrationRef !== '')
 		requireStorageRef(narrationRef, `${path}.narration_ref`);
@@ -702,11 +710,7 @@ function parseTurnResult(value: unknown, path: string): TurnResult {
 		resolved_at: resolvedAt
 	};
 	if (phase === 'complete') {
-		if (
-			record.failure_reason !== undefined &&
-			record.failure_reason !== null &&
-			record.failure_reason !== ''
-		) {
+		if (hasOwn(record, 'failure_reason')) {
 			invalid(`${path}.failure_reason`, 'is forbidden for a complete turn');
 		}
 		if (narrationRef === undefined || narrationRef === '')
@@ -785,10 +789,9 @@ function parseDelivery(value: unknown, path: string): TurnDelivery {
 	if (record.result === undefined || record.result === null)
 		invalid(`${path}.result`, 'is required');
 	const result = parseTurnResult(record.result, `${path}.result`);
-	const narration =
-		record.narration === undefined || record.narration === null
-			? undefined
-			: parseNarration(record.narration, `${path}.narration`);
+	const narration = hasOwn(record, 'narration')
+		? parseNarration(record.narration, `${path}.narration`)
+		: undefined;
 	if (result.narration_ref !== undefined && narration === undefined)
 		invalid(`${path}.narration`, 'is required by narration_ref');
 	if (result.narration_ref === undefined && narration !== undefined)
@@ -821,12 +824,11 @@ function parseRetrieveResponse(value: unknown, path: string): RetrieveResponse {
 		`${path}.by`
 	);
 	const id = optionalString(record, 'id', path);
-	validateRetrieveIdentity(by, id, `${path}.id`);
+	validateRetrieveIdentity(by, id, hasOwn(record, 'id'), `${path}.id`);
 	if (status === 'found') {
 		if (record.delivery === undefined || record.delivery === null)
 			invalid(`${path}.delivery`, 'is required');
-		if (record.refusal !== undefined && record.refusal !== null)
-			invalid(`${path}.refusal`, 'must be absent');
+		if (hasOwn(record, 'refusal')) invalid(`${path}.refusal`, 'must be absent');
 		const delivery = parseDelivery(record.delivery, `${path}.delivery`);
 		if (by === 'turn' && delivery.result.turn_id !== id)
 			invalid(`${path}.delivery.result.turn_id`, 'does not match the lookup');
@@ -834,8 +836,7 @@ function parseRetrieveResponse(value: unknown, path: string): RetrieveResponse {
 			invalid(`${path}.delivery.result.action_id`, 'does not match the lookup');
 		return { protocol: PLAYER_PROTOCOL, status, by, ...(id === undefined ? {} : { id }), delivery };
 	}
-	if (record.delivery !== undefined && record.delivery !== null)
-		invalid(`${path}.delivery`, 'must be absent');
+	if (hasOwn(record, 'delivery')) invalid(`${path}.delivery`, 'must be absent');
 	const refusal = asRecord(record.refusal, `${path}.refusal`);
 	const code = closed(
 		stringField(refusal, 'code', `${path}.refusal`),
@@ -855,9 +856,14 @@ function parseRetrieveResponse(value: unknown, path: string): RetrieveResponse {
 	};
 }
 
-function validateRetrieveIdentity(by: RetrieveBy, id: string | undefined, path: string): void {
+function validateRetrieveIdentity(
+	by: RetrieveBy,
+	id: string | undefined,
+	present: boolean,
+	path: string
+): void {
 	if (by === 'latest') {
-		if (id !== undefined && id !== '') invalid(path, 'must be absent for latest');
+		if (present) invalid(path, 'must be absent for latest');
 		return;
 	}
 	if (id === undefined || id === '') invalid(path, `is required for ${by}`);
@@ -906,7 +912,7 @@ function parseFrame(value: unknown): PlayerFrame {
 	if (record[selected] === undefined || record[selected] === null)
 		invalid(`$.${selected}`, `is required for ${type}`);
 	for (const payload of Object.values(FRAME_PAYLOAD)) {
-		if (payload !== selected && record[payload] !== undefined && record[payload] !== null) {
+		if (payload !== selected && hasOwn(record, payload)) {
 			invalid(`$.${payload}`, `must be absent from ${type}`);
 		}
 	}
@@ -1000,9 +1006,9 @@ export function parseSubmitAction(value: unknown): ProtocolParseResult<SubmitAct
 		strictKeys(record, ['protocol', 'text', 'idempotency_key'], '$');
 		requireProtocol(record, '$');
 		const text = stringField(record, 'text', '$');
-		if (text.trim() === '') invalid('$.text', 'must contain a nonblank action');
-		if (byteLength(text) > MAX_ACTION_TEXT_BYTES)
-			invalid('$.text', `exceeds ${MAX_ACTION_TEXT_BYTES} bytes`);
+		const textViolation = actionTextViolation(text);
+		if (textViolation === 'blank') invalid('$.text', 'must contain a nonblank action');
+		if (textViolation === 'too_long') invalid('$.text', `exceeds ${MAX_ACTION_TEXT_BYTES} bytes`);
 		const idempotencyKey = requireIdempotencyKey(
 			stringField(record, 'idempotency_key', '$'),
 			'$.idempotency_key'
@@ -1022,7 +1028,7 @@ export function parseRetrieveRequest(value: unknown): ProtocolParseResult<Retrie
 			'$.by'
 		);
 		const id = optionalString(record, 'id', '$');
-		validateRetrieveIdentity(by, id, '$.id');
+		validateRetrieveIdentity(by, id, hasOwn(record, 'id'), '$.id');
 		if (by === 'latest') return { protocol: PLAYER_PROTOCOL, type: 'retrieve_result', by };
 		return { protocol: PLAYER_PROTOCOL, type: 'retrieve_result', by, id: id as string };
 	});

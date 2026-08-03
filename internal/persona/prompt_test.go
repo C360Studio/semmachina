@@ -452,6 +452,34 @@ func TestSerializedCasekeeperPromptCarriesPrivateCanariesAndInjectedIdentity(t *
 	}
 }
 
+func TestCasekeeperPromptLocksActualTargetsAndObserveInvestigateRevealContract(t *testing.T) {
+	fixture := newPromptFixture(t)
+	fixture.view.Purpose = epistemic.PurposeCasekeeper
+	caseID := "c360.semmachina.world1.starter.case.prompt-contract"
+	fixture.view.Neighbours = append(fixture.view.Neighbours, entityWith(caseID,
+		triple(caseID, vocabulary.WorldEntityKind, string(vocabulary.EntityKindCase))))
+	request, err := fixture.builder.Interpret(t.Context(), fixture.view)
+	if err != nil {
+		t.Fatalf("Interpret: %v", err)
+	}
+	for _, want := range []string{
+		"target_refs name only entities actually targeted by the player's action prose",
+		"Never add a target merely to qualify evidence",
+		"authored eligibility admits the observe/investigate kind",
+		"case has reached the evidence's minimum phase",
+		"at least one actual target intersects the evidence's eligible targets",
+		"evidence is not solution-locked",
+		"If no evidence satisfies all four checks, submit reveal_refs=[].",
+	} {
+		if !strings.Contains(request.Prompt, want) {
+			t.Fatalf("casekeeper prompt lacks contract %q:\n%s", want, request.Prompt)
+		}
+	}
+	if !strings.Contains(request.Prompt, testActionText) {
+		t.Fatalf("casekeeper prompt changed or omitted the exact action body:\n%s", request.Prompt)
+	}
+}
+
 func TestSerializedNarrationPromptPreservesRevealedCanaryAndOmitsSecrets(t *testing.T) {
 	fixture := newPromptFixture(t,
 		fact(vocabulary.TurnRollBand, string(vocabulary.BandPartial)),

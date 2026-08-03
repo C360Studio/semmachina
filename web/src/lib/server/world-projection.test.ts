@@ -201,6 +201,40 @@ describe('world projection route', () => {
 });
 
 describe('fixed beta.159 GraphQL adapter', () => {
+	it('ignores beta.159 graph-ingest bookkeeping strings with an omitted datatype', async () => {
+		const config = loadDeploymentConfig(environment);
+		const candidate = entity(LOCATION_A, 'Fete Green');
+		candidate.triples.push(
+			{
+				subject: LOCATION_A,
+				predicate: 'entity.indexing.profile',
+				object: 'content'
+			},
+			{
+				subject: LOCATION_A,
+				predicate: 'core.identity.referenced-by',
+				object: 'c360.semmachina.bellweather.bellweather-maze.scene.green'
+			},
+			{
+				subject: LOCATION_A,
+				predicate: 'core.identity.stub-owner',
+				object: 'semmachina.world_entity.v1'
+			}
+		);
+		const adapter = createWorldProjectionAdapter(
+			config,
+			queuedFetch([
+				jsonResponse({ data: { entitiesByPrefix: [candidate] } }),
+				jsonResponse({ data: { relationships: [] } })
+			])
+		);
+
+		await expect(adapter.projectWorld(issueProjectionPrincipal(config))).resolves.toEqual({
+			places: [{ id: LOCATION_A, label: 'Fete Green', connections: [] }],
+			clock: { state: 'not_configured' }
+		});
+	});
+
 	it('uses only fixed documents, server-derived variables, and no browser credentials', async () => {
 		const config = loadDeploymentConfig(environment);
 		const principal = issueProjectionPrincipal(config);

@@ -62,8 +62,8 @@ func TestFixedActionsPinBodyObservationThenClosedKitHintRequest(t *testing.T) {
 }
 
 func TestEachPaidRunUsesAFreshColdOpenNamespace(t *testing.T) {
-	if got := smokeWorldNamespace("bellweather-gemini36-smoke", 12345); got !=
-		"bellweather-gemini36-smoke-12345" {
+	if got := smokeWorldNamespace("bellweather-gemini35-flash-lite-smoke", 12345); got !=
+		"bellweather-gemini35-flash-lite-smoke-12345" {
 		t.Fatalf("fresh smoke namespace = %q", got)
 	}
 }
@@ -94,9 +94,67 @@ func TestBellweatherGeminiConfigPinsTheOperatorScenario(t *testing.T) {
 		t.Fatalf("Bellweather content bucket = %q (%d bytes), want the exact reference-safe instance",
 			cfg.ContentBucket, len(cfg.ContentBucket))
 	}
-	endpoint := cfg.Models.Endpoints["gemini-flash"]
-	if endpoint == nil || endpoint.URL != "https:/"+"/generativelanguage.googleapis.com/v1beta/openai" {
-		t.Fatalf("Bellweather Gemini endpoint = %+v, want the exact live endpoint", endpoint)
+	if bellweatherConfigPath != "configs/instance.gemini35-flash-lite.bellweather.example.json" {
+		t.Fatalf("paid smoke config = %q, want the Flash-Lite instance", bellweatherConfigPath)
+	}
+	endpoint := cfg.Models.Endpoints["gemini-flash-lite"]
+	if endpoint == nil || endpoint.Provider != "gemini" ||
+		endpoint.URL != "https:/"+"/generativelanguage.googleapis.com/v1beta/openai" ||
+		endpoint.Model != "gemini-3.5-flash-lite" || endpoint.APIKeyEnv != "GEMINI_API_KEY" ||
+		endpoint.WireBackend != "wire" || !endpoint.SupportsTools || endpoint.ToolFormat != "openai" ||
+		endpoint.MaxTokens != 1048576 {
+		t.Fatalf("Bellweather Flash-Lite endpoint = %+v, want the exact paid target", endpoint)
+	}
+	if len(cfg.Models.Endpoints) != 1 || cfg.Models.Defaults.Model != "gemini-flash-lite" {
+		t.Fatalf("Bellweather model routes = endpoints %v default %q, want only gemini-flash-lite",
+			cfg.Models.Endpoints, cfg.Models.Defaults.Model)
+	}
+	if len(cfg.Models.Capabilities) != 4 {
+		t.Fatalf("Bellweather capabilities = %v, want exactly the four smoke capabilities", cfg.Models.Capabilities)
+	}
+	for _, capability := range []string{"casekeeping", "companion_decision", "fiction_adjudication", "narration"} {
+		declaration := cfg.Models.Capabilities[capability]
+		if declaration == nil || len(declaration.Preferred) != 1 ||
+			declaration.Preferred[0] != "gemini-flash-lite" || !declaration.RequiresTools {
+			t.Fatalf("capability %s = %+v, want exclusive tool-capable Flash-Lite route", capability, declaration)
+		}
+	}
+}
+
+func TestValidateBellweatherBindingRejectsNonExclusiveFlashLiteRoutes(t *testing.T) {
+	root := repositoryRoot(t)
+	raw, err := os.ReadFile(filepath.Join(root, bellweatherConfigPath))
+	if err != nil {
+		t.Fatalf("read Bellweather config: %v", err)
+	}
+	tests := map[string]func(*boot.Config){
+		"extra endpoint": func(cfg *boot.Config) {
+			cfg.Models.Endpoints["fallback"] = cfg.Models.Endpoints["gemini-flash-lite"]
+		},
+		"wrong default": func(cfg *boot.Config) {
+			cfg.Models.Defaults.Model = "fallback"
+		},
+		"wrong provider URL": func(cfg *boot.Config) {
+			cfg.Models.Endpoints["gemini-flash-lite"].URL = "https://example.com/v1"
+		},
+		"wrong token limit": func(cfg *boot.Config) {
+			cfg.Models.Endpoints["gemini-flash-lite"].MaxTokens--
+		},
+		"extra capability": func(cfg *boot.Config) {
+			cfg.Models.Capabilities["fallback"] = cfg.Models.Capabilities["narration"]
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			cfg, loadErr := boot.LoadConfig(raw)
+			if loadErr != nil {
+				t.Fatalf("load Bellweather config: %v", loadErr)
+			}
+			mutate(&cfg)
+			if err := validateBellweatherBinding(cfg); err == nil {
+				t.Fatal("validateBellweatherBinding() error = nil")
+			}
+		})
 	}
 }
 
@@ -109,7 +167,8 @@ func TestPaidSmokeTaskIsExplicitAndExcludedFromDefaultAndCI(t *testing.T) {
 	text := string(taskfile)
 	if !strings.Contains(text, "smoke:gemini:bellweather:") ||
 		!strings.Contains(text, `test "$SEMMACHINA_PAID_SMOKE" = "1"`) ||
-		!strings.Contains(text, `test -n "$GEMINI_API_KEY"`) {
+		!strings.Contains(text, `test -n "$GEMINI_API_KEY"`) ||
+		!strings.Contains(text, "-config configs/instance.gemini35-flash-lite.bellweather.example.json") {
 		t.Fatal("paid smoke task does not carry both explicit preconditions")
 	}
 	defaultBlock := text[strings.Index(text, "  default:"):strings.Index(text, "\n  lint:")]

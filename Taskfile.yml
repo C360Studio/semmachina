@@ -9,8 +9,9 @@ dotenv: ['.env']
 # Every check that has any logic lives in scripts/, and both this file and the
 # workflow invoke the SAME script — a local gate that reimplements CI is a
 # second source of truth, and the two diverge on the day it matters. The one-line
-# checks (vet, gofmt, revive) are duplicated as one line each rather than
-# wrapped, because a wrapper around `go vet ./...` hides more than it shares.
+# checks (vet and gofmt) are duplicated as one line each rather than wrapped,
+# because a wrapper around `go vet ./...` hides more than it shares. Revive has
+# one narrowly scoped generated-fixture exclusion, so its invocation is shared.
 
 tasks:
   default:
@@ -18,6 +19,7 @@ tasks:
     cmds:
       - task: lint
       - task: build
+      - task: smoke:surface:isolation:run
       - task: spec
       - task: test
 
@@ -34,7 +36,7 @@ tasks:
         fi
         echo "OK: gofmt clean"
       - bash scripts/check-revive-pin.sh
-      - go tool revive -config revive.toml -formatter friendly ./...
+      - bash scripts/run-revive.sh
       - bash scripts/check-revive-fires.sh
       - bash scripts/check-no-skips_fixture_test.sh
       - task: frontend:lint
@@ -92,6 +94,17 @@ tasks:
     cmds:
       - npm --prefix web test
 
+  smoke:surface:isolation:
+    desc: Deterministic no-provider Docker proof of the surface GraphQL isolation boundary
+    cmds:
+      - task: frontend:build
+      - task: smoke:surface:isolation:run
+
+  smoke:surface:isolation:run:
+    internal: true
+    cmds:
+      - node web/tests/deployment-isolation/run.mjs
+
   spec:
     desc: openspec validate --all --strict (the --all is load-bearing; without it nothing is validated)
     cmds:
@@ -126,5 +139,20 @@ tasks:
     cmds:
       - >-
         go run ./cmd/bellweather-smoke
-        -config configs/instance.gemini36-flash.bellweather.example.json
+        -config configs/instance.gemini35-flash-lite.bellweather.example.json
         -world fixtures/worlds/bellweather-maze
+
+  smoke:gemini:surface:
+    desc: Operator-only paid Gemini acceptance through the real HTTPS browser surface
+    preconditions:
+      - sh: test "$SEMMACHINA_PAID_SMOKE" = "1"
+        msg: "Paid smoke is disabled — set SEMMACHINA_PAID_SMOKE=1 explicitly."
+      - sh: test -n "$GEMINI_API_KEY"
+        msg: "GEMINI_API_KEY is empty — copy .env.example to .env and fill it in, or export it."
+    cmds:
+      - exec node web/tests/run-bellweather-surface.mjs
+
+  smoke:surface:preflight:
+    desc: Action-free real-stack browser preflight; never invokes a model provider
+    cmds:
+      - exec node web/tests/run-bellweather-surface.mjs --preflight

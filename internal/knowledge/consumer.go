@@ -20,6 +20,9 @@ const (
 	DefaultAckWait = 30 * time.Second
 	// DefaultHeartbeat keeps long preflight and commit work from premature redelivery.
 	DefaultHeartbeat = 10 * time.Second
+	// authorizationFailureMessage is intentionally generic. AuthorizationError.Detail
+	// may contain private graph values and never enters durable diagnostics.
+	authorizationFailureMessage = "knowledge authorization was refused"
 )
 
 // DurableConsumer is the TURN_STAGES durable binding surface.
@@ -31,6 +34,12 @@ type DurableConsumer interface {
 // TurnFailer durably terminates permanently unauthorized turns.
 type TurnFailer interface {
 	Fail(context.Context, string, string, vocabulary.FailureReason, content.Ref) (turn.Transition, error)
+}
+
+// DetailStore is the credential-safe durable diagnostic written before a
+// permanently unauthorized turn is failed.
+type DetailStore interface {
+	PutFailureDetail(context.Context, string, *content.FailureDetail) (content.Ref, error)
 }
 
 // PreflightLoader resolves every authorization input before the component is
@@ -56,6 +65,7 @@ type Consumer struct {
 	loader    PreflightLoader
 	granter   Committer
 	failer    TurnFailer
+	details   DetailStore
 	shares    ShareAuthorizer
 	witnesses WitnessAuthorizer
 }
@@ -64,16 +74,16 @@ type Consumer struct {
 // and permanent turn failure.
 func NewConsumer(
 	consumer DurableConsumer, loader PreflightLoader, granter Committer, failer TurnFailer,
-	shares ShareAuthorizer, witnesses ...WitnessAuthorizer,
+	details DetailStore, shares ShareAuthorizer, witnesses ...WitnessAuthorizer,
 ) (*Consumer, error) {
-	if consumer == nil || loader == nil || granter == nil || failer == nil {
-		return nil, errors.New("knowledge consumer requires durable, loader, granter, and turn failer")
+	if consumer == nil || loader == nil || granter == nil || failer == nil || details == nil {
+		return nil, errors.New("knowledge consumer requires durable, loader, granter, turn failer, and detail store")
 	}
 	var witness WitnessAuthorizer
 	if len(witnesses) > 0 {
 		witness = witnesses[0]
 	}
-	return &Consumer{consumer: consumer, loader: loader, granter: granter, failer: failer,
+	return &Consumer{consumer: consumer, loader: loader, granter: granter, failer: failer, details: details,
 		shares: shares, witnesses: witness}, nil
 }
 
@@ -97,7 +107,7 @@ func (c *Consumer) Handle(ctx context.Context, data []byte) error {
 	if err != nil {
 		var rejection *AuthorizationError
 		if errors.As(err, &rejection) {
-			return c.failUnauthorized(ctx, trigger)
+			return c.failUnauthorized(ctx, trigger, rejection)
 		}
 		return fmt.Errorf("load knowledge preflight: %w", err)
 	}
@@ -122,12 +132,26 @@ func (c *Consumer) Handle(ctx context.Context, data []byte) error {
 	if !errors.As(err, &rejection) {
 		return fmt.Errorf("commit knowledge grant: %w", err)
 	}
-	return c.failUnauthorized(ctx, trigger)
+	return c.failUnauthorized(ctx, trigger, rejection)
 }
 
-func (c *Consumer) failUnauthorized(ctx context.Context, trigger stage.Trigger) error {
+func (c *Consumer) failUnauthorized(
+	ctx context.Context, trigger stage.Trigger, rejection *AuthorizationError,
+) error {
+	detail := &content.FailureDetail{
+		TurnID: trigger.TurnID, Reason: vocabulary.FailureKnowledgeUnauthorized,
+		Class: content.FailureClassDeterministic, AuthorizationReason: rejection.Reason,
+		Message: authorizationFailureMessage,
+	}
+	ref, err := c.details.PutFailureDetail(ctx, trigger.TurnEntityID, detail)
+	if err != nil {
+		return errors.New("store knowledge authorization failure detail")
+	}
+	if ref.IsZero() {
+		return errors.New("store knowledge authorization failure detail returned no reference")
+	}
 	if _, failErr := c.failer.Fail(ctx, trigger.TurnID, trigger.TurnEntityID,
-		vocabulary.FailureKnowledgeUnauthorized, content.Ref{}); failErr != nil {
+		vocabulary.FailureKnowledgeUnauthorized, ref); failErr != nil {
 		return fmt.Errorf("durably fail unauthorized knowledge turn: %w", failErr)
 	}
 	return nil

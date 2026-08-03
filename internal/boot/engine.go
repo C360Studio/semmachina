@@ -870,7 +870,7 @@ func (e *Engine) startKnowledge(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	consumer, err := knowledge.NewConsumer(e.client, loader, granter, e.recorder, authority, authority)
+	consumer, err := knowledge.NewConsumer(e.client, loader, granter, e.recorder, e.content, authority, authority)
 	if err != nil {
 		return err
 	}

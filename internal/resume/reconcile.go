@@ -521,7 +521,7 @@ func (r *Reconciler) countTowardAbandonment(
 		}
 		r.logger.Warn("a turn was seen with nothing queued for it and no stage that could help; counting the "+
 			"sighting rather than ending it, in case the reading was a moment old",
-			"turn", state.ID, "phase", phase, "sighting", spent+1, "budget", r.attempts, "why", because)
+			"turn", state.ID, "phase", phase, "sighting", spent+1, "budget", r.attempts)
 		report.Unadvanceable++
 		return
 	}
@@ -601,12 +601,14 @@ func (r *Reconciler) abandon(
 	detail := &content.FailureDetail{
 		TurnID:  turnID,
 		Reason:  vocabulary.FailureTurnStranded,
+		Class:   content.FailureClassDeterministic,
 		Message: explanation,
 	}
 	ref, storeErr := r.details.PutFailureDetail(ctx, state.ID, detail)
 	if storeErr != nil {
 		r.logger.Error("an abandoned turn's explanation could not be stored; ending it without one",
-			"turn", state.ID, "phase", phase, "error", storeErr)
+			"turn", state.ID, "phase", phase, "reason", vocabulary.FailureTurnStranded,
+			"class", content.FailureClassDeterministic)
 		ref = content.Ref{}
 	}
 
@@ -618,7 +620,8 @@ func (r *Reconciler) abandon(
 	}
 	r.logger.Error("a stranded turn was ended explicitly rather than left waiting",
 		"turn", state.ID, "phase", phase, "budget", r.attempts,
-		"outcome", transition.Outcome, "detail", ref.String(), "why", explanation)
+		"outcome", transition.Outcome, "reason", vocabulary.FailureTurnStranded,
+		"class", content.FailureClassDeterministic)
 	report.Abandoned++
 }
 

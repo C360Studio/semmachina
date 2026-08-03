@@ -537,7 +537,8 @@ func TestReconcile_AbandonsATurnWhoseBudgetIsGone(t *testing.T) {
 	if failure.detail.IsZero() {
 		t.Error("the abandoned turn carries no explanation reference")
 	}
-	if len(h.details.stored) != 1 || h.details.stored[0].Reason != vocabulary.FailureTurnStranded {
+	if len(h.details.stored) != 1 || h.details.stored[0].Reason != vocabulary.FailureTurnStranded ||
+		h.details.stored[0].Class != content.FailureClassDeterministic {
 		t.Errorf("stored detail = %+v, want one carrying the stranded code", h.details.stored)
 	}
 }

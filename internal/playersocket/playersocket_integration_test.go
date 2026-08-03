@@ -461,3 +461,48 @@ func TestIntegration_AReconnectedPlayerRetrievesTheirResultAndNotAnotherPlayers(
 		}
 	}
 }
+
+func TestIntegration_LatestDistinguishesNoTurnHistoryFromARunningFirstTurn(t *testing.T) {
+	live := startLive(t)
+	empty := live.dial(t, patCredential, live.playerOne)
+
+	response := empty.retrieve(t, &playersocket.RetrieveRequest{
+		Protocol: payload.PlayerProtocolV1,
+		Type:     playersocket.RequestRetrieve,
+		By:       playersocket.RetrieveLatest,
+	})
+	if response.Status != playersocket.RetrieveRefused || response.Refusal == nil ||
+		response.Refusal.Code != playersocket.RetrieveNotFound {
+		t.Fatalf("empty latest retrieval = %+v, want immediate refused/not_found", response)
+	}
+
+	actionID, err := gateway.ActionIDFor(live.playerTwo, "running-first-turn")
+	if err != nil {
+		t.Fatalf("derive action id: %v", err)
+	}
+	if _, err := live.recorder.Accept(t.Context(), &payload.PlayerAction{
+		ActionID:   actionID,
+		PlayerID:   live.playerTwo,
+		CampaignID: live.campaignID,
+		SceneID:    live.sceneID,
+		Text:       "I listen at the gate before entering.",
+		ArrivedAt:  time.Now().UTC(),
+		Channel: payload.ChannelBinding{
+			Adapter: vocabulary.AdapterWebSocket,
+			ReplyTo: "running-first-turn",
+		},
+	}); err != nil {
+		t.Fatalf("accept the running turn: %v", err)
+	}
+
+	running := live.dial(t, alexCredential, live.playerTwo)
+	response = running.retrieve(t, &playersocket.RetrieveRequest{
+		Protocol: payload.PlayerProtocolV1,
+		Type:     playersocket.RequestRetrieve,
+		By:       playersocket.RetrieveLatest,
+	})
+	if response.Status != playersocket.RetrieveRefused || response.Refusal == nil ||
+		response.Refusal.Code != playersocket.RetrieveNotReady {
+		t.Fatalf("running latest retrieval = %+v, want refused/not_ready", response)
+	}
+}

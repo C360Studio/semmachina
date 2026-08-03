@@ -41,17 +41,31 @@ type hintProofObserver interface {
 
 type monitorPolicy struct {
 	PollInterval time.Duration
-	StallAfter   time.Duration
 	Wait         func(context.Context, time.Duration) error
 	OnSnapshot   func(turnSnapshot)
+}
+
+func phaseObservationBudget(phase vocabulary.TurnPhase) (time.Duration, error) {
+	switch phase {
+	case "", vocabulary.PhaseAccepted, vocabulary.PhaseResolving, vocabulary.PhaseApplying:
+		return 60 * time.Second, nil
+	case vocabulary.PhaseInterpreting, vocabulary.PhaseAdjudicating, vocabulary.PhaseCompanion:
+		return 120 * time.Second, nil
+	case vocabulary.PhaseNarrating:
+		return 150 * time.Second, nil
+	case vocabulary.PhaseComplete, vocabulary.PhaseFailed:
+		return 0, nil
+	default:
+		return 0, fmt.Errorf("turn monitor has no observation budget for phase %q", phase)
+	}
 }
 
 func monitorTurn(ctx context.Context, observer turnObserver, turnEntityID string, policy monitorPolicy) error {
 	if observer == nil {
 		return errors.New("turn monitor requires an authoritative observer")
 	}
-	if policy.PollInterval <= 0 || policy.StallAfter <= 0 || policy.Wait == nil {
-		return errors.New("turn monitor requires positive poll and stall intervals plus a wait function")
+	if policy.PollInterval <= 0 || policy.Wait == nil {
+		return errors.New("turn monitor requires a positive poll interval plus a wait function")
 	}
 
 	var (
@@ -60,9 +74,17 @@ func monitorTurn(ctx context.Context, observer turnObserver, turnEntityID string
 		stalled  time.Duration
 	)
 	for {
+		if ctx.Err() != nil {
+			return paidCapContextError(ctx, "authoritative turn observation")
+		}
 		current, err := observer.snapshot(ctx, turnEntityID)
 		if err != nil {
-			return fmt.Errorf("read authoritative turn and queue state: %w", err)
+			return normalizeContextError(ctx,
+				fmt.Errorf("read authoritative turn and queue state: %w", err),
+				"authoritative turn observation")
+		}
+		if ctx.Err() != nil {
+			return paidCapContextError(ctx, "authoritative turn observation")
 		}
 		if policy.OnSnapshot != nil {
 			policy.OnSnapshot(current)
@@ -73,12 +95,16 @@ func monitorTurn(ctx context.Context, observer turnObserver, turnEntityID string
 		case vocabulary.PhaseComplete:
 			return nil
 		}
+		budget, err := phaseObservationBudget(current.Phase)
+		if err != nil {
+			return err
+		}
 
 		if have && current == previous {
 			stalled += policy.PollInterval
-			if stalled >= policy.StallAfter {
+			if stalled >= budget {
 				return fmt.Errorf(
-					"no phase or queue progress for %s (phase=%q pending=%d)",
+					"agentic observation budget reached after %s without phase or queue movement (phase=%q pending=%d)",
 					stalled, current.Phase, current.Pending)
 			}
 		} else {
@@ -86,7 +112,7 @@ func monitorTurn(ctx context.Context, observer turnObserver, turnEntityID string
 		}
 		previous, have = current, true
 		if err := policy.Wait(ctx, policy.PollInterval); err != nil {
-			return err
+			return normalizeContextError(ctx, err, "authoritative turn observation")
 		}
 	}
 }
@@ -118,19 +144,27 @@ func awaitCasePhase(
 	if observer == nil || policy.PollInterval <= 0 || policy.Timeout <= 0 || policy.Wait == nil {
 		return errors.New("case phase monitor requires an observer and positive polling policy")
 	}
-	for elapsed := time.Duration(0); ; elapsed += policy.PollInterval {
-		phase, err := observer.casePhase(ctx, caseEntityID)
+	deadlineCause := fmt.Errorf("%w after %s", errCasePhaseProofCap, policy.Timeout)
+	proofCtx, cancel := context.WithTimeoutCause(ctx, policy.Timeout, deadlineCause)
+	defer cancel()
+	for {
+		if proofCtx.Err() != nil {
+			return paidCapContextError(proofCtx, "the case reached the required phase")
+		}
+		phase, err := observer.casePhase(proofCtx, caseEntityID)
 		if err != nil {
-			return fmt.Errorf("read authoritative case phase: %w", err)
+			return normalizeContextError(proofCtx,
+				fmt.Errorf("read authoritative case phase: %w", err),
+				"the case reached the required phase")
+		}
+		if proofCtx.Err() != nil {
+			return paidCapContextError(proofCtx, "the case reached the required phase")
 		}
 		if phase == want {
 			return nil
 		}
-		if elapsed >= policy.Timeout {
-			return fmt.Errorf("case remained in phase %q instead of reaching %q within %s", phase, want, policy.Timeout)
-		}
-		if err := policy.Wait(ctx, policy.PollInterval); err != nil {
-			return err
+		if err := policy.Wait(proofCtx, policy.PollInterval); err != nil {
+			return normalizeContextError(proofCtx, err, "the case reached the required phase")
 		}
 	}
 }

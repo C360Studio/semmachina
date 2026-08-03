@@ -116,7 +116,7 @@ func RecordCapExhausted(
 		return turn.Transition{}, err
 	}
 	return record(ctx, failer, details, identity,
-		vocabulary.FailurePersonaCapExhausted, exhaustion.describe(spec))
+		vocabulary.FailurePersonaCapExhausted, content.FailureClassAgentLimit, exhaustion.describe(spec))
 }
 
 // LoopFailure is what a watcher knows about a persona loop that ended without
@@ -167,7 +167,22 @@ func RecordLoopFailed(
 		return turn.Transition{}, err
 	}
 	return record(ctx, failer, details, identity,
-		vocabulary.FailurePersonaLoopFailed, failure.describe(spec))
+		vocabulary.FailurePersonaLoopFailed, classifyLoopFailure(failure.Reason), failure.describe(spec))
+}
+
+// classifyLoopFailure maps only upstream's structured Reason field. It never
+// scans Error/Message text, where provider bodies and credentials may appear.
+func classifyLoopFailure(reason string) content.FailureClass {
+	switch reason {
+	case "model_error":
+		return content.FailureClassProviderModel
+	case "length_truncated":
+		return content.FailureClassModelOutputLimit
+	case "handler_error", "spawn_identity_birth_failed":
+		return content.FailureClassAgentRuntime
+	default:
+		return content.FailureClassUnknown
+	}
 }
 
 // record is the one detail-then-failure path both persona endings run through.
@@ -183,6 +198,7 @@ func record(
 	details DetailStore,
 	identity Identity,
 	reason vocabulary.FailureReason,
+	class content.FailureClass,
 	explanation string,
 ) (turn.Transition, error) {
 	if failer == nil {
@@ -195,7 +211,9 @@ func record(
 		return turn.Transition{}, err
 	}
 
-	detail := &content.FailureDetail{TurnID: identity.TurnID, Reason: reason, Message: explanation}
+	detail := &content.FailureDetail{
+		TurnID: identity.TurnID, Reason: reason, Class: class, Message: explanation,
+	}
 	ref, storeErr := details.PutFailureDetail(ctx, identity.TurnEntityID, detail)
 	if storeErr != nil {
 		return failWithoutDetail(ctx, failer, identity, reason, storeErr)

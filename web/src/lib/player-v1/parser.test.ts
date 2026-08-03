@@ -222,6 +222,15 @@ describe('parsePlayerFrame', () => {
 		expectFailure(fixture);
 	});
 
+	it.each([null, ''])(
+		'rejects inappropriate active_turn_id value %j when the field is present',
+		(value) => {
+			const fixture = mutableFixture(refusedFrame);
+			setFixture(fixture, ['response', 'refusal', 'active_turn_id'], value);
+			expectFailure(fixture);
+		}
+	);
+
 	it.each(['malformed_request', 'not_found', 'not_ready', 'unavailable'])(
 		'accepts the %s retrieval refusal code',
 		(code) => {
@@ -251,10 +260,12 @@ describe('parsePlayerFrame', () => {
 	it('rejects a missing selected payload and a second known payload', () => {
 		expectFailure({ protocol: 'player/v1', type: 'submit_response' });
 		expectFailure({ ...acceptedFrame, delivery: rolledDelivery });
+		expectFailure({ ...acceptedFrame, delivery: null });
 	});
 
 	it.each([
 		['accepted with refusal', setField(['response', 'refusal'], refusedFrame.response.refusal)],
+		['accepted with null refusal', setField(['response', 'refusal'], null)],
 		['accepted missing key', deleteField(['response', 'idempotency_key'])],
 		['accepted missing identity', deleteField(['response', 'action_id'])],
 		['accepted mismatched turn', setField(['response', 'turn_id'], 'turn-act-other')],
@@ -310,7 +321,10 @@ describe('parsePlayerFrame', () => {
 
 	it.each([
 		['refused with identity', setField(['response', 'action_id'], 'act-1')],
+		['refused with null action identity', setField(['response', 'action_id'], null)],
+		['refused with null turn identity', setField(['response', 'turn_id'], null)],
 		['refused with arrival', setField(['response', 'arrived_at'], '2026-01-01T00:00:00Z')],
+		['refused with null arrival', setField(['response', 'arrived_at'], null)],
 		['refused without refusal', deleteField(['response', 'refusal'])],
 		['refused with unknown code', setField(['response', 'refusal', 'code'], 'busy')]
 	])('rejects %s', (_name, mutate) => {
@@ -324,6 +338,7 @@ describe('parsePlayerFrame', () => {
 		['named lookup without id', deleteField(['retrieval', 'id'])],
 		['found without delivery', deleteField(['retrieval', 'delivery'])],
 		['found with refusal', setField(['retrieval', 'refusal'], { code: 'not_found', message: 'x' })],
+		['found with null refusal', setField(['retrieval', 'refusal'], null)],
 		['found for another turn', setField(['retrieval', 'id'], 'turn-act-other')]
 	])('rejects %s', (_name, mutate) => {
 		const fixture =
@@ -334,6 +349,12 @@ describe('parsePlayerFrame', () => {
 		expectFailure(fixture);
 	});
 
+	it('rejects a refused retrieval with a present null delivery', () => {
+		const fixture = mutableFixture(retrievalRefusedFrame);
+		setFixture(fixture, ['retrieval', 'delivery'], null);
+		expectFailure(fixture);
+	});
+
 	it.each([
 		['complete without resolution', deleteField(['delivery', 'result', 'resolution'])],
 		['complete without narration ref', deleteField(['delivery', 'result', 'narration_ref'])],
@@ -341,7 +362,10 @@ describe('parsePlayerFrame', () => {
 			'complete with failure reason',
 			setField(['delivery', 'result', 'failure_reason'], 'effect-invalid')
 		],
+		['complete with null failure reason', setField(['delivery', 'result', 'failure_reason'], null)],
+		['complete with empty failure reason', setField(['delivery', 'result', 'failure_reason'], '')],
 		['failed without reason', deleteField(['delivery', 'result', 'failure_reason'])],
+		['failed with null optional resolution', setField(['delivery', 'result', 'resolution'], null)],
 		['failed with unknown reason', setField(['delivery', 'result', 'failure_reason'], 'timeout')],
 		['nonterminal phase', setField(['delivery', 'result', 'phase'], 'narrating')],
 		['mismatched action', setField(['delivery', 'result', 'action_id'], 'act-other')],
@@ -534,6 +558,12 @@ describe('strict client request parsing', () => {
 		expect(
 			parseRetrieveRequest({ protocol: 'player/v1', type: 'retrieve_result', by: 'turn' }).ok
 		).toBe(false);
+		for (const id of [null, '']) {
+			expect(
+				parseRetrieveRequest({ protocol: 'player/v1', type: 'retrieve_result', by: 'latest', id })
+					.ok
+			).toBe(false);
+		}
 		expect(
 			parseRetrieveRequest({ protocol: 'player/v1', type: 'cast_spell', by: 'latest' }).ok
 		).toBe(false);

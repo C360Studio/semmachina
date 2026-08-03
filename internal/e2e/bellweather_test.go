@@ -19,6 +19,9 @@ type bellweatherTurn struct {
 	wantCase  vocabulary.CasePhase
 }
 
+const bellweatherBodyObservation = "I observe Harold Wren's body carefully, looking at the body itself " +
+	"before investigating further."
+
 func TestE2E_BellweatherMysteryCompanionAcceptance(t *testing.T) {
 	replaceBrokerWithFresh(t)
 
@@ -29,7 +32,7 @@ func TestE2E_BellweatherMysteryCompanionAcceptance(t *testing.T) {
 	motiveID := w.entity("evidence", "evidence-motive")
 
 	turns := []bellweatherTurn{
-		{"bellweather-observe-body", "I observe Harold Wren's body in the maze.", payload.CaseDecisionObserve,
+		{"bellweather-observe-body", bellweatherBodyObservation, payload.CaseDecisionObserve,
 			vocabulary.CasePhaseDiscovery},
 		{"bellweather-investigate-green", "I investigate the fete green and its maze entrance.",
 			payload.CaseDecisionInvestigate, vocabulary.CasePhaseInvestigation},

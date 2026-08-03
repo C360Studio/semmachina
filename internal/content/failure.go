@@ -3,6 +3,7 @@ package content
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/c360studio/semstreams/pkg/types"
 
@@ -16,6 +17,41 @@ import (
 // what keeps "the detail is stored" from meaning "the detail is unbounded
 // spend", since the ledger and any operator surface read it back.
 const MaxFailureMessageBytes = 4 * 1024
+
+// FailureClass is the closed, credential-safe diagnostic category for a stored
+// failure. Unlike Message, it is safe to project onto an operator surface.
+type FailureClass string
+
+// Closed failure classes safe for projection onto operator surfaces.
+const (
+	FailureClassProviderModel    FailureClass = "provider-model"
+	FailureClassModelOutputLimit FailureClass = "model-output-limit"
+	FailureClassAgentRuntime     FailureClass = "agent-runtime"
+	FailureClassAgentLimit       FailureClass = "agent-limit"
+	FailureClassDeterministic    FailureClass = "deterministic"
+	FailureClassUnknown          FailureClass = "unknown"
+)
+
+var failureClasses = []FailureClass{
+	FailureClassProviderModel,
+	FailureClassModelOutputLimit,
+	FailureClassAgentRuntime,
+	FailureClassAgentLimit,
+	FailureClassDeterministic,
+	FailureClassUnknown,
+}
+
+// FailureClasses returns the closed diagnostic class set in declaration order.
+func FailureClasses() []FailureClass { return slices.Clone(failureClasses) }
+
+// ParseFailureClass accepts only registered diagnostic classes.
+func ParseFailureClass(value string) (FailureClass, error) {
+	class := FailureClass(value)
+	if slices.Contains(failureClasses, class) {
+		return class, nil
+	}
+	return "", fmt.Errorf("failure class %q is outside the closed diagnostic set", value)
+}
 
 // FailureDetail is the stored explanation behind a turn's closed failure code.
 //
@@ -36,6 +72,14 @@ type FailureDetail struct {
 	// on its own is self-describing and a detail filed under the wrong code is
 	// detectable.
 	Reason vocabulary.FailureReason `json:"reason"`
+	// Class is a closed diagnostic category. It is optional only so details
+	// written before this field existed remain readable; diagnostic readers map
+	// an absent legacy value to unknown.
+	Class FailureClass `json:"class,omitempty"`
+	// AuthorizationReason is the closed deterministic refusal carried only by
+	// knowledge-unauthorized failures. It is optional for legacy and ref-less
+	// failure records.
+	AuthorizationReason vocabulary.AuthorizationReason `json:"authorization_reason,omitempty"`
 	// Message is the failure's own words — rule-opaque by construction, because
 	// it lives here rather than on a triple.
 	Message string `json:"message"`
@@ -56,6 +100,27 @@ func (d *FailureDetail) Validate() error {
 	}
 	if _, err := vocabulary.ParseFailureReason(string(d.Reason)); err != nil {
 		return err
+	}
+	if d.Class != "" {
+		if _, err := ParseFailureClass(string(d.Class)); err != nil {
+			return err
+		}
+	}
+	if d.Reason == vocabulary.FailureKnowledgeUnauthorized && d.Class != "" && d.AuthorizationReason == "" {
+		return fmt.Errorf("classed %s failure detail requires authorization_reason",
+			vocabulary.FailureKnowledgeUnauthorized)
+	}
+	if d.AuthorizationReason != "" {
+		if d.Reason != vocabulary.FailureKnowledgeUnauthorized {
+			return fmt.Errorf("authorization_reason is only valid for %s failures",
+				vocabulary.FailureKnowledgeUnauthorized)
+		}
+		if d.Class != FailureClassDeterministic {
+			return fmt.Errorf("authorization_reason requires failure class %q", FailureClassDeterministic)
+		}
+		if _, err := vocabulary.ParseAuthorizationReason(string(d.AuthorizationReason)); err != nil {
+			return err
+		}
 	}
 	if d.Message == "" {
 		return fmt.Errorf(

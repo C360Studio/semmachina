@@ -663,7 +663,8 @@ func (s *Server) retrieve(ctx context.Context, playerID string, raw []byte) *Ret
 		delivery, err = s.results.Latest(ctx, playerID)
 	}
 	switch {
-	case errors.Is(err, egress.ErrTurnNotFound), errors.Is(err, egress.ErrResultNotAccessible):
+	case errors.Is(err, egress.ErrNoTurnHistory), errors.Is(err, egress.ErrTurnNotFound),
+		errors.Is(err, egress.ErrResultNotAccessible):
 		return retrievalRefused(request.By, request.ID, RetrieveNotFound,
 			"no accessible result exists for that lookup")
 	case errors.Is(err, egress.ErrNoResult):

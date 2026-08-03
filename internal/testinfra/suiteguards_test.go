@@ -133,17 +133,26 @@ var (
 	sourceURL          = regexp.MustCompile(`https?://[^\s"'` + "`" + `\\)]+`)
 	geminiLiveEndpoint = "https:/" + "/generativelanguage.googleapis.com/v1beta/openai"
 
-	// RFC 2606 reserves example.com/.org/.net for documentation. They appear
-	// here only as opaque string data in payload tests — nothing dials them —
-	// and they are reserved precisely so that remains safe.
+	// RFC 2606 reserves example.com/.org/.net for documentation and .invalid
+	// for names that must never resolve. They appear here only as opaque string
+	// data in tests — nothing dials them — and are reserved precisely so that
+	// remains safe.
 	allowedURLHosts = map[string]bool{
-		"127.0.0.1":   true,
-		"localhost":   true,
-		"[::1]":       true,
-		"::1":         true,
-		"example.com": true,
-		"example.org": true,
-		"example.net": true,
+		"127.0.0.1":     true,
+		"localhost":     true,
+		"[::1]":         true,
+		"::1":           true,
+		"example.com":   true,
+		"example.org":   true,
+		"example.net":   true,
+		"graph.invalid": true,
+	}
+
+	// These tracked package-manager/compiler metadata files contain registry
+	// tarball and documentation URLs, not runtime endpoint configuration.
+	ignoredURLScanFiles = map[string]bool{
+		"web/package-lock.json": true,
+		"web/tsconfig.json":     true,
 	}
 
 	// This is data for a manual paid smoke, not a default or test endpoint. The
@@ -157,6 +166,9 @@ var (
 		"configs/instance.gemini36-flash.bellweather.example.json": {
 			geminiLiveEndpoint: true,
 		},
+		"configs/instance.gemini35-flash-lite.bellweather.example.json": {
+			geminiLiveEndpoint: true,
+		},
 	}
 )
 
@@ -166,6 +178,9 @@ func TestSuite_NamesNoRemoteEndpoint(t *testing.T) {
 	var offenders []string
 
 	walk(t, root, func(path, rel string, entry fs.DirEntry) {
+		if ignoredURLScanFiles[rel] {
+			return
+		}
 		switch filepath.Ext(entry.Name()) {
 		case ".go", ".json", ".jsonl", ".yaml", ".yml":
 		default:
@@ -231,6 +246,9 @@ func TestEndpointScan_WouldActuallyFindARemoteURL(t *testing.T) {
 	}
 	if !allowedRemoteURLs["configs/instance.gemini36-flash.bellweather.example.json"][geminiLiveEndpoint] {
 		t.Fatal("the Bellweather Gemini paid-smoke example is not covered by its exact-file exception")
+	}
+	if !allowedRemoteURLs["configs/instance.gemini35-flash-lite.bellweather.example.json"][geminiLiveEndpoint] {
+		t.Fatal("the Bellweather Flash-Lite paid-smoke example is not covered by its exact-file exception")
 	}
 	if allowedRemoteURLs["configs/instance.example.json"][geminiLiveEndpoint] {
 		t.Fatal("the Gemini live endpoint is allowed in the default instance configuration")
@@ -387,7 +405,7 @@ func walk(t *testing.T, root string, visit func(path, rel string, entry fs.DirEn
 		}
 		if entry.IsDir() {
 			name := entry.Name()
-			if path != root && (strings.HasPrefix(name, ".") || name == "vendor" || name == "testdata") {
+			if path != root && (strings.HasPrefix(name, ".") || name == "vendor" || name == "testdata" || name == "node_modules") {
 				return fs.SkipDir
 			}
 			return nil

@@ -1,5 +1,10 @@
 import { defineConfig } from '@playwright/test';
 
+import {
+	DEFAULT_BROWSER_TEST_MATCH,
+	REAL_BROWSER_TEST_IGNORE
+} from './tests/bellweather-surface-contract.mjs';
+
 export default defineConfig({
 	use: {
 		ignoreHTTPSErrors: true
@@ -27,5 +32,6 @@ export default defineConfig({
 			}
 		}
 	],
-	testMatch: '**/*.e2e.{ts,js}'
+	testMatch: DEFAULT_BROWSER_TEST_MATCH,
+	testIgnore: REAL_BROWSER_TEST_IGNORE
 });

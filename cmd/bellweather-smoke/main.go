@@ -32,18 +32,25 @@ import (
 )
 
 const (
-	bellweatherConfigPath = "configs/instance.gemini36-flash.bellweather.example.json"
-	bellweatherWorldPath  = "fixtures/worlds/bellweather-maze"
-	bellweatherTemplate   = "bellweather-maze"
-	absoluteTimeout       = 3 * time.Minute
-	pollInterval          = 30 * time.Second
-	stallTimeout          = 60 * time.Second
-	casePhasePoll         = 500 * time.Millisecond
-	casePhaseTimeout      = 30 * time.Second
-	observationTarget     = "victim-harold-wren"
-	observationActionText = "I observe Harold Wren's body carefully, looking at the body itself " +
+	bellweatherConfigPath   = "configs/instance.gemini35-flash-lite.bellweather.example.json"
+	bellweatherWorldPath    = "fixtures/worlds/bellweather-maze"
+	bellweatherTemplate     = "bellweather-maze"
+	smokePaidCap            = 390 * time.Second
+	turnPaidCap             = 180 * time.Second
+	pollInterval            = 30 * time.Second
+	terminalDeliveryTimeout = 60 * time.Second
+	casePhasePoll           = 500 * time.Millisecond
+	casePhaseTimeout        = 30 * time.Second
+	observationTarget       = "victim-harold-wren"
+	observationActionText   = "I observe Harold Wren's body carefully, looking at the body itself " +
 		"before investigating further."
 	hintActionText = "I explicitly ask Kit Finch for a hint about what we observed."
+)
+
+var (
+	errTurnPaidCap       = fmt.Errorf("paid per-turn cap of %s reached", turnPaidCap)
+	errSmokePaidCap      = fmt.Errorf("paid whole-smoke cap of %s reached", smokePaidCap)
+	errCasePhaseProofCap = errors.New("authoritative case-phase proof cap reached")
 )
 
 func main() {
@@ -61,7 +68,7 @@ func run() error {
 	worldPath := flag.String("world", bellweatherWorldPath, "Bellweather world package directory")
 	flag.Parse()
 
-	ctx, cancel := context.WithTimeout(context.Background(), absoluteTimeout)
+	ctx, cancel := paidSmokeContext()
 	defer cancel()
 	runID := time.Now().UTC().UnixNano()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -162,7 +169,7 @@ func playTurn(
 	text string,
 	validate deliveryValidator,
 ) (*payload.TurnDelivery, error) {
-	turnCtx, cancelTurn := context.WithCancel(ctx)
+	turnCtx, cancelTurn := paidTurnContext(ctx)
 	defer cancelTurn()
 	request, err := json.Marshal(map[string]any{
 		"protocol": payload.PlayerProtocolV1, "idempotency_key": key, "text": text,
@@ -170,10 +177,10 @@ func playTurn(
 	if err != nil {
 		return nil, errors.New("encode the fixed smoke action")
 	}
-	if err := conn.WriteMessage(websocket.TextMessage, request); err != nil {
-		return nil, errors.New("send the fixed smoke action")
+	if err := writeTurnRequest(turnCtx, conn, request); err != nil {
+		return nil, err
 	}
-	response, err := awaitSubmission(ctx, frames, socketErrors, key)
+	response, err := awaitSubmission(turnCtx, frames, socketErrors, key)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +199,6 @@ func playTurn(
 	go func() {
 		monitorDone <- monitorTurn(turnCtx, observer, turnEntityID, monitorPolicy{
 			PollInterval: pollInterval,
-			StallAfter:   stallTimeout,
 			Wait:         waitContext,
 			OnSnapshot: func(snapshot turnSnapshot) {
 				logger.Info("authoritative turn poll", "phase", snapshot.Phase, "pending", snapshot.Pending)
@@ -200,7 +206,7 @@ func playTurn(
 		})
 	}()
 	return awaitTerminalDelivery(
-		turnCtx, frames, socketErrors, monitorDone, response.TurnID, validate, cfg, stallTimeout)
+		turnCtx, frames, socketErrors, monitorDone, response.TurnID, validate, cfg, terminalDeliveryTimeout)
 }
 
 func awaitTerminalDelivery(
@@ -223,8 +229,14 @@ func awaitTerminalDelivery(
 		}
 	}()
 	for {
+		if ctx.Err() != nil {
+			return nil, paidCapContextError(ctx, "terminal delivery")
+		}
 		select {
 		case frame, ok := <-frames:
+			if ctx.Err() != nil {
+				return nil, paidCapContextError(ctx, "terminal delivery")
+			}
 			if !ok {
 				return nil, errors.New("WebSocket closed before terminal delivery")
 			}
@@ -240,9 +252,12 @@ func awaitTerminalDelivery(
 			}
 			return frame.Delivery, nil
 		case err := <-monitorDone:
+			if ctx.Err() != nil {
+				return nil, paidCapContextError(ctx, "terminal delivery")
+			}
 			monitorDone = nil
 			if err != nil {
-				return nil, err
+				return nil, normalizeContextError(ctx, err, "terminal delivery")
 			}
 			if deliveryAfterComplete <= 0 {
 				return nil, errors.New("terminal delivery deadline must be positive")
@@ -250,14 +265,63 @@ func awaitTerminalDelivery(
 			deliveryTimer = time.NewTimer(deliveryAfterComplete)
 			deliveryDeadline = deliveryTimer.C
 		case <-deliveryDeadline:
+			if ctx.Err() != nil {
+				return nil, paidCapContextError(ctx, "terminal delivery")
+			}
 			return nil, fmt.Errorf(
 				"terminal WebSocket delivery did not arrive within %s after authoritative completion",
 				deliveryAfterComplete)
 		case <-socketErrors:
+			if ctx.Err() != nil {
+				return nil, paidCapContextError(ctx, "terminal delivery")
+			}
 			return nil, errors.New("WebSocket read failed before terminal delivery")
 		case <-ctx.Done():
-			return nil, fmt.Errorf("absolute %s smoke timeout reached", absoluteTimeout)
+			return nil, paidCapContextError(ctx, "terminal delivery")
 		}
+	}
+}
+
+func paidSmokeContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeoutCause(context.Background(), smokePaidCap, errSmokePaidCap)
+}
+
+func paidTurnContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeoutCause(parent, turnPaidCap, errTurnPaidCap)
+}
+
+type websocketTurnWriter interface {
+	SetWriteDeadline(time.Time) error
+	WriteMessage(int, []byte) error
+}
+
+func writeTurnRequest(ctx context.Context, writer websocketTurnWriter, request []byte) error {
+	if ctx.Err() != nil {
+		return paidCapContextError(ctx, "turn request write")
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return errors.New("turn request write requires a paid-operation deadline")
+	}
+	if err := writer.SetWriteDeadline(deadline); err != nil {
+		return errors.New("bind the WebSocket turn write deadline")
+	}
+
+	writeErr := writer.WriteMessage(websocket.TextMessage, request)
+	clearErr := writer.SetWriteDeadline(time.Time{})
+	if ctx.Err() != nil {
+		return paidCapContextError(ctx, "turn request write")
+	}
+	switch {
+	case writeErr != nil && clearErr != nil:
+		return errors.Join(errors.New("send the fixed smoke action"),
+			errors.New("clear the WebSocket turn write deadline"))
+	case writeErr != nil:
+		return errors.New("send the fixed smoke action")
+	case clearErr != nil:
+		return errors.New("clear the WebSocket turn write deadline")
+	default:
+		return nil
 	}
 }
 
@@ -323,17 +387,22 @@ func validateBellweatherBinding(cfg boot.Config) error {
 	if cfg.Models == nil {
 		return errors.New("instance must declare the Gemini model registry")
 	}
-	endpoint := cfg.Models.Endpoints["gemini-flash"]
-	if endpoint == nil || endpoint.Provider != "gemini" || endpoint.Model != "gemini-3.6-flash" ||
+	endpoint := cfg.Models.Endpoints["gemini-flash-lite"]
+	if len(cfg.Models.Endpoints) != 1 || cfg.Models.Defaults.Model != "gemini-flash-lite" ||
+		endpoint == nil || endpoint.Provider != "gemini" || endpoint.Model != "gemini-3.5-flash-lite" ||
+		endpoint.URL != "https:/"+"/generativelanguage.googleapis.com/v1beta/openai" ||
 		endpoint.APIKeyEnv != "GEMINI_API_KEY" || endpoint.WireBackend != "wire" ||
-		!endpoint.SupportsTools || endpoint.ToolFormat != "openai" {
-		return errors.New("instance must bind the gemini-3.6-flash endpoint through GEMINI_API_KEY")
+		!endpoint.SupportsTools || endpoint.ToolFormat != "openai" || endpoint.MaxTokens != 1048576 {
+		return errors.New("instance must exclusively bind and default to the gemini-3.5-flash-lite endpoint through GEMINI_API_KEY")
+	}
+	if len(cfg.Models.Capabilities) != 4 {
+		return errors.New("instance must declare exactly the four Bellweather smoke capabilities")
 	}
 	for _, capability := range []string{"casekeeping", "companion_decision", "fiction_adjudication", "narration"} {
 		declaration := cfg.Models.Capabilities[capability]
 		if declaration == nil || len(declaration.Preferred) != 1 ||
-			declaration.Preferred[0] != "gemini-flash" || !declaration.RequiresTools {
-			return fmt.Errorf("instance capability %s must require only tool-capable gemini-flash", capability)
+			declaration.Preferred[0] != "gemini-flash-lite" || !declaration.RequiresTools {
+			return fmt.Errorf("instance capability %s must require only tool-capable gemini-flash-lite", capability)
 		}
 	}
 	return nil
@@ -376,8 +445,14 @@ func awaitSubmission(
 	key string,
 ) (*payload.SubmitResponse, error) {
 	for {
+		if ctx.Err() != nil {
+			return nil, paidCapContextError(ctx, "submit response")
+		}
 		select {
 		case frame, ok := <-frames:
+			if ctx.Err() != nil {
+				return nil, paidCapContextError(ctx, "submit response")
+			}
 			if !ok {
 				return nil, errors.New("WebSocket closed before the submit response")
 			}
@@ -386,11 +461,34 @@ func awaitSubmission(
 				return frame.Response, nil
 			}
 		case <-socketErrors:
+			if ctx.Err() != nil {
+				return nil, paidCapContextError(ctx, "submit response")
+			}
 			return nil, errors.New("WebSocket read failed before the submit response")
 		case <-ctx.Done():
-			return nil, fmt.Errorf("absolute %s smoke timeout reached", absoluteTimeout)
+			return nil, paidCapContextError(ctx, "submit response")
 		}
 	}
+}
+
+func paidCapContextError(ctx context.Context, before string) error {
+	cause := context.Cause(ctx)
+	switch {
+	case errors.Is(cause, errTurnPaidCap), errors.Is(cause, errSmokePaidCap),
+		errors.Is(cause, errCasePhaseProofCap):
+		return fmt.Errorf("%w before %s", cause, before)
+	case cause != nil:
+		return fmt.Errorf("smoke context ended before %s: %w", before, cause)
+	default:
+		return fmt.Errorf("smoke context ended before %s", before)
+	}
+}
+
+func normalizeContextError(ctx context.Context, err error, before string) error {
+	if ctx.Err() != nil {
+		return paidCapContextError(ctx, before)
+	}
+	return err
 }
 
 func validateTerminalDelivery(delivery *payload.TurnDelivery, _ boot.Config) error {

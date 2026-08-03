@@ -1,17 +1,41 @@
 <script lang="ts">
+	import { actionTextViolation, MAX_ACTION_TEXT_BYTES } from '../../player-v1/parser';
 	import type { ActionSessionShellProps } from './ActionSessionShell.types';
 
 	let { view, onInput, onSubmit, onReconnect }: ActionSessionShellProps = $props();
 
 	const componentId = $props.id();
 	const refusalId = `${componentId}-refusal`;
+	const validationId = `${componentId}-validation`;
 	let actionInput: HTMLInputElement;
+	let touched = $state(false);
+	let draftValue = $derived(view.value);
 	let lastFocusRequestId: string | undefined;
 	let lastAnnouncementId: string | undefined;
 	let announcedStatus = $state<Readonly<{ announcementId: string; text: string }>>();
 
 	const inputDisabled = $derived(view.busy || (view.inputDisabled ?? view.disabled));
-	const submitDisabled = $derived(view.busy || (view.submitDisabled ?? view.disabled));
+	const textViolation = $derived(actionTextViolation(draftValue));
+	const validationMessage = $derived(
+		touched
+			? textViolation === 'blank'
+				? 'Enter a nonblank action.'
+				: textViolation === 'too_long'
+					? `Action text exceeds ${MAX_ACTION_TEXT_BYTES} bytes.`
+					: undefined
+			: undefined
+	);
+	const submitDisabled = $derived(
+		view.busy || (view.submitDisabled ?? view.disabled) || textViolation !== undefined
+	);
+	const describedBy = $derived(
+		[
+			view.refusal === undefined ? undefined : refusalId,
+			validationMessage === undefined ? undefined : validationId
+		]
+			.filter((value) => value !== undefined)
+			.join(' ') || undefined
+	);
 
 	$effect(() => {
 		const focusRequestId = view.refusal?.focusRequestId;
@@ -30,12 +54,22 @@
 	});
 
 	function handleInput(event: Event): void {
-		onInput((event.currentTarget as HTMLInputElement).value);
+		touched = true;
+		draftValue = (event.currentTarget as HTMLInputElement).value;
+		onInput(draftValue);
 	}
 
 	function handleSubmit(event: SubmitEvent): void {
 		event.preventDefault();
-		if (!submitDisabled) onSubmit();
+		touched = true;
+		if (textViolation !== undefined) {
+			actionInput?.focus();
+			return;
+		}
+		if (!submitDisabled) {
+			onSubmit();
+			touched = false;
+		}
 	}
 </script>
 
@@ -46,9 +80,11 @@
 			bind:this={actionInput}
 			id={`${componentId}-action`}
 			type="text"
-			value={view.value}
+			value={draftValue}
 			disabled={inputDisabled}
-			aria-describedby={view.refusal === undefined ? undefined : refusalId}
+			required
+			maxlength={MAX_ACTION_TEXT_BYTES}
+			aria-describedby={describedBy}
 			oninput={handleInput}
 		/>
 		<button type="submit" disabled={submitDisabled}>Submit</button>
@@ -56,6 +92,9 @@
 
 	{#if view.refusal !== undefined}
 		<p id={refusalId}>{view.refusal.message}</p>
+	{/if}
+	{#if validationMessage !== undefined}
+		<p id={validationId} role="alert">{validationMessage}</p>
 	{/if}
 
 	{#if view.reconnect !== undefined}

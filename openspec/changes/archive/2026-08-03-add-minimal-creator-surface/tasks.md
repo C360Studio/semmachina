@@ -14,9 +14,16 @@
 - [x] 2.1 Write RED startup/transport tests for fixed endpoint selection, redirect refusal, normal TLS
   validation, loopback/Unix-local, enforced surface-only network policy, or authenticated-proxy
   posture; prove bare RFC1918/private classification and browser endpoint override are refused.
-- [ ] 2.2 Add deployment acceptance that proves the browser-facing network and an untrusted sibling
+- [x] 2.2 Add deployment acceptance that proves the browser-facing network and an untrusted sibling
   workload cannot directly connect to or read the graph endpoint; document that startup checks
   support but cannot replace firewall/network-policy/proxy enforcement.
+  - Formal architecture and backend/security reviews APPROVED the exclusive runtime-namespace
+    topology and live-read-first proof. The runbook distinguishes enforced isolation from startup,
+    CORS, CSP, and browser no-request checks.
+  - The real Docker gate passed a per-run nonce from live GraphQL through the actual surface, then
+    proved edge and sibling HTTPS positive controls before DNS, TCP, and exact GraphQL POST denial.
+    Topology inspection proved private namespaces, zero probe mounts, and no port publication;
+    interruption-safe cleanup left no remnants. All four focused contract tests passed.
 - [x] 2.3 Write RED principal/scope tests proving production default-deny/no dial before Group 3,
   exact canonical component checks (`world1` never admits `world10`), and whole-response failure on
   any out-of-scope entity or relationship.
@@ -134,23 +141,55 @@
     0 errors/0 warnings, and lint, build, and diff gates were green.
   - Formal architect, backend/security, and Svelte/accessibility reviews APPROVED after review
     fixes.
-- [ ] 7.3 Run the real starter-stack journey through the bounded bridge, existing upstream WebSocket,
+- [x] 7.3 Run the real starter-stack journey through the bounded bridge, existing upstream WebSocket,
   and SemStreams beta.159 GraphQL surface, with no browser-visible Bearer or direct graph/NATS access.
+  - The authorized 2026-08-03 Gemini 3.5 Flash-Lite run passed one Playwright test in 1.0 minute.
+    Its two distinct browser-submitted turns proved `discovery`, terminal-card replacement, Kit's
+    exact entity and visible text, and the persisted `request_hint` / `player-hint` / `case-decision`
+    route. Browser audit proved same-origin HTTPS/WSS only, no browser authorization header or direct
+    GraphQL/NATS request, and no upstream Bearer in storage, DOM, or resource URLs.
+  - Both independent diagnostic readiness polls returned HTTP 200. Managed teardown left no surface,
+    player, GraphQL, diagnostic, or TLS-proxy listener and no generated binary. See the
+    [dated acceptance record](../../../../docs/smoke-results/2026-08-03-bellweather-flash-lite-surface.md).
 
 ## 8. Reviews, Documentation, and Quality Gates
 
-- [ ] 8.1 Obtain architecture review for projection-only ownership, byte-transparent bounded bridge,
+- [x] 8.1 Obtain architecture review for projection-only ownership, byte-transparent bounded bridge,
   unchanged engine transport, one-world scope, graph allowlist, clock boundary, and upstream asks.
-- [ ] 8.2 Obtain backend/security review for opaque sessions, exact upgrade checks, credential
+  - Holistic architecture review APPROVED the projection-only GraphQL BFF, exact one-world scope,
+    closed operations and DTOs, byte-transparent bounded bridge, and factual clock boundary.
+    SemStreams upstream issues #882–#886 were verified as the retained public/scale follow-ups.
+- [x] 8.2 Obtain backend/security review for opaque sessions, exact upgrade checks, credential
   confinement/redaction, immutable deployment scope, bridge bounds/liveness, graph prefix
   derivation, operation allowlist, and fail-closed errors.
-- [ ] 8.3 Obtain Svelte/TypeScript review for strict requests, additive-compatible server parsing,
+  - Final backend/security review APPROVED the closed fixed protocol-failure categories,
+    fixed-message early paid poll, and canary nonleak guarantees. The focused runner suite passed
+    68/68 tests.
+- [x] 8.3 Obtain Svelte/TypeScript review for strict requests, additive-compatible server parsing,
   state-machine correctness, accessibility, Svelte 5 usage, reconnect, and terminal-result dedupe.
-- [ ] 8.4 Document local surface startup, TLS/proxy and same-origin session/bridge configuration,
+  - Svelte/TypeScript review APPROVED strict own-property parser semantics, including null and empty
+    values; pre-intent UTF-8 validation and accessibility; reconnect and terminal dedupe; non-dumping
+    browser audit; and cleanup-owned build behavior.
+  - Verification passed check with 0 errors and 0 warnings, 503 unit tests, 26 component tests,
+    six deterministic browser journeys, and lint.
+- [x] 8.4 Document local surface startup, TLS/proxy and same-origin session/bridge configuration,
   instance/GraphQL configuration, authored-versus-schematic map behavior, clock states, one-world
   deployment, and secret-safe troubleshooting.
-- [ ] 8.5 Run TypeScript unit/component/browser tests, Node bridge security/resource tests, Go
+  - The [creator-surface operations runbook](../../../../docs/runbooks/creator-surface.md) covers the
+    action-free preflight, paid Flash-Lite acceptance, immutable deployment scope, configuration
+    contracts, map/clock truth boundaries, failure handling, and secret-safe evidence retention.
+- [x] 8.5 Run TypeScript unit/component/browser tests, Node bridge security/resource tests, Go
   unit/integration/race tests, mock and real-stack acceptance, lint, build/cross-compile, strict
   OpenSpec, and diff/line-length gates.
-- [ ] 8.6 Archive only after every retained normative scenario and review gate passes, with any
+  - Full `task default` passed lint, revive, frontend check, build and Linux cross-compile, the real
+    Docker surface-isolation gate, and strict OpenSpec validation (15/15). Go `-race` passed 3,200
+    tests across 32 packages with zero skips; frontend passed 504 unit, 26 component, and six
+    deterministic browser tests.
+  - Real-stack evidence combines the action-free preflight with the already recorded
+    [2026-08-03 paid acceptance](../../../../docs/smoke-results/2026-08-03-bellweather-flash-lite-surface.md).
+    No new paid rerun was performed for this gate.
+- [x] 8.6 Archive only after every retained normative scenario and review gate passes, with any
   unresolved SemStreams graph blocker linked rather than bypassed.
+  - Archive readiness confirmed: all retained scenarios, formal reviews, and full quality gates
+    pass; real acceptance evidence is linked; and upstream SemStreams blockers remain explicitly
+    linked as follow-ups with no local bypass.

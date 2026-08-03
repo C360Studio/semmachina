@@ -180,6 +180,7 @@ func (e *Effector) refuse(ctx context.Context, trigger Trigger, applyErr error) 
 	detail := &content.FailureDetail{
 		TurnID:  trigger.TurnID,
 		Reason:  reason,
+		Class:   content.FailureClassDeterministic,
 		Message: applyErr.Error(),
 	}
 	var rejection *effect.RejectionError
@@ -195,7 +196,7 @@ func (e *Effector) refuse(ctx context.Context, trigger Trigger, applyErr error) 
 	ref, storeErr := e.details.PutFailureDetail(ctx, trigger.TurnEntityID, detail)
 	if storeErr != nil {
 		e.logger.Error("the effect failure detail could not be stored; failing the turn without it",
-			"turn", trigger.TurnEntityID, "reason", reason, "error", storeErr)
+			"turn", trigger.TurnEntityID, "reason", reason, "class", content.FailureClassDeterministic)
 		ref = content.Ref{}
 	}
 	if _, failErr := e.failer.Fail(ctx, trigger.TurnID, trigger.TurnEntityID, reason, ref); failErr != nil {
@@ -203,7 +204,7 @@ func (e *Effector) refuse(ctx context.Context, trigger Trigger, applyErr error) 
 			fmt.Errorf("fail turn %s after %s: %w", trigger.TurnEntityID, reason, failErr), applyErr)
 	}
 	e.logger.Info("effect batch refused; the turn ended explicitly",
-		"turn", trigger.TurnEntityID, "reason", reason)
+		"turn", trigger.TurnEntityID, "reason", reason, "class", content.FailureClassDeterministic)
 	return nil
 }
 

@@ -83,7 +83,7 @@ jobs:
         run: bash scripts/check-revive-pin.sh
 
       - name: revive
-        run: go tool revive -config revive.toml -formatter friendly ./...
+        run: bash scripts/run-revive.sh
 
       - name: Prove the lint gate can fail
         # revive exiting 0 means either "clean" or "examined nothing", and those
@@ -303,6 +303,9 @@ jobs:
 
       - name: Frontend build
         run: npm run build
+
+      - name: Surface deployment isolation
+        run: node tests/deployment-isolation/run.mjs
 
   status-check:
     name: CI Status Check

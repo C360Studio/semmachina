@@ -111,8 +111,12 @@ func caseDecisionToolDefinition() agentic.ToolDefinition {
 			"properties": map[string]any{
 				"kind": map[string]any{"type": "string", "enum": kindValues,
 					"description": "The closed interpretation kind."},
-				"target_refs": refs("Zero to eight authorized entity references targeted by the action."),
-				"reveal_refs": refs("Zero to twelve eligible evidence references proposed for revelation."),
+				"target_refs": refs("Zero to eight entity references actually targeted by the player's action prose. " +
+					"Never add a target merely to qualify evidence for revelation."),
+				"reveal_refs": refs("Zero to twelve evidence references proposed for revelation. For observe/investigate, " +
+					"include evidence only when authored eligibility admits that kind, the case reached its minimum phase, " +
+					"an actual target intersects its eligible targets, and it is not solution-locked. If none qualify, use " +
+					"reveal_refs=[]."),
 				"culprit_ref": ref("For accuse only: the proposed culprit entity ID; otherwise an empty string."),
 				"method_ref":  ref("For accuse only: the proposed method entity ID; otherwise an empty string."),
 				"motive_ref":  ref("For accuse only: the proposed motive entity ID; otherwise an empty string."),

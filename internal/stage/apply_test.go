@@ -255,7 +255,8 @@ func TestEffectorStage_ClassifiesPartialCommitAndConvergesTransientFailures(t *t
 					t.Fatalf("permanent commit failure calls=%d reason=%q, want one %q failure",
 						failer.calls, failer.reason, vocabulary.FailureEffectCommitIncomplete)
 				}
-				if details.puts != 1 || details.detail == nil || details.detail.Target != applyItemID ||
+				if details.puts != 1 || details.detail == nil ||
+					details.detail.Class != content.FailureClassDeterministic || details.detail.Target != applyItemID ||
 					len(details.detail.Committed) != 1 || details.detail.Committed[0] != applyCharacterID {
 					t.Fatalf("permanent commit detail = %+v after %d puts, want target %s after confirmed [%s]",
 						details.detail, details.puts, applyItemID, applyCharacterID)

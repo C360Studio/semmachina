@@ -33,10 +33,41 @@ describe('ActionSessionShell', () => {
 
 		expect(input.element()).toBeInstanceOf(HTMLInputElement);
 		expect((input.element() as HTMLInputElement).type).toBe('text');
+		await expect.element(input).toBeRequired();
+		await expect.element(input).toHaveAttribute('maxlength', '4096');
 
 		await input.fill('I open the gate');
 		expect(onInput).toHaveBeenLastCalledWith('I open the gate');
 
+		input.element().focus();
+		await userEvent.keyboard('{Enter}');
+		expect(onSubmit).toHaveBeenCalledOnce();
+	});
+
+	it('blocks blank and UTF-8 oversized actions with a fixed accessible local error', async () => {
+		const onSubmit = vi.fn();
+		const screen = await render(ActionSessionShell, props(idleView, { onSubmit }));
+		const input = screen.getByRole('textbox', { name: 'What do you do?' });
+		const submit = screen.getByRole('button', { name: 'Submit' });
+
+		await expect.element(submit).toBeDisabled();
+		await input.fill('   ');
+		await expect.element(input).toHaveFocus();
+		await expect.element(submit).toBeDisabled();
+		await expect.element(input).toHaveAccessibleDescription('Enter a nonblank action.');
+		expect(onSubmit).not.toHaveBeenCalled();
+
+		const oversized = '€'.repeat(1366);
+		await input.fill(oversized);
+		await expect.element(input).toHaveValue(oversized);
+		await expect.element(input).toHaveFocus();
+		await expect.element(submit).toBeDisabled();
+		await expect.element(input).toHaveAccessibleDescription('Action text exceeds 4096 bytes.');
+		expect(onSubmit).not.toHaveBeenCalled();
+
+		await input.fill('Open the gate');
+		await expect.element(submit).toBeEnabled();
+		expect(screen.getByText('Action text exceeds 4096 bytes.').query()).toBeNull();
 		input.element().focus();
 		await userEvent.keyboard('{Enter}');
 		expect(onSubmit).toHaveBeenCalledOnce();

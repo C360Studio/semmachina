@@ -20,8 +20,13 @@ import (
 
 // Sentinels for the outcomes a caller genuinely branches on.
 var (
-	// ErrNoResult reports a turn that has not ended, or a player who has not
-	// finished one.
+	// ErrNoTurnHistory reports an existing player entity with no accepted or
+	// resolved turn pointers. It is distinct from ErrNoResult: there is nothing
+	// to wait for, whereas ErrNoResult means a candidate turn exists but none is
+	// terminal yet.
+	ErrNoTurnHistory = errors.New("player has no turn history")
+	// ErrNoResult reports a turn that has not ended, including a latest lookup
+	// whose candidate turns exist but none has finished.
 	//
 	// Distinct from ErrTurnNotFound because the two mean opposite things to
 	// whoever asked. "Your turn is still running" is an answer; "there is no such
@@ -257,8 +262,13 @@ func (r *Results) Latest(ctx context.Context, playerID string) (*payload.TurnDel
 		return nil, fmt.Errorf("read player %s: %w", playerID, err)
 	}
 
+	candidates := candidateTurns(player)
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("%w: player %s", ErrNoTurnHistory, playerID)
+	}
+
 	var best *payload.TurnDelivery
-	for _, turnEntityID := range candidateTurns(player) {
+	for _, turnEntityID := range candidates {
 		turnID, err := turnIDOf(turnEntityID)
 		if err != nil {
 			// A pointer at something that is not a turn of this world. Skipped

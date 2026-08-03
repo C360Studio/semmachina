@@ -1,0 +1,66 @@
+{
+  "nats_url": "nats://127.0.0.1:4222",
+
+  "org": "c360",
+  "world_ns": "bellweather-gemini35-flash-lite-smoke",
+
+  "player": {
+    "local_id": "rowan",
+    "name": "Rowan Vale",
+    "character": "local:rowan-vale",
+    "credential": "CHANGE-ME-bellweather-local-only-bearer"
+  },
+
+  "companion": {
+    "character": "local:kit-finch",
+    "policy": "bounded-initiative"
+  },
+
+  "scene_local_id": "fete-green",
+  "content_bucket": "BELLWEATHER_GEMINI_SMOKE",
+
+  "socket": {
+    "addr": "127.0.0.1:0",
+    "path": "/play"
+  },
+
+  "model_registry": {
+    "endpoints": {
+      "gemini-flash-lite": {
+        "provider": "gemini",
+        "url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "model": "gemini-3.5-flash-lite",
+        "api_key_env": "GEMINI_API_KEY",
+        "wire_backend": "wire",
+        "supports_tools": true,
+        "tool_format": "openai",
+        "max_tokens": 1048576
+      }
+    },
+    "capabilities": {
+      "casekeeping": {
+        "description": "Private Bellweather case interpretation routed to Gemini 3.5 Flash-Lite.",
+        "preferred": ["gemini-flash-lite"],
+        "requires_tools": true
+      },
+      "companion_decision": {
+        "description": "Kit Finch's structural decision routed to Gemini 3.5 Flash-Lite.",
+        "preferred": ["gemini-flash-lite"],
+        "requires_tools": true
+      },
+      "fiction_adjudication": {
+        "description": "Bellweather adjudication routed to Gemini 3.5 Flash-Lite.",
+        "preferred": ["gemini-flash-lite"],
+        "requires_tools": true
+      },
+      "narration": {
+        "description": "Bellweather narration routed to Gemini 3.5 Flash-Lite.",
+        "preferred": ["gemini-flash-lite"],
+        "requires_tools": true
+      }
+    },
+    "defaults": {
+      "model": "gemini-flash-lite"
+    }
+  }
+}

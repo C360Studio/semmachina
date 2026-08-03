@@ -53,6 +53,25 @@ func TestCasekeeperSpec_IsMidBoundedAndHasOneStrictTerminalTool(t *testing.T) {
 	}
 }
 
+func TestCasekeeperSchemaDefinesActualTargetsAndCompleteRevealQualification(t *testing.T) {
+	properties := persona.Casekeeper().Tool.Parameters["properties"].(map[string]any)
+	targetDescription := properties["target_refs"].(map[string]any)["description"].(string)
+	for _, want := range []string{"actually targeted", "action prose", "Never add a target", "qualify evidence"} {
+		if !strings.Contains(targetDescription, want) {
+			t.Fatalf("target_refs description lacks %q: %s", want, targetDescription)
+		}
+	}
+	revealDescription := properties["reveal_refs"].(map[string]any)["description"].(string)
+	for _, want := range []string{
+		"observe/investigate", "admits that kind", "minimum phase", "actual target intersects",
+		"not solution-locked", "reveal_refs=[]",
+	} {
+		if !strings.Contains(revealDescription, want) {
+			t.Fatalf("reveal_refs description lacks %q: %s", want, revealDescription)
+		}
+	}
+}
+
 func TestCasekeeperTask_InjectsCaseAndActorIdentity(t *testing.T) {
 	task, err := persona.Casekeeper().Task(persona.TaskRequest{
 		Identity: casekeeperIdentity(), Prompt: "private case projection",
