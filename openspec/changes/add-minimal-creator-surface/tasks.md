@@ -65,22 +65,22 @@
 
 ## 4. Player Session State Machine
 
-- [ ] 4.1 Write failing state-transition tests for connect, authenticate, submit, accepted/refused,
+- [x] 4.1 Write failing state-transition tests for connect, authenticate, submit, accepted/refused,
   waiting, pre-submit latest-terminal watermark, terminal delivery, malformed message, disconnect,
   reconnect, exact-ID retrieval, evidence-only latest/delivery, and user-authorized exact replay.
-- [ ] 4.2 Add RED cases proving an uncertain action is never automatically resubmitted, a second
+- [x] 4.2 Add RED cases proving an uncertain action is never automatically resubmitted, a second
   action is disabled while one is pending, and recovered live/retrieved terminal results coalesce.
   Include: a previous terminal exists; a new send disconnects before acceptance; `latest` returns
   the previous identity while the new turn runs; the old result is not rendered or associated; and
   only accepted replay IDs permit the later intended terminal to converge exactly once.
-- [ ] 4.3 Add a RED multi-connection case: another device for the same player acts after the
+- [x] 4.3 Add a RED multi-connection case: another device for the same player acts after the
   watermark; this surface loses its send response or receives an active-turn refusal; the other
   terminal changes `latest` or arrives by player-scoped delivery; neither the result nor
   `active_turn_id` binds to this intent; only explicit replay acceptance supplies correlating IDs.
-- [ ] 4.4 Add RED recovery-replay cases proving the UI explains idempotent convergence versus
+- [x] 4.4 Add RED recovery-replay cases proving the UI explains idempotent convergence versus
   submit-now authorization, sends the retained text/key only after a user action, never edits them,
   and keeps a typed replay refusal unresolved.
-- [ ] 4.5 Implement the pure client state machine and same-origin WebSocket client using one
+- [x] 4.5 Implement the pure client state machine and same-origin WebSocket client using one
   idempotency key per user intent, a pre-submit watermark used only as activity evidence, exact-ID
   recovery when known, and user-authorized replay when intended IDs are unknown.
 
