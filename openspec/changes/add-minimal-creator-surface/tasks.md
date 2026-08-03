@@ -86,19 +86,23 @@
 
 ## 5. Resolution and Orientation Projections
 
-- [ ] 5.1 Write failing resolution tests for rolled, no-roll, failed, malformed, duplicate, and
+- [x] 5.1 Write failing resolution tests for rolled, no-roll, failed, malformed, duplicate, and
   conflicting terminal results, including exact delivered plausibility/risk/consequence/band,
   modifier, roll, and narration evidence.
-- [ ] 5.2 Implement a lossless resolution/narration view-model projection with no client arithmetic,
+- [x] 5.2 Implement a lossless resolution/narration view-model projection with no client arithmetic,
   band lookup, adjudication, object-store fetch, or prose inference.
-- [ ] 5.3 Write failing layout tests for query-order independence, directed edges, authored-only,
+- [x] 5.3 Write failing layout tests for query-order independence, directed edges, authored-only,
   topology-only, mixed anchored/unpositioned, and disconnected location graphs.
-- [ ] 5.4 Implement the pure deterministic labelled schematic layout while preserving every authored
+- [x] 5.4 Implement the pure deterministic labelled schematic layout while preserving every authored
   coordinate and performing no graph or map-artifact write.
-- [ ] 5.5 Write failing clock tests for configured, `not_configured`, missing, ambiguous, malformed,
+- [x] 5.5 Write failing clock tests for configured, `not_configured`, missing, ambiguous, malformed,
   out-of-scope, and unchanged-across-wall-time facts.
-- [ ] 5.6 Implement the typed clock projection with no timer, interpolation, vocabulary, policy,
+- [x] 5.6 Implement the typed clock projection with no timer, interpolation, vocabulary, policy,
   deadline, or mutation behavior.
+  - Verification passed 201 focused projection/parser tests and all 407 web unit tests; strict
+    check, lint, build, and diff gates were green.
+  - Formal architect, Svelte, and backend reviews APPROVED the projection boundaries and
+    implementation.
 
 ## 6. Accessible Svelte Components
 

@@ -84,11 +84,28 @@ export interface TurnRoll {
 	total: number;
 }
 
-export interface TurnResolution {
+export interface UnresolvedTurnResolution {
 	verdict: VerdictScalars;
-	band?: OutcomeBand;
-	roll?: TurnRoll;
+	band?: never;
+	roll?: never;
 }
+
+export interface AutomaticTurnResolution {
+	verdict: VerdictScalars & { requires_roll: false };
+	band: 'auto';
+	roll?: never;
+}
+
+export type RolledOutcomeBand = Exclude<OutcomeBand, 'auto'>;
+
+export interface RolledTurnResolution {
+	verdict: VerdictScalars & { requires_roll: true };
+	band: RolledOutcomeBand;
+	roll: TurnRoll;
+}
+
+export type CompletedTurnResolution = AutomaticTurnResolution | RolledTurnResolution;
+export type TurnResolution = UnresolvedTurnResolution | CompletedTurnResolution;
 
 export type CompanionDecisionKind = 'silent' | 'quip' | 'question' | 'warning' | 'recall' | 'hint';
 export type HintLevel = 'nudge' | 'connect' | 'next-step';
@@ -116,19 +133,24 @@ interface TurnResultBase {
 	turn_id: string;
 	action_id: string;
 	player_id: string;
-	resolution?: TurnResolution;
 	companion_resolution?: CompanionResolution;
 	narration_ref?: string;
 	resolved_at: string;
 }
 
-export type TurnResult =
-	| (TurnResultBase & {
-			phase: 'complete';
-			resolution: TurnResolution;
-			narration_ref: string;
-	  })
-	| (TurnResultBase & { phase: 'failed'; failure_reason: FailureReason });
+export type CompleteTurnResult = TurnResultBase & {
+	phase: 'complete';
+	resolution: CompletedTurnResolution;
+	narration_ref: string;
+};
+
+export type FailedTurnResult = TurnResultBase & {
+	phase: 'failed';
+	failure_reason: FailureReason;
+	resolution?: TurnResolution;
+};
+
+export type TurnResult = CompleteTurnResult | FailedTurnResult;
 
 export interface DeliveredNarration {
 	turn_id: string;
@@ -136,11 +158,29 @@ export interface DeliveredNarration {
 	prose: string;
 }
 
-export interface TurnDelivery {
+type CompletedResolutionFor<Band extends OutcomeBand> = Band extends 'auto'
+	? AutomaticTurnResolution
+	: RolledTurnResolution & { band: Band };
+
+type CompleteTurnDeliveryFor<Band extends OutcomeBand> = {
 	protocol: typeof PLAYER_PROTOCOL;
-	result: TurnResult;
+	result: Omit<CompleteTurnResult, 'resolution'> & {
+		resolution: CompletedResolutionFor<Band>;
+	};
+	narration: DeliveredNarration & { band: Band };
+};
+
+export type CompleteTurnDelivery = {
+	[Band in OutcomeBand]: CompleteTurnDeliveryFor<Band>;
+}[OutcomeBand];
+
+export interface FailedTurnDelivery {
+	protocol: typeof PLAYER_PROTOCOL;
+	result: FailedTurnResult;
 	narration?: DeliveredNarration;
 }
+
+export type TurnDelivery = CompleteTurnDelivery | FailedTurnDelivery;
 
 export type RetrieveBy = 'turn' | 'action' | 'latest';
 export type RetrieveRefusalCode = 'malformed_request' | 'not_found' | 'not_ready' | 'unavailable';
@@ -567,6 +607,12 @@ function parseRoll(value: unknown, path: string): TurnRoll {
 	};
 }
 
+function parseResolution(
+	value: unknown,
+	path: string,
+	outcomeRequired: true
+): CompletedTurnResolution;
+function parseResolution(value: unknown, path: string, outcomeRequired: false): TurnResolution;
 function parseResolution(value: unknown, path: string, outcomeRequired: boolean): TurnResolution {
 	const record = asRecord(value, path);
 	const verdict = parseVerdict(record.verdict, `${path}.verdict`);
@@ -585,12 +631,12 @@ function parseResolution(value: unknown, path: string, outcomeRequired: boolean)
 		if (band !== 'auto') invalid(`${path}.band`, 'only auto resolves without a roll');
 		if (verdict.requires_roll)
 			invalid(`${path}.verdict.requires_roll`, 'must be false for an automatic resolution');
-		return { verdict, band };
+		return { verdict: { ...verdict, requires_roll: false }, band };
 	}
 	if (!verdict.requires_roll)
 		invalid(`${path}.verdict.requires_roll`, 'must be true when a roll is present');
 	if (band === 'auto') invalid(`${path}.band`, 'a roll cannot select auto');
-	return { verdict, band, roll };
+	return { verdict: { ...verdict, requires_roll: true }, band, roll };
 }
 
 function parseCompanionResolution(value: unknown, path: string): CompanionResolution {
@@ -626,10 +672,15 @@ function parseTurnResult(value: unknown, path: string): TurnResult {
 		['complete', 'failed'] as const,
 		`${path}.phase`
 	);
-	const resolution =
-		record.resolution === undefined || record.resolution === null
-			? undefined
-			: parseResolution(record.resolution, `${path}.resolution`, phase === 'complete');
+	let completeResolution: CompletedTurnResolution | undefined;
+	let failedResolution: TurnResolution | undefined;
+	if (record.resolution === undefined || record.resolution === null) {
+		if (phase === 'complete') invalid(`${path}.resolution`, 'is required for a complete turn');
+	} else if (phase === 'complete') {
+		completeResolution = parseResolution(record.resolution, `${path}.resolution`, true);
+	} else {
+		failedResolution = parseResolution(record.resolution, `${path}.resolution`, false);
+	}
 	const companionResolution =
 		record.companion_resolution === undefined || record.companion_resolution === null
 			? undefined
@@ -646,7 +697,6 @@ function parseTurnResult(value: unknown, path: string): TurnResult {
 		turn_id: turnID,
 		action_id: actionID,
 		player_id: playerID,
-		...(resolution === undefined ? {} : { resolution }),
 		...(companionResolution === undefined ? {} : { companion_resolution: companionResolution }),
 		...(narrationRef === undefined || narrationRef === '' ? {} : { narration_ref: narrationRef }),
 		resolved_at: resolvedAt
@@ -659,17 +709,23 @@ function parseTurnResult(value: unknown, path: string): TurnResult {
 		) {
 			invalid(`${path}.failure_reason`, 'is forbidden for a complete turn');
 		}
-		if (resolution === undefined) invalid(`${path}.resolution`, 'is required for a complete turn');
 		if (narrationRef === undefined || narrationRef === '')
 			invalid(`${path}.narration_ref`, 'is required for a complete turn');
-		return { ...base, phase, resolution, narration_ref: narrationRef };
+		if (completeResolution === undefined)
+			invalid(`${path}.resolution`, 'is required for a complete turn');
+		return { ...base, phase, resolution: completeResolution, narration_ref: narrationRef };
 	}
 	const failureReason = closed(
 		stringField(record, 'failure_reason', path),
 		FAILURE_REASONS,
 		`${path}.failure_reason`
 	);
-	return { ...base, phase, failure_reason: failureReason };
+	return {
+		...base,
+		phase,
+		failure_reason: failureReason,
+		...(failedResolution === undefined ? {} : { resolution: failedResolution })
+	};
 }
 
 function parseNarration(value: unknown, path: string): DeliveredNarration {
@@ -680,6 +736,47 @@ function parseNarration(value: unknown, path: string): DeliveredNarration {
 	if (byteLength(prose) > MAX_PROSE_BYTES)
 		invalid(`${path}.prose`, `exceeds ${MAX_PROSE_BYTES} bytes`);
 	return { turn_id: turnID, band, prose };
+}
+
+function pairCompletedDelivery(
+	result: CompleteTurnResult,
+	narration: DeliveredNarration,
+	path: string
+): CompleteTurnDelivery {
+	switch (result.resolution.band) {
+		case 'auto':
+			if (narration.band !== 'auto')
+				invalid(`${path}.narration.band`, 'does not match result.resolution.band');
+			return {
+				protocol: PLAYER_PROTOCOL,
+				result: { ...result, resolution: result.resolution },
+				narration: { ...narration, band: narration.band }
+			};
+		case 'miss':
+			if (narration.band !== 'miss')
+				invalid(`${path}.narration.band`, 'does not match result.resolution.band');
+			return {
+				protocol: PLAYER_PROTOCOL,
+				result: { ...result, resolution: { ...result.resolution, band: 'miss' } },
+				narration: { ...narration, band: narration.band }
+			};
+		case 'partial':
+			if (narration.band !== 'partial')
+				invalid(`${path}.narration.band`, 'does not match result.resolution.band');
+			return {
+				protocol: PLAYER_PROTOCOL,
+				result: { ...result, resolution: { ...result.resolution, band: 'partial' } },
+				narration: { ...narration, band: narration.band }
+			};
+		case 'full':
+			if (narration.band !== 'full')
+				invalid(`${path}.narration.band`, 'does not match result.resolution.band');
+			return {
+				protocol: PLAYER_PROTOCOL,
+				result: { ...result, resolution: { ...result.resolution, band: 'full' } },
+				narration: { ...narration, band: narration.band }
+			};
+	}
 }
 
 function parseDelivery(value: unknown, path: string): TurnDelivery {
@@ -702,6 +799,10 @@ function parseDelivery(value: unknown, path: string): TurnDelivery {
 		if (result.resolution?.band !== undefined && narration.band !== result.resolution.band) {
 			invalid(`${path}.narration.band`, 'does not match result.resolution.band');
 		}
+	}
+	if (result.phase === 'complete') {
+		if (narration === undefined) invalid(`${path}.narration`, 'is required by narration_ref');
+		return pairCompletedDelivery(result, narration, path);
 	}
 	return { protocol: PLAYER_PROTOCOL, result, ...(narration === undefined ? {} : { narration }) };
 }

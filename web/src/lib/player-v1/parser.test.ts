@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import {
 	acceptedFrame,
@@ -13,7 +13,15 @@ import {
 	rolledDelivery,
 	TURN_ID
 } from './fixtures';
-import { parsePlayerFrame, parseRetrieveRequest, parseSubmitAction } from './parser';
+import {
+	parsePlayerFrame,
+	parseRetrieveRequest,
+	parseSubmitAction,
+	type CompleteTurnDelivery,
+	type CompletedTurnResolution,
+	type DeliveredNarration,
+	type TurnDelivery
+} from './parser';
 
 function parseFixture(fixture: unknown) {
 	return parsePlayerFrame(JSON.stringify(fixture));
@@ -65,6 +73,69 @@ function deleteField(path: FixtureKey[]): FixtureMutation {
 }
 
 describe('parsePlayerFrame', () => {
+	it('narrows parsed complete deliveries to completed resolution and required narration types', () => {
+		expectTypeOf<
+			CompleteTurnDelivery['result']['resolution']
+		>().toMatchTypeOf<CompletedTurnResolution>();
+		expectTypeOf<CompleteTurnDelivery['narration']>().toMatchTypeOf<DeliveredNarration>();
+		const parsed = parseFixture(deliveryFrame);
+		expect(parsed.ok).toBe(true);
+		if (parsed.ok && parsed.value.type === 'turn_delivery') {
+			const { delivery } = parsed.value;
+			if (delivery.result.phase === 'complete') {
+				expectTypeOf(delivery.result.resolution).toMatchTypeOf<CompletedTurnResolution>();
+			}
+		}
+	});
+
+	it('rejects structurally incomplete complete deliveries at compile time', () => {
+		const verdict = {
+			plausibility: 'certain',
+			risk: 'none',
+			consequence: 'none',
+			requires_roll: false
+		} as const;
+
+		// @ts-expect-error A completed resolution always has an outcome band.
+		const missingBand: CompletedTurnResolution = { verdict };
+		// @ts-expect-error An automatic completion cannot carry a rolled outcome band.
+		const invalidAutomaticBand: CompletedTurnResolution = { verdict, band: 'full' };
+		// @ts-expect-error A complete delivery always carries its delivered narration.
+		const missingNarration: TurnDelivery = {
+			protocol: 'player/v1',
+			result: {
+				protocol: 'player/v1',
+				turn_id: 'turn-act-1',
+				action_id: 'act-1',
+				player_id: 'c360.semmachina.world1.starter.player.p1',
+				phase: 'complete',
+				resolution: { verdict, band: 'auto' },
+				narration_ref: 'obj://ARTIFACTS/narration/turn-act-1',
+				resolved_at: '2026-07-28T09:15:30Z'
+			}
+		};
+		// @ts-expect-error Complete result and delivered narration bands must match.
+		const mismatchedNarration: TurnDelivery = {
+			protocol: 'player/v1',
+			result: {
+				protocol: 'player/v1',
+				turn_id: 'turn-act-1',
+				action_id: 'act-1',
+				player_id: 'c360.semmachina.world1.starter.player.p1',
+				phase: 'complete',
+				resolution: { verdict, band: 'auto' },
+				narration_ref: 'obj://ARTIFACTS/narration/turn-act-1',
+				resolved_at: '2026-07-28T09:15:30Z'
+			},
+			narration: { turn_id: 'turn-act-1', band: 'full', prose: 'Mismatch.' }
+		};
+
+		expect(missingBand).toEqual({ verdict });
+		expect(invalidAutomaticBand.band).toBe('full');
+		expect(missingNarration.result.phase).toBe('complete');
+		expect(mismatchedNarration.narration?.band).toBe('full');
+	});
+
 	it.each([
 		['accepted submission', acceptedFrame],
 		['refused submission', refusedFrame],
