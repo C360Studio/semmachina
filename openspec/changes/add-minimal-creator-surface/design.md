@@ -124,17 +124,63 @@ additive field into a compatibility break.
 
 ### D4 — The graph adapter has a closed operation and identity envelope
 
-The adapter may call only upstream beta.159 `entity`, `entitiesByPrefix`, `relationships`, and
-`spatialSearch`. Each server route builds a fixed query and admits only bounded projection inputs
-such as a viewport/radius where required. Organization, world namespace, template, entity prefix,
-and any exact clock entity are server-derived. Requested identifiers and every returned entity or
-relationship endpoint are checked against the active prefix before a view model is returned.
+One fixed server-only GraphQL endpoint comes from deployment configuration. The HTTP client disables
+redirects and performs normal TLS hostname/chain validation. Startup blocks unless the resolved
+endpoint is reachable through one of three explicit postures: loopback or a Unix-local socket;
+enforced network policy/firewall whose deployment proof allows only the surface-server workload to
+connect; or an explicitly configured authenticated proxy. Merely resolving to RFC1918, ULA, or
+another address classified as private is insufficient. Browser input cannot influence endpoint
+scheme, host, port, path, credentials, or access posture.
 
-The place view model contains only location identity, a player-safe label, optional authored point,
-and directed connections. It does not expose arbitrary triples, hidden contents, or current entity
-state. If upstream authentication or query behavior cannot support this boundary, the task stops
-and files a SemStreams issue. Direct KV/NATS reads, a local graph index, and an unrestricted proxy
-are not fallback options.
+Startup validates the selected posture's configuration and refuses obvious drift, but a process
+cannot prove an external firewall from its own successful connection. Deployment acceptance must
+also attempt direct access from the browser-facing network and an untrusted sibling workload and
+prove both cannot connect to or read the graph endpoint. That access-control proof is a release
+gate; startup checks support it and never substitute for it.
+
+The query/normalization adapter is pure behind an `AuthenticatedPrincipal` interface. Its production
+provider defaults to deny and Group 2 can test only with explicit fakes; no upstream request occurs
+until Group 3 supplies a live session-backed principal carrying the immutable deployment and exact
+six-component world scope. Scope checks parse canonical IDs and compare organization, platform,
+world/domain, template/system, kind/type, and instance components as required. They never use raw
+string prefix matching, so `world1` cannot admit `world10`.
+
+The adapter may call beta.159 `entity`, `entitiesByPrefix`, and `relationships`. `entity` remains the
+exact-ID path for the configured clock fact. The map uses `entitiesByPrefix` for exhaustive location
+discovery and bounded `relationships` calls for directed topology; it never calls `spatialSearch`.
+Spatial projection remains blocked until upstream provides world scoping and pagination, while
+prefix discovery remains capacity-limited until its own pagination exists.
+
+Beta.159 silently truncates `entitiesByPrefix` at `N = 1000` with no GraphQL cursor. The adapter
+requests exactly 1000 and supports only response lengths from 0 through 999. A length of 1000 or
+more returns typed `projection_capacity_exceeded` and no map. It makes at most 999 relationship
+calls, admits at most 999 relationships per location and 998001 total, and fails the whole
+projection on an exceeded bound, malformed edge, or endpoint outside exact scope. Every raw edge is
+validated before predicate selection. An authored `location.relation.connects-to` edge also fails
+when either endpoint is absent from the validated location set; other valid in-scope predicates are
+omitted only after validation because they are outside the closed map DTO. The adapter never
+silently filters a dangerous edge or partial page.
+
+Every upstream body is decoded into a raw boundary type, checked for transport/GraphQL errors,
+shape, bounds, canonical IDs, datatypes, and scope in full, and only then normalized into a closed
+DTO. Beta.159 snake_case fields and the corrected schema spelling normalize to one internal field;
+if both spellings are present with conflicting values, the whole response fails. Raw bodies,
+upstream error detail, unknown fields, arbitrary triples, and secret values are never logged,
+cached, embedded in an error, or returned to the browser. The place DTO contains only validated
+location identity, player-safe label, optional authored point, and directed connections.
+
+If upstream behavior cannot support this boundary, implementation files focused issues for
+authentication/scope ([#882](https://github.com/C360Studio/semstreams/issues/882)), response
+selection minimization ([#883](https://github.com/C360Studio/semstreams/issues/883)), prefix
+pagination ([#884](https://github.com/C360Studio/semstreams/issues/884)), spatial scoping/page
+([#885](https://github.com/C360Studio/semstreams/issues/885)), and relationship schema mismatch
+([#886](https://github.com/C360Studio/semstreams/issues/886)). The starter remains locally bounded
+to loopback/Unix-local reachability or proven surface-only network/proxy authorization, complete
+validation/closed DTOs, fewer than 1,000 prefix results, no spatial query, and dual-form relationship
+normalization. Public deployment, larger maps, spatial projection, minimized selection, and a stable
+relationship contract remain production/scale gates.
+Direct KV/NATS reads, a local graph index, silent filtering, and an unrestricted proxy are not
+fallback options.
 
 ### D5 — Authored positions win; fallback layout is pure and deterministic
 
@@ -171,8 +217,13 @@ depend on color alone. Component tests exercise keyboard flow and accessible nam
 ## Risks / Trade-offs
 
 - **Beta GraphQL authentication or filtering is insufficient** → stop the affected adapter task,
-  file a focused SemStreams issue with a reproducer, and keep the gap visible rather than widening
-  local authority.
+  keep the production principal default-deny, file the relevant focused SemStreams issue, and do not
+  widen local authority.
+- **The unpageable prefix response reaches its beta.159 cap** → request the pinned 1,000 limit,
+  support at most 999 results, and return `projection_capacity_exceeded` at the cap rather than
+  rendering a silently truncated map.
+- **Raw graph data contains secrets or an out-of-scope relationship** → validate the whole response
+  before DTO construction, redact raw/error bodies, and fail the projection rather than filtering.
 - **The browser cannot safely hold the upstream player Bearer** → terminate TLS and session
   authentication at the bounded same-origin SemMachina bridge; authenticate with a distinct creator
   credential, keep the deployment mapping immutable, and redact both secrets rather than changing

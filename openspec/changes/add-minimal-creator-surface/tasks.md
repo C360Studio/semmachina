@@ -11,16 +11,32 @@
 
 ## 2. Secure Server Projection Adapter
 
-- [ ] 2.1 Write failing route/adapter tests proving active organization/world/template prefixes are
-  server-derived and browser-supplied prefixes, entity IDs, credentials, and GraphQL documents are
-  refused before any upstream request.
-- [ ] 2.2 Write failing upstream-response tests for out-of-prefix entities, relationship endpoints,
-  malformed typed facts, query errors, and over-broad returned data.
-- [ ] 2.3 Implement fixed server-only adapters for beta.159 `entity`, `entitiesByPrefix`,
-  `relationships`, and `spatialSearch`, returning only closed place and clock view models.
-- [ ] 2.4 If upstream authentication or query behavior cannot enforce the specified boundary, file a
-  focused SemStreams issue with a reproducer and record the blocker; do not add direct NATS access,
-  a local query service, or an unrestricted proxy.
+- [ ] 2.1 Write RED startup/transport tests for fixed endpoint selection, redirect refusal, normal TLS
+  validation, loopback/Unix-local, enforced surface-only network policy, or authenticated-proxy
+  posture; prove bare RFC1918/private classification and browser endpoint override are refused.
+- [ ] 2.2 Add deployment acceptance that proves the browser-facing network and an untrusted sibling
+  workload cannot directly connect to or read the graph endpoint; document that startup checks
+  support but cannot replace firewall/network-policy/proxy enforcement.
+- [ ] 2.3 Write RED principal/scope tests proving production default-deny/no dial before Group 3,
+  exact canonical component checks (`world1` never admits `world10`), and whole-response failure on
+  any out-of-scope entity or relationship.
+- [ ] 2.4 Write RED raw-boundary tests proving full validation precedes DTO construction; raw bodies,
+  upstream error details, unknown fields/triples, and secret values are never logged, cached,
+  returned, or embedded; snake_case/corrected forms normalize and conflicting dual forms fail.
+- [ ] 2.5 Write RED capacity/topology tests for 0..999 success, 1000
+  `projection_capacity_exceeded`, no `spatialSearch`, at most 999 relationship calls, 999 edges per
+  location and 998001 total, and whole-map failure on exceeded, malformed, dangling, or unsafe edges.
+- [ ] 2.6 Implement the pure authenticated-principal adapter with fixed transport, exact-ID clock
+  lookup, bounded exhaustive `entitiesByPrefix`/`relationships` map, complete validation, and closed
+  DTO normalization; leave the production principal provider default-deny until Group 3.
+- [ ] 2.7 Track the five focused SemStreams issues: auth/scope
+  [#882](https://github.com/C360Studio/semstreams/issues/882), selection minimization
+  [#883](https://github.com/C360Studio/semstreams/issues/883), prefix pagination
+  [#884](https://github.com/C360Studio/semstreams/issues/884), spatial scope/page
+  [#885](https://github.com/C360Studio/semstreams/issues/885), and relationship schema/runtime
+  [#886](https://github.com/C360Studio/semstreams/issues/886). Record starter-safe local constraints
+  separately from public/scale blockers; add no direct NATS, local query/index, silent filter, or
+  unrestricted proxy workaround.
 
 ## 3. Same-Origin Player WebSocket Bridge
 

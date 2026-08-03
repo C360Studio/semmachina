@@ -12,8 +12,9 @@ the existing player and graph contracts without moving game authority into a bro
   progress/error/reconnect state, and receive or retrieve its result.
 - Render narration and a resolution card directly from the delivered plausibility, risk,
   consequence, outcome band, modifiers, and roll; the client performs no adjudication or inference.
-- Add a server-side, allowlisted graph adapter that derives the active world scope from deployment
-  configuration and returns purpose-built view models rather than arbitrary GraphQL access.
+- Add a pure server-side graph adapter behind an authenticated-principal boundary. It uses one fixed
+  trusted endpoint, derives exact component-aware world scope from deployment/session state, fully
+  validates upstream responses, and returns closed view models rather than arbitrary GraphQL data.
 - Project locations, authored coordinates, and directed topology into a map. Authored geometry wins;
   worlds without geometry receive a deterministic labelled schematic layout that is never written
   back as world state.
@@ -27,6 +28,8 @@ the existing player and graph contracts without moving game authority into a bro
   credential.
 - Treat any missing upstream authentication or query primitive as a SemStreams engine ask to file,
   not a local query service or substrate workaround.
+- Bound the beta.159 exhaustive map below its unpageable 1,000-entity prefix cap. Spatial search is
+  not an exhaustive-map fallback and remains blocked pending scoped pagination support upstream.
 
 ## Non-goals
 
@@ -60,7 +63,18 @@ server-only SemStreams GraphQL access, deterministic projection logic, accessibl
 mock/real-stack acceptance coverage. The bridge is a local SemMachina security responsibility, not
 a SemStreams engine ask; it consumes the existing authenticated player WebSocket for action
 submission, delivery, and retrieval without changing protocol bytes. Read projections use the
-SemStreams `v1.0.0-beta.159` GraphQL `entity`, `entitiesByPrefix`, `relationships`, and
-`spatialSearch` operations. No engine payload, player protocol, graph predicate, rule pack,
-component, or lifecycle contract changes. Any upstream graph authentication/query gap discovered
-during implementation is filed against SemStreams and remains visible rather than hand-rolled here.
+SemStreams `v1.0.0-beta.159` GraphQL `entity`, `entitiesByPrefix`, and `relationships` operations;
+the exhaustive map does not call `spatialSearch`. No engine payload,
+player protocol, graph predicate, rule pack, component, or lifecycle contract changes. The change
+tracks upstream asks for authentication/scope, selection minimization, prefix pagination, spatial
+scope/pagination, and relationship-schema consistency, tracked rather than hand-rolled here:
+SemStreams
+[#882](https://github.com/C360Studio/semstreams/issues/882),
+[#883](https://github.com/C360Studio/semstreams/issues/883),
+[#884](https://github.com/C360Studio/semstreams/issues/884),
+[#885](https://github.com/C360Studio/semstreams/issues/885), and
+[#886](https://github.com/C360Studio/semstreams/issues/886). A loopback/Unix-local endpoint,
+deployment-enforced surface-only network policy, or authenticated proxy—plus the closed DTO,
+sub-1,000 starter world, no-spatial path, and dual-form relationship normalization—forms the local
+starter envelope. A bare RFC1918/private address is not authorization; public/scale and stable-schema
+claims remain gated by the corresponding upstream and deployment controls.
