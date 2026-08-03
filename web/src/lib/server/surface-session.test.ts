@@ -203,6 +203,8 @@ describe('surface session authority', () => {
 		expect(upgraded?.protocol).toBe('semmachina.player.v1');
 		expect(Object.isFrozen(upgraded)).toBe(true);
 		expect(Object.keys(upgraded ?? {})).not.toContain('playerBearer');
+		expect(Object.keys(upgraded ?? {})).not.toContain('lease');
+		expect(Object.isFrozen(upgraded?.lease)).toBe(true);
 		expect(JSON.stringify(upgraded)).not.toContain(String(environment.SEMMACHINA_PLAYER_BEARER));
 		expect(inspect(upgraded, { showHidden: true })).not.toContain(
 			String(environment.SEMMACHINA_PLAYER_BEARER)
@@ -268,7 +270,9 @@ describe('surface session authority', () => {
 		const { authority, response, sessionCookie } = await login();
 		const csrf = (await json(response)).csrf as string;
 		const exactUpgrade = upgradeRequest(sessionCookie, csrf);
-		expect(authority.authorizeUpgrade(exactUpgrade)).not.toBeNull();
+		const logoutAuthorization = authority.authorizeUpgrade(exactUpgrade);
+		expect(logoutAuthorization).not.toBeNull();
+		expect(logoutAuthorization?.lease.signal.aborted).toBe(false);
 		const oldRequest = request('/api/world', { headers: { cookie: sessionCookie } });
 		const logout = await authority.handleLogout(
 			request('/api/auth/logout', {
@@ -280,6 +284,7 @@ describe('surface session authority', () => {
 		expect(logout.headers.get('set-cookie')).toContain('Max-Age=0');
 		expect(authority.authorizeProjection(oldRequest)).toBeNull();
 		expect(authority.authorizeUpgrade(exactUpgrade)).toBeNull();
+		expect(logoutAuthorization?.lease.signal.aborted).toBe(true);
 
 		const fresh = await login();
 		const freshCsrf = (await json(fresh.response)).csrf as string;
@@ -298,7 +303,8 @@ describe('surface session authority', () => {
 		const first = await login();
 		const firstCsrf = (await json(first.response)).csrf as string;
 		const firstUpgrade = upgradeRequest(first.sessionCookie, firstCsrf);
-		expect(first.authority.authorizeUpgrade(firstUpgrade)).not.toBeNull();
+		const firstAuthorization = first.authority.authorizeUpgrade(firstUpgrade);
+		expect(firstAuthorization).not.toBeNull();
 		const nextPreauth = await preauthorize(first);
 		const rotated = await first.authority.handleLogin(
 			request('/api/auth/login', {
@@ -321,6 +327,7 @@ describe('surface session authority', () => {
 			)
 		).toBeNull();
 		expect(first.authority.authorizeUpgrade(firstUpgrade)).toBeNull();
+		expect(firstAuthorization?.lease.signal.aborted).toBe(true);
 		expect(
 			first.authority.authorizeProjection(
 				request('/api/world', { headers: { cookie: rotatedCookie } })

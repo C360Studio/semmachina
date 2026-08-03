@@ -45,12 +45,19 @@ never be sent to browser code, placed in a browser-readable cookie, accepted fro
 written to application logs.
 
 Production SHALL use an adapter-node custom Node server that owns the raw WebSocket upgrade. The
-bridge SHALL accept text frames only; enforce bounded frame size, per-direction buffering,
-per-session and process socket counts, and liveness/close deadlines; and apply backpressure or close
-rather than buffer without limit. After upgrade it SHALL relay `player/v1` text bytes unchanged in
-both directions to the fixed upstream socket. It SHALL perform no player-protocol sequencing,
-automatic replay, adjudication, result correlation, or graph access. This bridge is a SemMachina
-application security responsibility and SHALL NOT be deferred as a SemStreams engine ask.
+bridge SHALL accept text messages only; enforce bounded complete-message payload size,
+per-direction buffering, per-session and process socket counts, and liveness/close deadlines; and
+apply backpressure or close rather than buffer without limit. After upgrade it SHALL relay the
+payload bytes of each complete `player/v1` WebSocket text message unchanged in both directions to
+the fixed upstream socket.
+Fragmentation, masking, compression, and control frames SHALL terminate independently on each hop
+and SHALL NOT be treated as `player/v1` document bytes. For the pinned current protocol version, the
+local bridge SHALL enforce a 262,144-byte complete WebSocket message payload bound on its upstream
+hop. This accommodates the current bounded 16 KiB prose envelope after escaping with deliberate
+headroom. A future protocol expansion SHALL require deliberate review before that bound changes.
+The bridge SHALL perform no player-protocol sequencing, automatic replay, adjudication, result
+correlation, or graph access. This bridge is a SemMachina application security responsibility and
+SHALL NOT be deferred as a SemStreams engine ask.
 
 #### Scenario: Browser authentication never exposes the Bearer
 - **WHEN** a valid creator opens the same-origin player socket
@@ -80,12 +87,19 @@ application security responsibility and SHALL NOT be deferred as a SemStreams en
 - **THEN** the server refuses the upgrade before opening an upstream socket
 
 #### Scenario: The bridge preserves the player protocol
-- **WHEN** a bounded valid text frame crosses either direction of an established bridge
-- **THEN** the other socket receives the same `player/v1` bytes and the bridge creates no protocol
-  document, replay, sequence, or correlation decision
+- **WHEN** a bounded valid text message crosses either direction of an established bridge
+- **THEN** the other socket receives the same complete `player/v1` payload bytes, while hop-local
+  framing terminates independently and the bridge creates no protocol document, replay, sequence,
+  or correlation decision
+
+#### Scenario: The pinned message payload bound is explicit
+- **WHEN** the current protocol version carries prose within its bounded 16 KiB envelope
+- **THEN** the bridge applies its 262,144-byte complete WebSocket message payload bound on the
+  upstream hop, and any protocol expansion that would exceed the reviewed envelope requires a
+  deliberate bound review
 
 #### Scenario: Resource limits close abusive or dead sockets
-- **WHEN** a client sends a binary or oversized frame, exceeds a socket/buffer bound, ignores
+- **WHEN** a client sends a binary or oversized message, exceeds a socket/buffer bound, ignores
   backpressure, or fails the liveness contract
 - **THEN** the bridge closes the affected connection within its bounded policy without exposing the
   Bearer or degrading other sessions into unbounded buffering

@@ -250,7 +250,7 @@ describe('custom server bootstrap', () => {
 		const target = socket();
 		server.emit('upgrade', upgradeIncoming(session, target), target, Buffer.alloc(0));
 		expect(continuation).toHaveBeenCalledOnce();
-		const authorization = continuation.mock.calls[0][3];
+		const authorization = continuation.mock.calls[0][4];
 		expect(Object.isFrozen(authorization)).toBe(true);
 		expect(authorization.playerBearer).toBe(safeEnvironment.SEMMACHINA_PLAYER_BEARER);
 		expect(target.destroy).not.toHaveBeenCalled();

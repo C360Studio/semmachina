@@ -6,6 +6,7 @@ await build({
 	bundle: true,
 	platform: 'node',
 	format: 'esm',
+	external: ['ws'],
 	target: 'node22',
 	sourcemap: true,
 	logLevel: 'info'

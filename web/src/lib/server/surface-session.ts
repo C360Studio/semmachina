@@ -20,11 +20,27 @@ interface Proof {
 	readonly expiresAt: number;
 }
 
+interface SessionProof extends Proof {
+	readonly lease: SessionLease;
+	readonly controller: AbortController;
+}
+
+function isSessionProof(proof: Proof): proof is SessionProof {
+	return 'controller' in proof && proof.controller instanceof AbortController;
+}
+
+export interface SessionLease {
+	readonly identity: object;
+	readonly expiresAt: number;
+	readonly signal: AbortSignal;
+}
+
 export interface UpgradeAuthorization {
 	readonly playerId: string;
 	readonly playerBearer: string;
 	readonly playerWsUrl: string;
 	readonly protocol: 'semmachina.player.v1';
+	readonly lease: SessionLease;
 }
 
 export interface SurfaceSessionAuthority {
@@ -165,27 +181,31 @@ export function createSurfaceSessionAuthority(
 	const maxSessions = dependencies.maxSessions ?? MAX_SESSIONS;
 	if (maxPreauthProofs < 1 || maxSessions < 1) throw new Error('invalid session store capacity');
 	const preauth = new Map<string, Proof>();
-	const sessions = new Map<string, Proof>();
+	const sessions = new Map<string, SessionProof>();
 
 	function sweep(store: Map<string, Proof>): void {
 		const currentTime = now();
 		for (const [token, proof] of store) {
-			if (proof.expiresAt <= currentTime) store.delete(token);
+			if (proof.expiresAt <= currentTime) {
+				if (isSessionProof(proof)) proof.controller.abort();
+				store.delete(token);
+			}
 		}
 	}
 
-	function live(store: Map<string, Proof>, token: string | null): Proof | null {
+	function live<T extends Proof>(store: Map<string, T>, token: string | null): T | null {
 		if (token === null) return null;
 		const proof = store.get(token);
 		if (proof === undefined) return null;
 		if (proof.expiresAt <= now()) {
+			if (isSessionProof(proof)) proof.controller.abort();
 			store.delete(token);
 			return null;
 		}
 		return proof;
 	}
 
-	function liveSession(request: Request): Proof | null {
+	function liveSession(request: Request): SessionProof | null {
 		if (!secureTransport(request, config, dependencies.isTransportAttested)) return null;
 		return live(sessions, parseCookie(request, SESSION_COOKIE));
 	}
@@ -230,13 +250,23 @@ export function createSurfaceSessionAuthority(
 		}
 		sweep(sessions);
 		const previousSession = parseCookie(request, SESSION_COOKIE);
-		if (previousSession !== null) sessions.delete(previousSession);
+		if (previousSession !== null) {
+			sessions.get(previousSession)?.controller.abort();
+			sessions.delete(previousSession);
+		}
 		if (sessions.size >= maxSessions) {
 			return json(503, { error: { code: 'capacity_exceeded' } });
 		}
 		const token = random();
 		const csrf = random();
-		sessions.set(token, Object.freeze({ csrf, expiresAt: now() + ttlMs }));
+		const expiresAt = now() + ttlMs;
+		const controller = new AbortController();
+		const lease = Object.freeze({
+			identity: Object.freeze({}),
+			expiresAt,
+			signal: controller.signal
+		});
+		sessions.set(token, Object.freeze({ csrf, expiresAt, controller, lease }));
 		return json(200, { csrf }, [
 			setCookie(SESSION_COOKIE, token, config.sessionTtlSeconds),
 			clearCookie(PREAUTH_COOKIE)
@@ -254,6 +284,7 @@ export function createSurfaceSessionAuthority(
 		) {
 			return unauthorized();
 		}
+		proof.controller.abort();
 		sessions.delete(token as string);
 		return new Response(null, {
 			status: 204,
@@ -294,6 +325,7 @@ export function createSurfaceSessionAuthority(
 			playerBearer: { value: config.player.bearer, enumerable: false },
 			playerWsUrl: { value: config.player.wsUrl, enumerable: true },
 			protocol: { value: 'semmachina.player.v1', enumerable: true },
+			lease: { value: proof.lease, enumerable: false },
 			toJSON: {
 				value: () => ({
 					playerId: config.player.id,

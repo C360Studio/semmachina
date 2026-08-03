@@ -54,12 +54,12 @@
 - [x] 3.4 Write RED credential tests proving the upstream Bearer never appears browser-side and the
   creator credential appears only in its HTTPS login request, never in responses, browser storage,
   errors, or logs; prove browser input cannot override session player/world/graph scope.
-- [ ] 3.5 Write RED raw-relay tests proving bounded valid text bytes are identical in both directions
+- [x] 3.5 Write RED raw-relay tests proving bounded valid text bytes are identical in both directions
   and the bridge adds no protocol document, sequencing, replay, adjudication, or correlation.
-- [ ] 3.6 Write RED resource tests for binary/oversized frames, socket caps, per-direction queue
+- [x] 3.6 Write RED resource tests for binary/oversized frames, socket caps, per-direction queue
   bounds, backpressure, slow peers, handshake/idle/liveness deadlines, close propagation, and
   cleanup after every close path.
-- [ ] 3.7 Extend the existing pre-listen adapter-node bootstrap with separate HTTPS creator
+- [x] 3.7 Extend the existing pre-listen adapter-node bootstrap with separate HTTPS creator
   authentication, bounded opaque session mint/rotation/logout/expiry, the fixed raw upgrade route,
   exact upgrade checks, immutable upstream mapping, secret redaction, bounded relay, and liveness.
 

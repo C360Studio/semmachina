@@ -70,11 +70,18 @@ of the mapping. Both credentials are redacted from errors and structured logs; t
 appears in HTML, JavaScript, browser-readable storage, or client-visible cookies.
 
 The adapter-node custom server owns both the SvelteKit handler and raw upgrade path. The bridge
-admits text frames only, with explicit frame, per-direction queue, per-session/process socket,
-backpressure, handshake, idle/liveness, and close bounds. Once connected, it relays `player/v1`
-bytes unchanged in both directions. It does not parse action/result semantics, sequence turns,
-replay messages, or correlate results. This BFF is local SemMachina security work, not an upstream
-auth gap to file against SemStreams.
+admits text messages only, with explicit complete-message payload, per-direction queue,
+per-session/process socket, backpressure, handshake, idle/liveness, and close bounds. Once
+connected, it relays `player/v1`
+bytes unchanged in both directions. Byte identity applies to the payload bytes of each complete
+WebSocket text message. Fragmentation, masking, compression, and control frames terminate
+independently on each hop and are not part of `player/v1` document identity. For the pinned current
+protocol version, the local bridge enforces a 262,144-byte complete WebSocket message payload bound
+on its upstream hop. That bound covers the current bounded 16 KiB prose envelope after escaping
+with deliberate headroom; any future protocol expansion requires deliberate review before changing
+it. The bridge does not parse action/result semantics, sequence turns, replay messages, or
+correlate results. This BFF is local SemMachina security work, not an upstream auth gap to file
+against SemStreams.
 
 Actions, accepted/refused answers, terminal deliveries, and result retrieval therefore remain on
 unchanged `player/v1`. Outgoing requests are exact: submit requires only `protocol`, `text`, and

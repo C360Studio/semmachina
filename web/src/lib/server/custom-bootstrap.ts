@@ -8,6 +8,7 @@ import {
 import type { Duplex } from 'node:stream';
 
 import type { DeploymentEnvironment } from './deployment-config';
+import { createPlayerRelay, type PlayerRelay } from './player-relay';
 import { assembleSurfaceRuntime } from './surface-runtime';
 import type { UpgradeAuthorization } from './surface-session';
 import { INTERNAL_TRANSPORT_HEADER } from './transport-boundary';
@@ -18,6 +19,7 @@ interface HandlerModule {
 }
 
 export type AuthorizedUpgradeContinuation = (
+	incoming: IncomingMessage,
 	request: Request,
 	socket: Duplex,
 	head: Buffer,
@@ -33,6 +35,7 @@ export interface BootstrapDependencies {
 	readonly listen?: (server: Server, port: number, host: string) => Promise<void>;
 	readonly assembleRuntime?: () => InstalledWorldRuntime;
 	readonly continueAuthorizedUpgrade?: AuthorizedUpgradeContinuation;
+	readonly playerRelay?: PlayerRelay;
 }
 
 function listenAddress(environment: DeploymentEnvironment): { host: string; port: number } {
@@ -125,6 +128,8 @@ export async function startCustomServer(dependencies: BootstrapDependencies = {}
 		handler(request, response);
 	};
 	const server = (dependencies.createServer ?? createNodeServer)(guardedHandler);
+	const playerRelay = dependencies.playerRelay ?? createPlayerRelay();
+	server.once('close', () => playerRelay.shutdown());
 	server.on('upgrade', (incoming, socket, head) => {
 		if (!runtime.attestRawTransport?.(incoming)) {
 			refuseUpgrade(socket);
@@ -136,12 +141,11 @@ export async function startCustomServer(dependencies: BootstrapDependencies = {}
 			refuseUpgrade(socket);
 			return;
 		}
-		(dependencies.continueAuthorizedUpgrade ?? ((_request, target) => refuseUpgrade(target)))(
-			request,
-			socket,
-			head,
-			authorization
-		);
+		(
+			dependencies.continueAuthorizedUpgrade ??
+			((raw, _request, target, upgradeHead, allowed) =>
+				playerRelay.handleUpgrade(raw, target, upgradeHead, allowed))
+		)(incoming, request, socket, head, authorization);
 	});
 	await (dependencies.listen ?? listen)(server, address.port, address.host);
 	return Object.freeze({ server, runtime });
