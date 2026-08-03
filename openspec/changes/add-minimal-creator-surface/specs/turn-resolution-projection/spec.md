@@ -45,13 +45,14 @@ references, generate replacement prose, or infer narration from graph state in t
 The surface SHALL identify a terminal result by its canonical turn and action identities and SHALL
 render one terminal entry for that identity. Delivery, reconnect recovery, and repeated retrieval
 of the same result SHALL update or confirm the existing entry rather than append another result.
-Conflicting terminal documents for one identity SHALL fail closed.
+Additive unknown fields SHALL not create a conflict or become trusted view state. Conflicting known
+canonical fields for one identity SHALL fail closed.
 
 #### Scenario: Retrieval repeats a delivered result
 - **WHEN** the same canonical result arrives once by delivery and again by retrieval
 - **THEN** the session shows one narration and one resolution card for that turn
 
 #### Scenario: One identity carries conflicting terminal data
-- **WHEN** two terminal documents claim the same turn and action identity but differ in canonical
-  result content
+- **WHEN** two terminal documents claim the same turn and action identity but differ in known
+  canonical result content
 - **THEN** the surface reports a protocol conflict and does not choose one by arrival order

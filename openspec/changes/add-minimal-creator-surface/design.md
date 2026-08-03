@@ -41,6 +41,11 @@ credentials, deployment configuration, upstream GraphQL calls, scope validation,
 closed view models. No route accepts a raw GraphQL document or arbitrary entity prefix, and the
 browser receives no upstream credentials or general graph record.
 
+The deployable uses adapter-node with a custom Node server because SvelteKit request handlers do not
+own the raw WebSocket upgrade required by the player bridge. The custom server is part of the
+SemMachina application boundary and composes SvelteKit HTTP handling with one fixed upgrade route;
+it is not a new SemStreams service.
+
 This keeps secrets and scope enforcement server-side while avoiding a new Go/query service. A
 browser-direct GraphQL client was rejected because it would expose upstream authority and require
 the browser to police its own world prefix. A general proxy was rejected because an allowlist of
@@ -48,10 +53,36 @@ operation names is not enough when arbitrary queries and variables remain expres
 
 ### D2 — Player traffic remains on the unchanged authenticated WebSocket
 
-Actions, accepted/refused answers, terminal deliveries, and result retrieval continue over
-`player/v1`. A closed TypeScript parser validates each discriminator and nested closed set before a
-document enters application state. A pure client state machine consumes those parsed events plus
-socket events; Svelte components render the state but do not decide transitions.
+The browser connects only to a fixed same-origin bridge route. Operator configuration supplies a
+creator login credential separately from the upstream player Bearer; startup refuses a missing
+creator credential or one that aliases the Bearer. An HTTPS bootstrap/login endpoint verifies exact
+Host, Origin, and a server-issued pre-authentication CSRF proof before authenticating that creator
+credential. Missing and invalid credentials, including presentation of the upstream Bearer, receive
+one indistinguishable refusal, create no session, and dial nothing upstream.
+
+Successful authentication mints or rotates an opaque `HttpOnly`, `Secure`, `SameSite=Strict`
+server session with an explicit lifetime and a session-bound CSRF proof. Rotation invalidates the
+old ID; logout and expiry remove the mapping before later HTTP or upgrade authorization. The raw
+upgrade handler checks the exact configured Host, Origin, CSRF proof, and live session before
+dialing upstream. The session maps immutably to one deployment's upstream Bearer, fixed player
+WebSocket endpoint, player identity, and graph/world scope. Browser input cannot override any part
+of the mapping. Both credentials are redacted from errors and structured logs; the Bearer never
+appears in HTML, JavaScript, browser-readable storage, or client-visible cookies.
+
+The adapter-node custom server owns both the SvelteKit handler and raw upgrade path. The bridge
+admits text frames only, with explicit frame, per-direction queue, per-session/process socket,
+backpressure, handshake, idle/liveness, and close bounds. Once connected, it relays `player/v1`
+bytes unchanged in both directions. It does not parse action/result semantics, sequence turns,
+replay messages, or correlate results. This BFF is local SemMachina security work, not an upstream
+auth gap to file against SemStreams.
+
+Actions, accepted/refused answers, terminal deliveries, and result retrieval therefore remain on
+unchanged `player/v1`. Outgoing requests are exact: submit requires only `protocol`, `text`, and
+`idempotency_key`, with only text/key being client-owned action data. Incoming server frames use a
+forward-compatible TypeScript parser: it tolerates additive unknown fields in known frames/results
+but validates every known field and rejects unknown discriminators, unknown closed values,
+malformed structures, or contradictory known fields. A pure client state machine consumes parsed
+events plus socket events; Svelte components render state but do not decide transitions.
 
 The client creates one idempotency key per user intent and retains it across connection loss, but
 does not mistake that key for a retrieval key: `player/v1` retrieves only by canonical `action_id`,
@@ -85,10 +116,11 @@ verdict scalars, band, roll, modifiers, and narration. It performs no band looku
 consequence selection, or prose generation. A no-roll verdict produces an explicit no-roll view;
 missing or invalid required data produces a protocol error rather than placeholders.
 
-Terminal entries are keyed by the canonical turn/action pair. Byte-equivalent delivery and
-retrieval results coalesce; conflicting canonical content for one key is an error. This closes the
-common reconnect failure where the same result is appended once from live delivery and once from
-recovery.
+Terminal entries are keyed by the canonical turn/action pair. Delivery and retrieval with
+equivalent known canonical fields coalesce even when one carries additive unknown fields;
+conflicting known content for one key is an error. This closes the common reconnect failure where
+the same result is appended once from live delivery and once from recovery without turning a future
+additive field into a compatibility break.
 
 ### D4 — The graph adapter has a closed operation and identity envelope
 
@@ -141,6 +173,15 @@ depend on color alone. Component tests exercise keyboard flow and accessible nam
 - **Beta GraphQL authentication or filtering is insufficient** → stop the affected adapter task,
   file a focused SemStreams issue with a reproducer, and keep the gap visible rather than widening
   local authority.
+- **The browser cannot safely hold the upstream player Bearer** → terminate TLS and session
+  authentication at the bounded same-origin SemMachina bridge; authenticate with a distinct creator
+  credential, keep the deployment mapping immutable, and redact both secrets rather than changing
+  the upstream protocol.
+- **A stale or rotated session retains authority** → give every session a bounded lifetime and
+  invalidate its mapping on expiry, logout, and successful rotation before accepting HTTP or raw
+  upgrade work.
+- **A slow or hostile socket consumes server memory** → enforce text/frame/socket/queue bounds,
+  backpressure, exact upgrade checks, and liveness deadlines in the raw Node upgrade path.
 - **Another connection changes latest or receives the blocking turn** → treat latest, player-scoped
   delivery, and refusal `active_turn_id` as evidence only until an explicit replay is accepted and
   returns the intended canonical IDs.

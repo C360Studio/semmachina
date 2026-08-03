@@ -6,27 +6,99 @@ and recover its durable result without moving engine authority into the client.
 ## ADDED Requirements
 
 ### Requirement: The creator surface uses the existing authenticated player protocol
-The surface SHALL connect through the existing authenticated `player/v1` WebSocket and SHALL use
-its current submission, delivery, and retrieval documents without extending or translating the
-engine protocol. A submission SHALL contain only the action text and a client-owned idempotency key;
-the server SHALL continue to supply player, campaign, scene, arrival, action, and channel identity.
+The surface SHALL reach the existing authenticated `player/v1` WebSocket through its same-origin
+bridge and SHALL use the current submission, delivery, and retrieval documents without extending or
+translating the engine protocol. A submission SHALL contain exactly the required `protocol`, `text`, and
+`idempotency_key` fields. Only `text` and `idempotency_key` are client-owned action data;
+`protocol` is the required wire-version discriminator. The server SHALL continue to supply player,
+campaign, scene, arrival, action, and channel identity.
 
 #### Scenario: A creator submits an action through the canonical ingress
 - **WHEN** an authenticated creator submits non-empty action text from the surface
-- **THEN** the client sends one valid `player/v1` submission and displays its typed accepted or
-  refused response
+- **THEN** the client sends one strict `player/v1` request containing `protocol`, `text`, and
+  `idempotency_key`, and displays its typed accepted or refused response
 
 #### Scenario: The browser does not claim engine identity
 - **WHEN** the surface constructs a submission
-- **THEN** it sends no player, campaign, scene, action, arrival, or connection identity as
-  client-authored data
+- **THEN** only its text and idempotency key are client-owned action data, and it sends no player,
+  campaign, scene, action, arrival, or connection identity
+
+#### Scenario: A request extension is refused locally
+- **WHEN** client code attempts to add an unknown field to a submit or retrieval request
+- **THEN** the strict request encoder refuses it rather than sending an extended request
+
+### Requirement: A bounded same-origin bridge protects the upstream player credential
+Before minting or rotating an opaque session, a same-origin HTTPS bootstrap/login endpoint SHALL
+authenticate the creator with a separately configured creator credential. The upstream player
+Bearer SHALL NOT be accepted or reused as a browser credential, and configuration SHALL
+fail closed if the creator credential is absent or aliases that Bearer. Missing or invalid creator
+authentication SHALL return one indistinguishable refusal, mint no session, and cause no upstream
+dial. A successful authentication SHALL mint a bounded-lifetime opaque server session cookie with
+`HttpOnly`, `Secure`, and `SameSite=Strict`. Rotation SHALL invalidate the prior session; explicit
+logout and expiry SHALL invalidate the current session before any later HTTP or upgrade request.
+
+The browser SHALL connect to a fixed same-origin WebSocket route through that session. The raw
+upgrade handler SHALL require exact configured `Host` and `Origin` values and an exact
+session-bound CSRF proof before opening a socket. A session SHALL map immutably to one deployment's
+fixed upstream endpoint, Bearer credential, player identity, and graph/world scope. The Bearer SHALL
+never be sent to browser code, placed in a browser-readable cookie, accepted from browser input, or
+written to application logs.
+
+Production SHALL use an adapter-node custom Node server that owns the raw WebSocket upgrade. The
+bridge SHALL accept text frames only; enforce bounded frame size, per-direction buffering,
+per-session and process socket counts, and liveness/close deadlines; and apply backpressure or close
+rather than buffer without limit. After upgrade it SHALL relay `player/v1` text bytes unchanged in
+both directions to the fixed upstream socket. It SHALL perform no player-protocol sequencing,
+automatic replay, adjudication, result correlation, or graph access. This bridge is a SemMachina
+application security responsibility and SHALL NOT be deferred as a SemStreams engine ask.
+
+#### Scenario: Browser authentication never exposes the Bearer
+- **WHEN** a valid creator opens the same-origin player socket
+- **THEN** the opaque server session selects the immutable upstream credential and scope, while no
+  browser request, response, cookie readable by script, or application log contains the Bearer
+
+#### Scenario: Creator authentication is independent of the upstream Bearer
+- **WHEN** bootstrap/login receives a missing or invalid creator credential, including the upstream
+  player Bearer
+- **THEN** it returns the same authentication refusal, creates no session, and causes no upstream
+  WebSocket or graph dial
+
+#### Scenario: Valid creator authentication mints one bounded session
+- **WHEN** bootstrap/login receives the separately configured valid creator credential with its
+  exact same-origin Host, Origin, and CSRF proof
+- **THEN** it mints or rotates one opaque bounded-lifetime session without exposing either
+  credential to browser-readable state
+
+#### Scenario: Session lifecycle invalidates old authority
+- **WHEN** a session expires, the creator logs out, or successful authentication rotates it
+- **THEN** the expired, logged-out, or prior session is refused for HTTP projection and WebSocket
+  upgrade requests and cannot cause an upstream dial
+
+#### Scenario: Upgrade authority is exact and fail-closed
+- **WHEN** the upgrade has a missing or mismatched session, Host, Origin, CSRF proof, deployment
+  mapping, or fixed upstream endpoint
+- **THEN** the server refuses the upgrade before opening an upstream socket
+
+#### Scenario: The bridge preserves the player protocol
+- **WHEN** a bounded valid text frame crosses either direction of an established bridge
+- **THEN** the other socket receives the same `player/v1` bytes and the bridge creates no protocol
+  document, replay, sequence, or correlation decision
+
+#### Scenario: Resource limits close abusive or dead sockets
+- **WHEN** a client sends a binary or oversized frame, exceeds a socket/buffer bound, ignores
+  backpressure, or fails the liveness contract
+- **THEN** the bridge closes the affected connection within its bounded policy without exposing the
+  Bearer or degrading other sessions into unbounded buffering
 
 ### Requirement: Session progress and failures are explicit states
 The surface SHALL represent connection, submission, waiting, terminal delivery, typed refusal,
 malformed-message failure, and reconnecting as distinct client states. It SHALL transition from
 validated protocol discriminators and connection events rather than matching human-readable text.
 An error SHALL preserve enough typed context to distinguish a correctable input refusal, a running
-turn, a transport interruption, and a malformed or unsupported server document.
+turn, a transport interruption, and a malformed or unsupported server document. Request documents
+SHALL be exact and strict. Server frames and nested results SHALL tolerate additive unknown fields
+while validating every known field. Unknown discriminators, unknown closed values, malformed data,
+or contradictory known fields SHALL fail closed.
 
 #### Scenario: An accepted action remains visibly in progress
 - **WHEN** the server accepts a submission and no terminal result has arrived
@@ -38,8 +110,14 @@ turn, a transport interruption, and a malformed or unsupported server document.
 - **THEN** the surface exposes that code and field to the error view without parsing its message
 
 #### Scenario: An unknown wire document fails closed
-- **WHEN** the socket receives an unknown discriminator, invalid closed value, or malformed document
+- **WHEN** the socket receives an unknown discriminator, invalid closed value, malformed document,
+  or contradictory known fields
 - **THEN** the surface enters a typed protocol-error state and renders no partial result
+
+#### Scenario: An additive server field is compatible
+- **WHEN** a valid known server frame or nested result contains an additional unknown field
+- **THEN** the parser validates and projects the known contract without rejecting the frame or
+  exposing the unknown field as trusted application state
 
 ### Requirement: Reconnect never resubmits an uncertain action automatically
 If a connection closes after submission, the surface SHALL retain the action's local correlation
