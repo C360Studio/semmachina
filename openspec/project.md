@@ -144,7 +144,8 @@ vision but are NOT on the active MVP path.
    `mystery-companion-hardening` follow-up is active but blocked by open SemStreams issues #818,
    #851, and #807. It owns post-import truth-write enforcement, revision-safe hint reset, and
    crash-safe provider dispatch without reopening the completed acceptance proof.
-3. **Template proof + place ontology** — instantiate the same starter world twice;
+3. **Template proof + place ontology** (complete; archived as
+   `2026-08-02-template-place-proof`) — instantiate the same starter world twice;
    swap the narrator/tone pack; swap fiction-heavy vs mechanics-heavy rule packs;
    two materially different experiences on identical engine code. The first
    falsifiable test of the tunability claim ("the dial is rule-pack selection,
@@ -154,7 +155,8 @@ vision but are NOT on the active MVP path.
    ontology can say "Rook is in the gatehouse" but cannot say "the gatehouse
    connects to the courtyard" — there is no edge between places, so no map is
    expressible. Vocabulary is cheapest to change before more templates bind to it.
-4. **Creator surface + sense of place** — minimal Svelte client: action in,
+4. **Creator surface + sense of place** (active; `add-minimal-creator-surface`) — minimal Svelte
+   client: action in,
    narration out, and a **resolution card** (plausibility, risk, modifiers, roll,
    consequence) so outcomes are legible, never arbitrary; typed
    progress/error/reconnect. Plus the two orientation widgets a player needs to
