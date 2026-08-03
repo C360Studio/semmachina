@@ -43,15 +43,15 @@
 
 ## 3. Same-Origin Player WebSocket Bridge
 
-- [ ] 3.1 Write RED HTTPS authentication tests proving missing/invalid creator credentials, including
+- [x] 3.1 Write RED HTTPS authentication tests proving missing/invalid creator credentials, including
   the upstream player Bearer, receive one refusal, mint no session, and cause no upstream dial;
   prove valid separate authentication mints one bounded session.
-- [ ] 3.2 Write RED lifecycle tests proving successful rotation invalidates the prior session and
+- [x] 3.2 Write RED lifecycle tests proving successful rotation invalidates the prior session and
   expiry/logout invalidate the current session for both HTTP projection and WebSocket upgrade paths.
-- [ ] 3.3 Write failing upgrade tests for missing/mismatched opaque session, exact Host, exact Origin,
+- [x] 3.3 Write failing upgrade tests for missing/mismatched opaque session, exact Host, exact Origin,
   session-bound CSRF proof, immutable deployment mapping, and fixed upstream endpoint; assert no
   upstream dial occurs on refusal.
-- [ ] 3.4 Write RED credential tests proving the upstream Bearer never appears browser-side and the
+- [x] 3.4 Write RED credential tests proving the upstream Bearer never appears browser-side and the
   creator credential appears only in its HTTPS login request, never in responses, browser storage,
   errors, or logs; prove browser input cannot override session player/world/graph scope.
 - [ ] 3.5 Write RED raw-relay tests proving bounded valid text bytes are identical in both directions

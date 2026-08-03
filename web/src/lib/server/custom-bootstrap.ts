@@ -2,19 +2,27 @@ import {
 	createServer as createNodeServer,
 	type IncomingMessage,
 	type RequestListener,
-	type Server
+	type Server,
+	type ServerResponse
 } from 'node:http';
 import type { Duplex } from 'node:stream';
 
 import type { DeploymentEnvironment } from './deployment-config';
-import { assembleWorldProjectionRuntime } from './world-projection-route';
+import { assembleSurfaceRuntime } from './surface-runtime';
+import type { UpgradeAuthorization } from './surface-session';
+import { INTERNAL_TRANSPORT_HEADER } from './transport-boundary';
 import { installWorldRuntime, type InstalledWorldRuntime } from './world-runtime-registry';
 
 interface HandlerModule {
 	readonly handler: RequestListener;
 }
 
-export type UpgradeHandler = (request: IncomingMessage, socket: Duplex, head: Buffer) => void;
+export type AuthorizedUpgradeContinuation = (
+	request: Request,
+	socket: Duplex,
+	head: Buffer,
+	authorization: UpgradeAuthorization
+) => void;
 
 export interface BootstrapDependencies {
 	readonly environment?: DeploymentEnvironment;
@@ -24,7 +32,7 @@ export interface BootstrapDependencies {
 	readonly createServer?: (handler: RequestListener) => Server;
 	readonly listen?: (server: Server, port: number, host: string) => Promise<void>;
 	readonly assembleRuntime?: () => InstalledWorldRuntime;
-	readonly handleUpgrade?: UpgradeHandler;
+	readonly continueAuthorizedUpgrade?: AuthorizedUpgradeContinuation;
 }
 
 function listenAddress(environment: DeploymentEnvironment): { host: string; port: number } {
@@ -68,17 +76,73 @@ function refuseUpgrade(socket: Duplex): void {
 	}
 }
 
+function refuseRawRequest(response: ServerResponse): void {
+	response.writeHead(401, {
+		'cache-control': 'no-store',
+		connection: 'close',
+		'content-length': '0'
+	});
+	response.end();
+}
+
+function fetchUpgradeRequest(request: IncomingMessage): Request | null {
+	const headers = new Headers();
+	for (let index = 0; index < request.rawHeaders.length; index += 2) {
+		const name = request.rawHeaders[index];
+		if (name === undefined || name.toLowerCase() === INTERNAL_TRANSPORT_HEADER) continue;
+		headers.append(name, request.rawHeaders[index + 1] ?? '');
+	}
+	const attestation = request.headers[INTERNAL_TRANSPORT_HEADER];
+	if (typeof attestation !== 'string') return null;
+	headers.set(INTERNAL_TRANSPORT_HEADER, attestation);
+	const host = request.headers.host;
+	if (typeof host !== 'string' || request.url === undefined || request.method === undefined)
+		return null;
+	try {
+		return new Request(`https://${host}${request.url}`, { method: request.method, headers });
+	} catch {
+		return null;
+	}
+}
+
 export async function startCustomServer(dependencies: BootstrapDependencies = {}) {
 	const environment = dependencies.environment ?? process.env;
 	const address = listenAddress(environment);
 	const fetcher = dependencies.fetcher ?? fetch;
 	const runtime =
-		dependencies.assembleRuntime?.() ?? assembleWorldProjectionRuntime({ environment, fetcher });
+		dependencies.assembleRuntime?.() ?? assembleSurfaceRuntime({ environment, fetcher });
+	if (runtime.attestRawTransport === undefined || runtime.authorizeUpgrade === undefined) {
+		throw new Error('surface transport runtime is unavailable');
+	}
 	installWorldRuntime(runtime, dependencies.registry ?? globalThis);
 
 	const handler = await (dependencies.loadHandler ?? loadGeneratedHandler)();
-	const server = (dependencies.createServer ?? createNodeServer)(handler);
-	server.on('upgrade', dependencies.handleUpgrade ?? ((_request, socket) => refuseUpgrade(socket)));
+	const guardedHandler: RequestListener = (request, response) => {
+		if (!runtime.attestRawTransport?.(request)) {
+			refuseRawRequest(response);
+			return;
+		}
+		handler(request, response);
+	};
+	const server = (dependencies.createServer ?? createNodeServer)(guardedHandler);
+	server.on('upgrade', (incoming, socket, head) => {
+		if (!runtime.attestRawTransport?.(incoming)) {
+			refuseUpgrade(socket);
+			return;
+		}
+		const request = fetchUpgradeRequest(incoming);
+		const authorization = request === null ? null : runtime.authorizeUpgrade?.(request);
+		if (request === null || authorization === null || authorization === undefined) {
+			refuseUpgrade(socket);
+			return;
+		}
+		(dependencies.continueAuthorizedUpgrade ?? ((_request, target) => refuseUpgrade(target)))(
+			request,
+			socket,
+			head,
+			authorization
+		);
+	});
 	await (dependencies.listen ?? listen)(server, address.port, address.host);
 	return Object.freeze({ server, runtime });
 }
