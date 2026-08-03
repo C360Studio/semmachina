@@ -22,7 +22,7 @@ tasks:
       - task: test
 
   lint:
-    desc: vet, gofmt, revive (pinned via go.mod's tool directive), and the gate self-checks
+    desc: Go and frontend static analysis, formatting, and gate self-checks
     cmds:
       - go vet ./...
       # `gofmt -l` reports; `go fmt` rewrites. A gate that fixes what it checks
@@ -37,12 +37,14 @@ tasks:
       - go tool revive -config revive.toml -formatter friendly ./...
       - bash scripts/check-revive-fires.sh
       - bash scripts/check-no-skips_fixture_test.sh
+      - task: frontend:lint
 
   build:
     desc: Build the module and cross-compile the linux/amd64 deployment artifact
     cmds:
       - go build ./...
       - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o /dev/null ./cmd/semmachina
+      - task: frontend:build
       - 'echo "OK: builds and cross-compiles"'
 
   test:
@@ -62,6 +64,33 @@ tasks:
         bash scripts/check-no-skips.sh "{{.JSON}}" && gate=0 || gate=$?
         if [ "$status" -ne 0 ]; then echo "go test exited $status"; exit "$status"; fi
         exit "$gate"
+      - task: frontend:test
+
+  frontend:install:
+    desc: Install the lockfile-pinned SvelteKit dependencies
+    cmds:
+      - npm ci --prefix web
+
+  frontend:install:browsers:
+    desc: Install Chromium for component and browser tests (one-time local setup)
+    cmds:
+      - npm --prefix web exec -- playwright install chromium
+
+  frontend:lint:
+    desc: Check frontend formatting, ESLint, and strict Svelte/TypeScript diagnostics
+    cmds:
+      - npm --prefix web run lint
+      - npm --prefix web run check
+
+  frontend:build:
+    desc: Build the SvelteKit surface
+    cmds:
+      - npm --prefix web run build
+
+  frontend:test:
+    desc: Run frontend unit, component, and browser tests
+    cmds:
+      - npm --prefix web test
 
   spec:
     desc: openspec validate --all --strict (the --all is load-bearing; without it nothing is validated)

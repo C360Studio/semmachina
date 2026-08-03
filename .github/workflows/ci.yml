@@ -269,10 +269,45 @@ jobs:
         # is loud rather than green.
         run: bash scripts/check-openspec.sh
 
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install lockfile dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Frontend lint and type checks
+        run: |
+          npm run lint
+          npm run check
+
+      - name: Frontend unit, component, and browser tests
+        run: npm test
+
+      - name: Frontend build
+        run: npm run build
+
   status-check:
     name: CI Status Check
     runs-on: ubuntu-latest
-    needs: [lint, build, test, spec]
+    needs: [lint, build, test, spec, frontend]
     if: always()
     steps:
       - name: Every job must have succeeded
@@ -286,7 +321,8 @@ jobs:
             "lint=${{ needs.lint.result }}" \
             "build=${{ needs.build.result }}" \
             "test=${{ needs.test.result }}" \
-            "spec=${{ needs.spec.result }}"; do
+            "spec=${{ needs.spec.result }}" \
+            "frontend=${{ needs.frontend.result }}"; do
             echo "$result"
             if [ "${result#*=}" != "success" ]; then
               failed=1

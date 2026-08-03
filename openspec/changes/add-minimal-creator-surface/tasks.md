@@ -1,11 +1,11 @@
 ## 1. Surface and Protocol Test Harness
 
-- [ ] 1.1 Scaffold the strict TypeScript/SvelteKit surface with unit, component, and browser-test
+- [x] 1.1 Scaffold the strict TypeScript/SvelteKit surface with unit, component, and browser-test
   commands integrated into Taskfile and CI without changing the Go quality gates.
-- [ ] 1.2 Write failing parser fixtures for exact submit/retrieval requests and for accepted/refused,
+- [x] 1.2 Write failing parser fixtures for exact submit/retrieval requests and for accepted/refused,
   delivery, terminal failure, and narration/resolution server documents, covering additive unknown
   fields, malformed data, unknown discriminators/closed values, and contradictory known fields.
-- [ ] 1.3 Implement strict request encoders and forward-compatible server parsers that tolerate
+- [x] 1.3 Implement strict request encoders and forward-compatible server parsers that tolerate
   additive fields, validate every known field, return typed protocol failures, and never admit
   partial or contradictory documents into application state.
 
