@@ -3,6 +3,8 @@ export interface ActionSessionShellView {
 	readonly value: string;
 	readonly busy: boolean;
 	readonly disabled: boolean;
+	readonly inputDisabled?: boolean;
+	readonly submitDisabled?: boolean;
 	readonly refusal?: Readonly<{
 		message: string;
 		focusRequestId: string;

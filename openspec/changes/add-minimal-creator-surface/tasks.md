@@ -121,12 +121,19 @@
 
 ## 7. Acceptance
 
-- [ ] 7.1 Add a deterministic mock acceptance journey: authenticate through the same-origin bridge,
+- [x] 7.1 Add a deterministic mock acceptance journey: authenticate through the same-origin bridge,
   submit one action, observe typed progress, receive narration/resolution, project authored and
   schematic places, and display `not_configured` clock state.
-- [ ] 7.2 Add disconnect acceptance that proves no automatic resubmission, no correlation from
+- [x] 7.2 Add disconnect acceptance that proves no automatic resubmission, no correlation from
   player-scoped latest/delivery without intended IDs, explicit replay authorization when needed,
   and exactly one terminal card after exact-ID delivery/retrieval convergence.
+  - The six Playwright journeys passed through the test HTTPS/WSS proxy, including a companion-aware
+    terminal, mixed map plus `not_configured` clock, and explicit exact replay with no automatic
+    replay and one terminal card.
+  - Verification passed 6/6 Playwright, 24/24 component, and 424/424 unit tests; `check` reported
+    0 errors/0 warnings, and lint, build, and diff gates were green.
+  - Formal architect, backend/security, and Svelte/accessibility reviews APPROVED after review
+    fixes.
 - [ ] 7.3 Run the real starter-stack journey through the bounded bridge, existing upstream WebSocket,
   and SemStreams beta.159 GraphQL surface, with no browser-visible Bearer or direct graph/NATS access.
 

@@ -57,6 +57,23 @@ describe('ActionSessionShell', () => {
 		await expect.element(screen.getByRole('button', { name: 'Submit' })).toBeDisabled();
 	});
 
+	it('allows refusal correction and focus while keeping submit disabled', async () => {
+		const screen = await render(
+			ActionSessionShell,
+			props({
+				...idleView,
+				disabled: true,
+				inputDisabled: false,
+				submitDisabled: true,
+				refusal: { message: 'Describe a concrete action.', focusRequestId: 'focus-refusal' }
+			})
+		);
+
+		await expect.element(screen.getByRole('textbox')).toBeEnabled();
+		await expect.element(screen.getByRole('textbox')).toHaveFocus();
+		await expect.element(screen.getByRole('button', { name: 'Submit' })).toBeDisabled();
+	});
+
 	it('links refusal text and focuses only for a new controller focus request', async () => {
 		const screen = await render(
 			ActionSessionShell,

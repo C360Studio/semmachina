@@ -10,7 +10,8 @@
 	let lastAnnouncementId: string | undefined;
 	let announcedStatus = $state<Readonly<{ announcementId: string; text: string }>>();
 
-	const controlsDisabled = $derived(view.busy || view.disabled);
+	const inputDisabled = $derived(view.busy || (view.inputDisabled ?? view.disabled));
+	const submitDisabled = $derived(view.busy || (view.submitDisabled ?? view.disabled));
 
 	$effect(() => {
 		const focusRequestId = view.refusal?.focusRequestId;
@@ -34,7 +35,7 @@
 
 	function handleSubmit(event: SubmitEvent): void {
 		event.preventDefault();
-		if (!controlsDisabled) onSubmit();
+		if (!submitDisabled) onSubmit();
 	}
 </script>
 
@@ -46,11 +47,11 @@
 			id={`${componentId}-action`}
 			type="text"
 			value={view.value}
-			disabled={controlsDisabled}
+			disabled={inputDisabled}
 			aria-describedby={view.refusal === undefined ? undefined : refusalId}
 			oninput={handleInput}
 		/>
-		<button type="submit" disabled={controlsDisabled}>Submit</button>
+		<button type="submit" disabled={submitDisabled}>Submit</button>
 	</form>
 
 	{#if view.refusal !== undefined}
