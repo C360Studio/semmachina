@@ -106,14 +106,18 @@
 
 ## 6. Accessible Svelte Components
 
-- [ ] 6.1 Write failing component tests for labelled action input, keyboard submission, busy/disabled
+- [x] 6.1 Write failing component tests for labelled action input, keyboard submission, busy/disabled
   state, typed refusal focus, reconnect status, and non-repeating live-region announcements.
-- [ ] 6.2 Implement the action/session shell and narration/resolution card using Svelte 5 runes and
+- [x] 6.2 Implement the action/session shell and narration/resolution card using Svelte 5 runes and
   semantic headings/definition lists, with no transition logic inside presentation components.
-- [ ] 6.3 Write failing accessibility tests that require equivalent labelled topology for the visual
+- [x] 6.3 Write failing accessibility tests that require equivalent labelled topology for the visual
   map, non-color-only errors, clock status text, and usable keyboard/focus order.
-- [ ] 6.4 Implement the map and clock widgets, including an explicit schematic label whenever fallback
+- [x] 6.4 Implement the map and clock widgets, including an explicit schematic label whenever fallback
   positions are shown and no world-switching control.
+  - Verification passed all 19 browser component tests and all 407 unit tests; strict check, lint,
+    build, and diff gates were green.
+  - Formal architect and Svelte/accessibility reviews APPROVED after three map RED→GREEN
+    review-fix cycles.
 
 ## 7. Acceptance
 
