@@ -86,16 +86,39 @@
   - Same-selection restart preserves entity revisions, experience provenance, and the import marker.
     A changed selection is refused by World before Persona or Rules can mutate shared state.
   - Boot graph integration activates only for selected graph-mutating mechanics; empty and
-    publish-only packs preserve the baseline processor configuration.
+    non-graph selections, including bounded `deny`-only packs, preserve the baseline processor
+    configuration.
   - Architecture conditionally APPROVED the slice, and independent Go review APPROVED it. Focused
     world, mock-model, boot, deterministic E2E, and diff gates passed.
 
 ## 6. Quality Gates
 
-- [ ] 6.1 Run architecture review for world/package, rule/component/persona, graph, and ownership
+- [x] 6.1 Run architecture review for world/package, rule/component/persona, graph, and ownership
   boundaries
-- [ ] 6.2 Run backend code and security review for path confinement, rule authority, identity
+- [x] 6.2 Run backend code and security review for path confinement, rule authority, identity
   isolation, bounds, error handling, and regression coverage
-- [ ] 6.3 Run unit, integration, race, deterministic E2E, lint, build, strict OpenSpec, and diff gates
-- [ ] 6.4 Update authoring, instance configuration, ontology, existing-world migration, and roadmap
+  - Architecture APPROVED the final world/package, place, selected-persona/mechanics, fixed
+    sequencing, provenance, and instance-per-world ownership boundaries. The review records
+    broker-global `PERSONAS` as a deployment limit rather than concurrent voice isolation.
+  - Backend/security review APPROVED rooted package reads, closed catalog and strict decoding,
+    same-instance graph targeting, bounded action capabilities, construction-bound selections,
+    mismatch-before-side-effect ordering, and regression coverage.
+- [x] 6.3 Run unit, integration, race, deterministic E2E, lint, build, strict OpenSpec, and diff gates
+  - `go test -race -count=2 -timeout=20m ./internal/e2e` passed in 930.279 seconds. The clean-broker
+    fixture rotates once at the start of each acceptance invocation, never between its two serial
+    experience variants; it does not expand the broker-global `PERSONAS` deployment boundary or
+    permit parallel E2E tests.
+  - `task test` passed twice with the original `-p2` package parallelism. Each run recorded 3,043
+    outcomes across 30 packages with zero skips; the E2E package completed in 467.216 seconds and
+    475.403 seconds respectively.
+  - Focused RED fixture regressions reproduced the action-authority, identity/datatype, and
+    accumulated-broker failures before their fixes and passed afterward.
+  - `task lint`, `task build` including the Linux cross-compile, strict `task spec` at 13/13 before
+    archive, and `git diff --check` all passed. Final architecture and backend/security reviews
+    found no P0-P3 issues.
+- [x] 6.4 Update authoring, instance configuration, ontology, existing-world migration, and roadmap
   documentation, then archive only after every retained normative scenario passes
+  - The world-authoring guide now covers package and catalog structure, instance selection, bounded
+    rule authority, first-class places, living-world migration, and the one-active-world deployment
+    boundary. The README and founding roadmap record the completed proof and next creator/UI slice.
+    Archival follows the completed implementation, review, documentation, and quality gates.

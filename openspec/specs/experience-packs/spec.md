@@ -1,4 +1,11 @@
-## ADDED Requirements
+# experience-packs Specification
+
+## Purpose
+
+Define selectable persona voice and bounded mechanics overlays, resolve and seal one pair per world
+instance, and preserve engine-owned orchestration and campaign provenance across restart.
+
+## Requirements
 
 ### Requirement: One closed experience selection is resolved per instance
 Instance configuration MAY select one named persona pack and one named mechanics pack from the
@@ -40,7 +47,8 @@ Boot SHALL seed only the selected persona records and SHALL combine only the sel
 world-rule definitions with the fixed engine-owned turn-sequencing definitions in the existing rule
 processor. Rule IDs SHALL be unique across the combined set. Package rules SHALL remain unable to
 read or write engine turn state, publish to stage, persona, model, approval, or tool-result subjects,
-write protected engine buckets, select models, or alter iteration and tool authority.
+write protected engine buckets, select models, exceed the package action iteration ceiling, or
+select tool authority.
 
 #### Scenario: Unselected package files have no runtime effect
 - **WHEN** a package contains multiple valid persona and mechanics packs and one pair is selected

@@ -1,14 +1,13 @@
 # Fiction-First AI RPG on SemStreams — Idea Review and Engine Decomposition
 
 **Status:** Founding document of this repo (SemMachina) — the greenfield sister repo this review
-recommended. Imported 2026-07-28 from `semstreams/docs/proposals/fiction-first-rpg.md`, verbatim
-except this header and the market-claim caveat below (an unverifiable comparable named in the
-original pitch was dropped and must not be reintroduced).
+recommended. Imported 2026-07-28 from `semstreams/docs/proposals/fiction-first-rpg.md`; retained as
+the founding vision, with dated implementation corrections and roadmap status called out below.
 **Date:** 2026-07-26. **Origin:** external LLM product pitch, reviewed and re-grounded against the
 actual stack in-session.
 
-> **Post-import corrections (2026-07-28, verified against the semstreams repo).** The body below is
-> preserved as written; two of its upstream assumptions have since moved:
+> **Post-import corrections (updated 2026-08-02).** Several upstream assumptions and roadmap claims
+> have moved since the original review:
 >
 > 1. **ADR-047 is superseded by ADR-049** (lifecycle harness as schema-and-discipline over
 >    `ENTITY_STATES`). Every concept this doc relies on (Participant, phase graphs, operator-writable
@@ -27,6 +26,13 @@ actual stack in-session.
 >    (Tier-1 NPC life ticks under the admission gate) — a priced, subscription-shaped choice, not a
 >    leak. See `openspec/project.md` ("World time is a world fact") for the clock-policy design
 >    rule.
+> 4. **Stage 3 has now tested the template/tunability claim.** One unchanged starter template
+>    declares two selectable persona/mechanics pairs. Deterministic acceptance preserves the fixed
+>    engine stage sequence while selected voice evidence and bounded graph consequences differ.
+>    This proves package-selected voice and world reactions, not package-owned turn sequencing.
+>    The `PERSONAS` store is broker-global, so the supported MVP boundary is one active
+>    experience/world per broker and process. Concurrent worlds needing different voices require
+>    separate brokers/stacks; namespace-disjoint graph IDs alone do not isolate persona prompts.
 
 ## The idea
 
@@ -71,10 +77,10 @@ vocabulary, deliberately rule-matchable; everything else stays rule-opaque).
 
 | Loop | Role | Exit contract |
 |---|---|---|
-| Narrator/GM | Player input + retrieved context → narration | World-delta triples + prose to ObjectStore (ref-triple on scene) |
-| Fiction adjudicator | Plausibility/risk of a proposed action | Structured verdict triple (plausibility, risk, consequence class) — ADR-028 coordinator pattern verbatim |
+| Narrator/GM | Input + context → narration | World-delta triples + prose; ref-triple on scene |
+| Fiction adjudicator | Action plausibility/risk | Structured verdict triple; ADR-028 coordinator shape |
 | NPC agents (optional) | Motivation-driven reactions | Phase-graph + iteration cap |
-| Continuity checker | Ops role reskinned: diff completed narration loops vs graph state | `ops.diagnosis.*`-style contradiction findings |
+| Continuity checker | Diff narration vs graph state | `ops.diagnosis.*`-style contradiction findings |
 | Writer loop | Offline replay: trajectories + KV history → manuscript | Non-interactive replay consumer |
 
 ### Rules — deterministic triggers, never work
@@ -109,9 +115,11 @@ replay the dragon eating you). Prose → ObjectStore with ref-triples.
 
 ## Tunability — the strongest product finding
 
-1. **The fiction↔crunch dial is rule-pack selection, not architecture.** Pure-fiction mode disables
-   the dice-component rule (verdict flows straight to narrator); crunchy mode inserts more
-   mechanical intermediation. The AI Dungeon ↔ AI Roguelite spectrum is configuration.
+1. **The implemented dial is package-selected voice plus bounded world reactions.** Stage 3 proves
+   that one template can select different persona and mechanics packs without changing engine code,
+   while the engine-owned turn sequence stays fixed. A future fiction↔crunch dial that bypasses or
+   inserts stages must be an engine-owned preset with its own safety contract; downloadable packages
+   do not own sequencing.
 2. **Tone/hardness = data.** Rule packs are JSON (grimdark = lower thresholds, harsher chains);
    personas are config; model tiers per capability use the existing `model_registry` block.
 3. **User-content boundary:** players/GMs author entities (data) and rules (JSON, validated, caps
@@ -220,8 +228,10 @@ villain's perspective" is a replay job over the same provenance chain).
    admission gate is the seed).
 3. **Consumer-grade realtime fanout** — WebSocket components exist but are not hardened as a
    player-facing surface.
-4. **User-authored rule sandboxing** — validation + mandatory caps for player/GM-authored rule
-   packs.
+4. **Broader user-authored rule sandboxing** — Stage 3 now provides the first package boundary:
+   four bounded graph mutations plus bounded deny, same-instance references, protected engine
+   namespaces, and categorical refusal of publish/agent/approval/KV/lifecycle capabilities. Any
+   broader creator surface remains an explicit engine contract, not an unchecked extension.
 
 ## MVP deployment target: standalone 32GB Apple Silicon, instance-per-world
 
@@ -232,10 +242,13 @@ is structurally the existing e2e topology (`seminstruct-fast`/`-mid`/`semembed` 
 `model_registry` routing retargets hosted endpoints without game-code changes. The admission gate
 (#652) applies even standalone: narrator gets slot priority, NPC ticks queue behind it.
 
-**Instance-per-world is a scope cut**: it deletes multi-tenant campaign scoping (the largest
-substrate ask) from the MVP by resolving isolation at the process boundary. One world = one stack;
-hosted MVP = the same image on a rented box. Multi-tenancy returns only when hosting density
-matters — a scaling problem, deliberately deferred.
+**Instance-per-world is a scope cut and now an enforced persona boundary**: it deletes multi-tenant
+campaign scoping from the MVP by resolving isolation at the process boundary. One active world and
+experience = one process and broker stack. Graph entity IDs are namespace-disjoint, but personas
+live in broker-global `PERSONAS`; sharing a broker between concurrently active worlds with different
+voices would make those prompts last-writer-wins. Hosted MVP is the same image on a rented box.
+Multi-tenancy returns only when hosting density matters and persona storage is instance-scoped — a
+scaling problem, deliberately deferred.
 
 **Federation path (post-MVP, pre-adapted):** the 6-part entity ID is by design a federated
 identifier — each world owns its namespace, cross-world references are entity IDs prefixed with
@@ -267,17 +280,19 @@ query from session one.
 
 ## Recommendation and sequencing
 
-- **Do not preempt the pre-v1 program.** This is a post-v1 sister-repo candidate.
-- **Greenfield sister repo** on current semstreams; framework-native from day one; game core is
-  small (rule packs + lifecycle workflows + 3-ish components + agentic personas) because the
-  framework carries state, recovery, retrieval, governance, audit.
+- **Greenfield sister repo: accepted and implemented through Stage 3 proof.** SemMachina is
+  framework-native on current SemStreams; the turn loop, durable import/restart boundary, minimum
+  epistemic/companion slice, first-class place ontology, and package-selected experiences now exist
+  as code and deterministic tests.
+- **Keep the MVP one active world per stack.** Separate brokers/stacks are required for concurrent
+  different voices until persona storage becomes instance-scoped. Treat multi-tenancy as a later
+  scaling feature, not as an implied property of namespace-disjoint graph IDs.
 - **Positioning:** the B2B-middleware-vs-consumer-game question is a false dichotomy in this
   ecosystem — build the product as the dogfooding proof; middleware positioning falls out of the
   proof. Lead with the **creator/authoring wedge** (play-to-draft story development; writer loop as
   the differentiator): better unit economics than mass-market entertainment, smaller safety
   surface, exercises every subsystem we most need hardened.
-- **Cheap first de-risk:** when B2's gate lands, add an RPG-shaped corpus as a second co-location
-  corpus (weight tuning is corpus-calibrated; this starts de-risking the game's hardest dependency
-  before any game code exists).
-- **Next artifact when reactivated:** one-page product boundary sketch — game-repo contents vs
-  engine asks.
+- **Next active product slice:** build the creator surface and sense-of-place UI over the proven
+  package and location contracts.
+- **Retrieval remains a later de-risk:** an RPG-shaped corpus is still valuable for theme-spanning
+  context quality, but it is no longer work to perform "before any game code exists."

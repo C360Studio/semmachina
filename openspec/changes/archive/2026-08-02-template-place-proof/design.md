@@ -2,11 +2,11 @@
 
 ## Context
 
-`Package` currently loads every file under `personas/` and `rules/`. Boot seeds every persona
-record but starts only the fixed inline turn-sequencing pack; package rules are validated and then
-remain inert. Separately, `scene` is both a unit of play and the object of
-`world.location.current`. The scene assembler's reverse-edge lookup is explicitly the migration
-seam for making place first-class.
+Before this change, `Package` loaded every file under `personas/` and `rules/`. Boot seeded every
+persona record but started only the fixed inline turn-sequencing pack; package rules were validated
+and then remained inert. Separately, `scene` was both a unit of play and the object of
+`world.location.current`. The scene assembler's reverse-edge lookup was the migration seam for
+making place first-class.
 
 ## Goals / Non-Goals
 
@@ -34,6 +34,8 @@ an explicit, package-relative list of JSON files. Paths must be clean, remain be
 fields, versions, names, duplicate files within one pack, path traversal, empty persona packs, and
 missing defaults fail package load before materialization. Files may be reused across packs so tone
 variants can share adjudicator and companion fragments without duplicating package content.
+Production package reads use `os.OpenRoot`, so symlinks cannot escape the package root after a path
+passes lexical validation.
 
 A legacy package with no catalog exposes an implicit `default` persona pack containing its sorted
 `personas/*.json` files and an implicit empty `default` mechanics pack. Legacy `rules/*.json` are
@@ -61,6 +63,19 @@ other and the engine pack, and appended as inline definitions in the same rule p
 Package rules remain unable to read or write `turn.*`, publish to stage/persona/model subjects,
 write protected engine buckets, or use unclassified actions. They may only react to world facts
 with bounded actions.
+
+The capability allowlist is categorical: `add_triple`, `remove_triple`, `update_triple`,
+`replace_owned`, and `deny`. Every action list is checked. Omitted `max_iterations` uses the bounded
+upstream default of three; explicit values are 1 through 4, and zero is refused as unlimited.
+Graph-action predicates are literal and outside reserved engine namespaces. Subject is the narrowed
+trigger entity (omitted or exactly `$entity.id`); reference objects are `$entity.id`, or
+`$related.id` with a narrowed related pattern. Scalar literal values remain valid, while foreign
+IDs and unprovable substitutions fail closed. Packages cannot publish, dispatch an agent, approve,
+write KV, or transition/complete/fail a lifecycle.
+
+The base processor does not need graph integration for fixed turn sequencing. Boot enables it only
+when a selected mechanic contains one of the four graph-mutating capabilities. Empty and
+non-graph selections, including bounded `deny`-only packs, preserve the baseline processor config.
 
 This stage's tunability proof uses two deterministic world-reaction packs with observably different
 world-state consequences. It does not treat downloadable rules as trusted sequencing presets. A
@@ -95,6 +110,22 @@ of the pair, an out-of-range value, or either predicate on a non-location fails 
 Topology-only locations remain valid. SemMachina registers the upstream canonical predicate names
 rather than inventing aliases; starting or querying the spatial index is deferred to the map stage.
 
+### D7 — Living-world provenance and persona deployment stay explicit
+
+Fresh campaign claim atomically records the selected persona and mechanics pack IDs. The
+import-completion marker is written only after every planned entity is queryable and indexed. A
+same-selection restart reads that provenance and skips template import. A changed selection, partial
+provenance, or a pre-provenance campaign is refused before Persona or Rules; boot never infers a
+selection from current defaults and never reimports a template over a living world.
+
+This change does not add an automatic in-place migration. Existing uninstantiated fixtures migrate
+by adding locations, scene placement, location occupancy, and optional `packs.yaml`; living worlds
+need a separately reviewed provenance migration or a new namespace.
+
+`world_ns` isolates graph identities, not persona prompts. Persona records live in the broker-global
+`PERSONAS` bucket under stable IDs, so the supported MVP is one active experience/world per broker
+and process. Concurrent worlds with different voices require separate brokers/stacks.
+
 ## TDD and Integration Contract
 
 Implementation proceeds vocabulary/authoring first, then fixture and assembler migration, then
@@ -102,7 +133,8 @@ catalog selection and boot composition. Unit tests pin every closed set, subject
 shape, range, legacy fallback, selection refusal, and authority boundary before production wiring.
 Integration tests import two namespaces from one package and run the same deterministic input with
 different pack selections, asserting different selected persona records and different committed
-world facts while engine turn stages remain identical.
+world facts while engine turn stages remain identical. The runs are serial because `PERSONAS` is
+global; the proof makes no concurrent voice-isolation claim.
 
 ## Risks / Trade-offs
 
@@ -112,6 +144,8 @@ world facts while engine turn stages remain identical.
   refusal, never last-writer-wins.
 - Coordinates use literal latitude/longitude for compatibility with SemStreams. Fictional maps
   should remain in a modest coordinate band; equal-area interpretation is not promised.
+- Namespace-disjoint graph state can coexist on a broker, but voice cannot safely differ while
+  `PERSONAS` remains global. Separate stacks are the deliberate MVP isolation boundary.
 
 ## Migration Plan
 
@@ -121,9 +155,10 @@ world facts while engine turn stages remain identical.
 4. Add catalog parsing, implicit defaults, selection, and sealed plan fields.
 5. Persist selection on fresh campaign claim and refuse missing or mismatched provenance.
 6. Seed selected personas and compose selected world rules with fixed engine rules.
-7. Add dual-instance/material-difference acceptance, reviews, docs, and full quality gates.
+7. Add serial dual-instance/material-difference acceptance, reviews, docs, and full quality gates.
 
 ## Open Questions
 
 No blocking architecture question remains. The exact future engine-owned pure-fiction sequencing
-preset is deliberately outside this change.
+preset and any instance-scoped replacement for broker-global `PERSONAS` are deliberately outside
+this change.
