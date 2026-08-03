@@ -21,6 +21,8 @@ import (
 // ACKNOWLEDGES a result with zero recipients rather than retrying it forever, and
 // the answer is composed from durable state whenever it is finally asked for.
 func TestE2E_ATurnResolvesWithNobodyConnectedAndTheAnswerWaits(t *testing.T) {
+	replaceBrokerWithFresh(t)
+
 	w := newWorld(t, "e2egap", "no-roll")
 
 	player := w.dial(t)
@@ -93,6 +95,8 @@ func TestE2E_ATurnResolvesWithNobodyConnectedAndTheAnswerWaits(t *testing.T) {
 // is paused — the reconnect is then an event the turn happens across rather than
 // a race the test hopes to win.
 func TestE2E_ADeliveryFollowsThePlayerAcrossAReconnect(t *testing.T) {
+	replaceBrokerWithFresh(t)
+
 	w := newWorld(t, "e2ereconnect", "duplicate-delivery")
 
 	held := pauseConsumer(t, rulepack.StageStream, rulepack.StageConsumerName(vocabulary.PhaseNarrating))

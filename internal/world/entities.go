@@ -252,15 +252,7 @@ func parseFactObject(
 		return TemplateFact{Predicate: predicate, LocalRef: local}, nil
 
 	case ShapeStatus:
-		text, err := decodeString(raw)
-		if err != nil {
-			return TemplateFact{}, err
-		}
-		status, err := vocabulary.ParseStatus(text)
-		if err != nil {
-			return TemplateFact{}, err
-		}
-		return TemplateFact{Predicate: predicate, Literal: string(status)}, nil
+		return parseClosedStringFact(predicate, raw, vocabulary.ParseStatus)
 
 	case ShapeAttribute:
 		attribute, ok := vocabulary.AttributeForPredicate(predicate)
@@ -288,62 +280,22 @@ func parseFactObject(
 		return TemplateFact{Predicate: predicate, Literal: value}, nil
 
 	case ShapeEvidenceTruthStatus:
-		text, err := decodeString(raw)
-		if err != nil {
-			return TemplateFact{}, err
-		}
-		status, err := vocabulary.ParseEvidenceTruthStatus(text)
-		if err != nil {
-			return TemplateFact{}, err
-		}
-		return TemplateFact{Predicate: predicate, Literal: string(status)}, nil
+		return parseClosedStringFact(predicate, raw, vocabulary.ParseEvidenceTruthStatus)
 
 	case ShapeCasePhase:
-		text, err := decodeString(raw)
-		if err != nil {
-			return TemplateFact{}, err
-		}
-		phase, err := vocabulary.ParseCasePhase(text)
-		if err != nil {
-			return TemplateFact{}, err
-		}
-		return TemplateFact{Predicate: predicate, Literal: string(phase)}, nil
+		return parseClosedStringFact(predicate, raw, vocabulary.ParseCasePhase)
 
 	case ShapeEvidenceRevealKind:
 		return parseEvidenceRevealKind(predicate, raw)
 
 	case ShapeBeliefStance:
-		text, err := decodeString(raw)
-		if err != nil {
-			return TemplateFact{}, err
-		}
-		stance, err := vocabulary.ParseBeliefStance(text)
-		if err != nil {
-			return TemplateFact{}, err
-		}
-		return TemplateFact{Predicate: predicate, Literal: string(stance)}, nil
+		return parseClosedStringFact(predicate, raw, vocabulary.ParseBeliefStance)
 
 	case ShapeCompanionPolicy:
-		text, err := decodeString(raw)
-		if err != nil {
-			return TemplateFact{}, err
-		}
-		policy, err := vocabulary.ParseCompanionPolicy(text)
-		if err != nil {
-			return TemplateFact{}, err
-		}
-		return TemplateFact{Predicate: predicate, Literal: string(policy)}, nil
+		return parseClosedStringFact(predicate, raw, vocabulary.ParseCompanionPolicy)
 
 	case ShapeHintLevel:
-		text, err := decodeString(raw)
-		if err != nil {
-			return TemplateFact{}, err
-		}
-		level, err := vocabulary.ParseHintLevel(text)
-		if err != nil {
-			return TemplateFact{}, err
-		}
-		return TemplateFact{Predicate: predicate, Literal: string(level)}, nil
+		return parseClosedStringFact(predicate, raw, vocabulary.ParseHintLevel)
 
 	case ShapeNumber:
 		value, err := decodeFloat(raw)
@@ -376,6 +328,25 @@ func parseFactObject(
 		// Unreachable: AuthorWritable already rejected anything without a shape.
 		return TemplateFact{}, fmt.Errorf("predicate %q has no registered object shape", predicate)
 	}
+}
+
+// parseClosedStringFact is the common decoder for vocabulary-backed string
+// shapes. Keeping JSON decoding, enum validation, and canonical string storage
+// together makes every closed shape reject and persist values identically.
+func parseClosedStringFact[T ~string](
+	predicate vocabulary.Predicate,
+	raw json.RawMessage,
+	parse func(string) (T, error),
+) (TemplateFact, error) {
+	text, err := decodeString(raw)
+	if err != nil {
+		return TemplateFact{}, err
+	}
+	value, err := parse(text)
+	if err != nil {
+		return TemplateFact{}, err
+	}
+	return TemplateFact{Predicate: predicate, Literal: string(value)}, nil
 }
 
 func parseEvidenceRevealKind(predicate vocabulary.Predicate, raw json.RawMessage) (TemplateFact, error) {

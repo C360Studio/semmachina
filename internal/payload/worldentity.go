@@ -363,6 +363,10 @@ func (e *WorldEntity) UnmarshalJSON(data []byte) error {
 // play has written since.
 const WorldImportSource = "world-import"
 
+// xsdStringDatatype prevents canonical-ID-shaped authored text from being
+// inferred as a graph edge by message.Triple.IsRelationship.
+const xsdStringDatatype = "xsd:string"
+
 // Triples implements graph.Graphable.
 //
 // It returns the kind triple first and then one triple per authored fact.
@@ -389,6 +393,8 @@ func (e *WorldEntity) triple(predicate vocabulary.Predicate, object any, referen
 	datatype := ""
 	if reference {
 		datatype = message.EntityReferenceDatatype
+	} else if _, ok := object.(string); ok {
+		datatype = xsdStringDatatype
 	}
 	return message.Triple{
 		Subject:   e.ID,

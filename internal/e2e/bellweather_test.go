@@ -20,6 +20,8 @@ type bellweatherTurn struct {
 }
 
 func TestE2E_BellweatherMysteryCompanionAcceptance(t *testing.T) {
+	replaceBrokerWithFresh(t)
+
 	w := newBellweatherWorld(t, "e2ebellweather")
 	player := w.dial(t)
 	caseID := w.entity("case", "bellweather-case")

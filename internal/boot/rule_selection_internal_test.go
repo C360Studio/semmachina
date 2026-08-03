@@ -97,8 +97,8 @@ func TestRuleProcessorConfig_EnablesGraphIntegrationOnlyForGraphMutatingSelected
 			wantGraph: true,
 		},
 		{
-			name:      "ordinary publish",
-			action:    `{"type":"publish","subject":"world.gatehouse.bell","max_iterations":1}`,
+			name:      "bounded deny",
+			action:    `{"type":"deny","reason":"gatehouse closed","max_iterations":1}`,
 			wantGraph: false,
 		},
 	} {

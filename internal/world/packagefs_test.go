@@ -1,8 +1,6 @@
 package world_test
 
 import (
-	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,9 +42,6 @@ func TestOpenPackageDirectory_RefusesCatalogSymlinkEscape(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outsidePersona, link); err != nil {
-		if errors.Is(err, fs.ErrPermission) || errors.Is(err, errors.ErrUnsupported) {
-			t.Skipf("symlink creation is not permitted or supported: %v", err)
-		}
 		t.Fatalf("create escape symlink: %v", err)
 	}
 

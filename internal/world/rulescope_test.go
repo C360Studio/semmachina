@@ -8,12 +8,9 @@ import (
 	"testing"
 	"testing/fstest"
 
-	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
 	"github.com/c360studio/semstreams/processor/rule"
 
 	"github.com/c360studio/semmachina/fixtures"
-	"github.com/c360studio/semmachina/internal/persona"
-	"github.com/c360studio/semmachina/internal/rulepack"
 	"github.com/c360studio/semmachina/internal/world"
 )
 
@@ -59,9 +56,10 @@ func TestLoadPackage_RefusesLifecycleProjectionInConditionsAndActionGuards(t *te
 	lifecycleCondition := `{"field":"$entity.lifecycle.phase","operator":"eq","value":"discovery"}`
 	cases := map[string]string{
 		"top-level condition": ruleJSON("reads-lifecycle-phase", lifecycleCondition, "on_enter",
-			`{"type":"publish","subject":"world.bell.ring","max_iterations":1}`),
+			`{"type":"add_triple","predicate":"world.entity.description","object":"changed","max_iterations":1}`),
 		"action when guard": ruleJSON("guards-on-lifecycle-phase", "", "on_enter",
-			`{"type":"publish","subject":"world.bell.ring","max_iterations":1,"when":[`+lifecycleCondition+`]}`),
+			`{"type":"add_triple","predicate":"world.entity.description","object":"changed",`+
+				`"max_iterations":1,"when":[`+lifecycleCondition+`]}`),
 	}
 	for name, definition := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -94,10 +92,12 @@ func TestLoadPackage_AllowsNonLifecycleRuntimeProjections(t *testing.T) {
 				var definition string
 				if position == "top-level" {
 					definition = ruleJSON("allowed-runtime-projection", condition, "on_enter",
-						`{"type":"publish","subject":"world.bell.ring","max_iterations":1}`)
+						`{"type":"add_triple","predicate":"world.entity.description",`+
+							`"object":"changed","max_iterations":1}`)
 				} else {
 					definition = ruleJSON("allowed-runtime-projection", "", "on_enter",
-						`{"type":"publish","subject":"world.bell.ring","max_iterations":1,"when":[`+condition+`]}`)
+						`{"type":"add_triple","predicate":"world.entity.description","object":"changed",`+
+							`"max_iterations":1,"when":[`+condition+`]}`)
 				}
 				if err := loadWithRule(t, definition); err != nil {
 					t.Fatalf("LoadPackage rejected %s in %s: %v", decoded.Field, position, err)
@@ -231,192 +231,6 @@ func TestLoadPackage_ChecksTheScopeOfEveryRuleInAnArrayValuedFile(t *testing.T) 
 	}
 }
 
-// The other half of the same boundary: a world rule may not hand work to the
-// engine over NATS. A stage subject drives a turn's next hop — and a billed
-// persona call — so a world that could publish one could advance, replay, or
-// pay for a turn it does not own.
-func TestLoadPackage_RefusesAWorldRuleThatPublishesIntoTheEnginesSubjects(t *testing.T) {
-	// Both subjects are READ from the constants that define them. A restated
-	// string would keep passing after a rename while the gate stopped matching
-	// anything.
-	stageSubject := rulepack.StageSubjectPrefix + "adjudicating"
-	personaTaskSubject := persona.TaskSubjectFor(persona.RoleAdjudicator)
-
-	// The two roots are reserved for DIFFERENT harms, so each case asserts the
-	// reason it was refused for and not merely that it was refused. Without
-	// this, a gate that matched every subject against one root would look
-	// identical to a gate that knew why.
-	const (
-		engineHarm   = rulepack.StageSubjectFilter // named in the engine root's reason
-		spendingHarm = "calling a MODEL"           // named in the agentic root's reason
-	)
-
-	cases := map[string]struct {
-		rule   string
-		names  []string
-		reason string
-	}{
-		"publish to a stage trigger": {
-			rule: ruleJSON("world_triggers_stage", ``, "on_enter",
-				fmt.Sprintf(`{"type":"publish","subject":%q}`, stageSubject)),
-			names:  []string{"world_triggers_stage", stageSubject, "on_enter[0]"},
-			reason: engineHarm,
-		},
-		"publish_agent to a stage trigger": {
-			rule: ruleJSON("world_spawns_on_stage", ``, "on_enter",
-				fmt.Sprintf(`{"type":"publish_agent","subject":%q,"role":"narrator","prompt":"go"}`, stageSubject)),
-			names:  []string{"world_spawns_on_stage", stageSubject, "on_enter[0]"},
-			reason: engineHarm,
-		},
-		"approve routed onto a stage trigger": {
-			rule: ruleJSON("world_approves_onto_stage", ``, "on_enter",
-				fmt.Sprintf(`{"type":"approve","subject":%q,"reason":"fine"}`, stageSubject)),
-			names:  []string{"world_approves_onto_stage", stageSubject, "on_enter[0]"},
-			reason: engineHarm,
-		},
-		// Not a stage subject, still the engine's: the ledger stream is the
-		// campaign's archive, and a forged manifest is a forged campaign
-		// record. The root check is what covers subjects task 9 has not
-		// written yet.
-		"publish into another engine subject space": {
-			rule: ruleJSON("world_forges_ledger", ``, "on_enter",
-				`{"type":"publish","subject":"semmachina.ledger.turn.t1"}`),
-			names:  []string{"world_forges_ledger", "semmachina.ledger.turn.t1"},
-			reason: engineHarm,
-		},
-		// Not the engine's namespace at all — upstream's — and reserved for a
-		// different harm: a message there is a task the agentic loop answers by
-		// calling a model. BOTH action types are asserted, because the SUBJECT
-		// is what is refused; a gate that only refused publish_agent would leave
-		// the identical spend one action type over.
-		"publish_agent dispatching a persona task": {
-			rule: ruleJSON("world_spawns_persona", ``, "on_enter",
-				fmt.Sprintf(`{"type":"publish_agent","subject":%q,"role":"adjudicator","prompt":"go"}`,
-					personaTaskSubject)),
-			names:  []string{"world_spawns_persona", personaTaskSubject},
-			reason: spendingHarm,
-		},
-		"plain publish onto the persona task subject": {
-			rule: ruleJSON("world_publishes_persona_task", ``, "on_enter",
-				fmt.Sprintf(`{"type":"publish","subject":%q}`, personaTaskSubject)),
-			names:  []string{"world_publishes_persona_task", personaTaskSubject},
-			reason: spendingHarm,
-		},
-		// The task lane is one of the loop's inputs, not all of them. A signal
-		// carries `retry` (spends again) and `feedback` (author text into a
-		// running persona's context); a response impersonates model output; an
-		// approval answers a gated tool call. Reserving only the task lane
-		// would leave these behind "an author cannot guess a loop id", which is
-		// secrecy, not structure.
-		"publish onto a running loop's control signal": {
-			rule: ruleJSON("world_signals_loop", ``, "on_enter",
-				`{"type":"publish","subject":"agent.signal.loop-1"}`),
-			names:  []string{"world_signals_loop", "agent.signal.loop-1"},
-			reason: spendingHarm,
-		},
-		"publish forged model output": {
-			rule: ruleJSON("world_forges_response", ``, "on_enter",
-				`{"type":"publish","subject":"agent.response.loop-1"}`),
-			names:  []string{"world_forges_response", "agent.response.loop-1"},
-			reason: spendingHarm,
-		},
-		"publish an approval for a gated tool call": {
-			rule: ruleJSON("world_approves_tool_call", ``, "on_enter",
-				`{"type":"publish","subject":"agent.approval_response.loop-1"}`),
-			names:  []string{"world_approves_tool_call", "agent.approval_response.loop-1"},
-			reason: spendingHarm,
-		},
-		// The loop's fifth input, and the one that sits outside the agentic
-		// root: a forged tool result is fabricated evidence handed to a running
-		// adjudicator, and the iteration it provokes is billed.
-		"publish a forged tool result": {
-			rule: ruleJSON("world_forges_tool_result", ``, "on_enter",
-				`{"type":"publish","subject":"tool.result.call-1"}`),
-			names:  []string{"world_forges_tool_result", "tool.result.call-1"},
-			reason: "fabricated evidence",
-		},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			err := loadWithRule(t, tc.rule)
-			if err == nil {
-				t.Fatal("LoadPackage accepted a world rule publishing into the engine's subject space")
-			}
-			for _, want := range append(tc.names, "rules/00-stub.json", "reserved", tc.reason) {
-				if !strings.Contains(err.Error(), want) {
-					t.Fatalf("refusal %q does not name %q", err, want)
-				}
-			}
-		})
-	}
-}
-
-// The fourth reserved position. RULE_STATE is where the rule engine keeps its
-// own MatchState — the per-action firing counters, the caps, the revision the
-// bootstrap replay guard reads — and upstream's runtime bucket guard does NOT
-// cover it: graph.FrameworkOwnedBuckets() is graph buckets only. So a world rule
-// merging an empty `action_iterations` map into it would switch off the cap
-// discipline on the engine's own rules, at fire time, with no error anywhere.
-func TestLoadPackage_RefusesAWorldRuleThatWritesAnEngineKVBucket(t *testing.T) {
-	cases := map[string]struct {
-		bucket string
-		reason string
-	}{
-		"the rule engine's own match state": {
-			bucket: "RULE_STATE",
-			reason: "firing counters",
-		},
-		"a framework-owned graph bucket": {
-			bucket: "ENTITY_STATES",
-			reason: "single-writer",
-		},
-	}
-
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			err := loadWithRule(t, ruleJSON("world_writes_engine_kv", ``, "on_enter",
-				fmt.Sprintf(`{"type":"update_kv","bucket":%q,"key":"k","merge":true,`+
-					`"payload":{"action_iterations":{}}}`, tc.bucket)))
-			if err == nil {
-				t.Fatalf("LoadPackage accepted a world rule writing %s", tc.bucket)
-			}
-			for _, want := range []string{"world_writes_engine_kv", tc.bucket, "on_enter[0]", "reserved", tc.reason} {
-				if !strings.Contains(err.Error(), want) {
-					t.Fatalf("refusal %q does not name %q", err, want)
-				}
-			}
-		})
-	}
-}
-
-// The bucket is a reserved POSITION, so it faces the literal rule too — and it
-// needs it more than the others do, because upstream's runtime guard re-checks
-// the bucket only against the graph list. A templated bucket resolving to
-// RULE_STATE at fire time is refused by nobody else.
-func TestLoadPackage_RefusesATemplatedUpdateKVBucket(t *testing.T) {
-	err := loadWithRule(t, ruleJSON("world_templates_bucket", ``, "on_enter",
-		`{"type":"update_kv","bucket":"$message.bucket","key":"k","payload":{}}`))
-	if err == nil {
-		t.Fatal("LoadPackage accepted an update_kv bucket assembled at fire time")
-	}
-	for _, want := range []string{"world_templates_bucket", "substitution", "bucket"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("refusal %q does not name %q", err, want)
-		}
-	}
-}
-
-// A world keeping its own state in its own bucket is ordinary world content.
-// The bucket check must refuse the engine's buckets, not update_kv.
-func TestLoadPackage_AdmitsAWorldRuleWritingItsOwnKVBucket(t *testing.T) {
-	err := loadWithRule(t, ruleJSON("world_keeps_its_own_tally", ``, "on_enter",
-		`{"type":"update_kv","bucket":"GATEHOUSE_TALLY","key":"bells","merge":true,"payload":{"rung":1}}`))
-	if err != nil {
-		t.Fatalf("LoadPackage refused a world rule writing its own KV bucket: %v", err)
-	}
-}
-
 // The campaign namespace is reserved at SEED granularity, not domain
 // granularity, and this pair is the whole reason that distinction exists.
 //
@@ -477,63 +291,217 @@ func TestLoadPackage_ReservesThePlayersTurnWithoutReservingTheirCharacter(t *tes
 	}
 }
 
-// The subject reservation is only as good as its coverage of what actually
-// consumes a message, so this reads the agentic loop's OWN declared input ports
-// and requires every one of them to be inside a reserved root.
-//
-// It is the drift alarm for both agentic roots: upstream adding a sixth input
-// port — or moving one out from under `agent.` the way tool.result already sits
-// — fails here rather than silently reopening a spend path.
-func TestReservedSubjectRoots_CoverEveryAgenticLoopInput(t *testing.T) {
-	ports := agenticloop.DefaultConfig().Ports
-	if ports == nil || len(ports.Inputs) == 0 {
-		t.Fatal("the agentic loop declares no input ports; this test can no longer see what it checks")
+// A predicate assembled at fire time is a name the loader cannot classify.
+func TestLoadPackage_RefusesAnAssembledGraphPredicate(t *testing.T) {
+	err := loadWithRule(t, ruleJSON("world_templates_predicate", ``, "on_enter",
+		`{"type":"add_triple","predicate":"$message.predicate","object":"x"}`))
+	if err == nil {
+		t.Fatal("LoadPackage accepted a graph predicate assembled at fire time")
 	}
+	if !strings.Contains(err.Error(), "substitution") {
+		t.Fatalf("refusal %q does not say why an assembled predicate cannot be checked", err)
+	}
+}
 
-	for _, port := range ports.Inputs {
-		subject := strings.TrimSuffix(strings.TrimSuffix(port.Subject, ">"), "*")
-		if subject == "" {
-			t.Fatalf("input port %q has no subject to check", port.Name)
-		}
-		// Publishing onto the port's own subject space must be refused. The
-		// literal below is a concrete subject inside it, so the check runs the
-		// production path rather than inspecting the root list.
-		err := loadWithRule(t, ruleJSON("world_publishes_to_a_loop_input", ``, "on_enter",
-			fmt.Sprintf(`{"type":"publish","subject":%q}`, subject+"probe")))
-		if err == nil {
-			t.Fatalf("a world rule may publish onto the agentic loop's %q input (%s); "+
-				"that lane reaches a model, so it belongs inside a reserved subject root",
-				port.Name, port.Subject)
-		}
-		if !strings.Contains(err.Error(), "reserved") {
-			t.Fatalf("publishing to the loop's %q input was refused for the wrong reason: %v", port.Name, err)
+func TestLoadPackage_RefusesGraphActionsThatCanWriteAcrossWorldInstances(t *testing.T) {
+	lists := []string{"on_enter", "on_exit", "while_true", "on_recovery", "actions"}
+	graphTypes := []string{
+		rule.ActionTypeAddTriple,
+		rule.ActionTypeRemoveTriple,
+		rule.ActionTypeUpdateTriple,
+		rule.ActionTypeReplaceOwned,
+	}
+	for _, list := range lists {
+		for _, actionType := range graphTypes {
+			t.Run(list+"/"+actionType, func(t *testing.T) {
+				action := fmt.Sprintf(
+					`{"type":%q,"subject":"other.semmachina.foreign.starter.character.rook",`+
+						`"predicate":"world.entity.description","object":"changed"}`,
+					actionType)
+				err := loadWithRule(t, ruleJSON("cross-instance-subject", "", list, action))
+				if err == nil {
+					t.Fatal("LoadPackage accepted a graph action targeting a pinned foreign entity")
+				}
+				for _, want := range []string{"cross-instance-subject", list + "[0]", "subject", "same instance"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("refusal %q does not name %q", err, want)
+					}
+				}
+			})
 		}
 	}
 }
 
-// A name assembled at fire time is a name the loader cannot read, and both
-// reserved positions are substitution-resolved by the rule engine
-// (processor/rule/actions.go substitutes Action.Predicate and Action.Subject
-// before use). A gate that checked only literals would be evaded by a template
-// and would report success while doing so.
-func TestLoadPackage_RefusesAssembledNamesInTheReservedPositions(t *testing.T) {
-	cases := map[string]string{
-		"templated triple predicate": ruleJSON("world_templates_predicate", ``, "on_enter",
-			`{"type":"add_triple","predicate":"$message.predicate","object":"x"}`),
-		"templated publish subject": ruleJSON("world_templates_subject", ``, "on_enter",
-			`{"type":"publish","subject":"semmachina.$entity.type.narrating"}`),
+func TestLoadPackage_RefusesUnprovableEntityReferenceObjectsAcrossEveryGraphActionList(t *testing.T) {
+	lists := []string{"on_enter", "on_exit", "while_true", "on_recovery", "actions"}
+	objectWritingTypes := []string{
+		rule.ActionTypeAddTriple,
+		rule.ActionTypeUpdateTriple,
+		rule.ActionTypeReplaceOwned,
 	}
-
-	for name, ruleFile := range cases {
-		t.Run(name, func(t *testing.T) {
-			err := loadWithRule(t, ruleFile)
-			if err == nil {
-				t.Fatal("LoadPackage accepted a reserved-position name assembled at fire time")
+	objects := map[string]string{
+		"literal foreign entity":   "other.semmachina.foreign.starter.character.rook",
+		"graph-derived template":   "$entity.triple.world.location.current",
+		"message-derived template": "$message.target",
+	}
+	for _, list := range lists {
+		for _, actionType := range objectWritingTypes {
+			for name, object := range objects {
+				t.Run(list+"/"+actionType+"/"+name, func(t *testing.T) {
+					action := fmt.Sprintf(
+						`{"type":%q,"predicate":"world.relation.knows","object":%q}`,
+						actionType, object)
+					err := loadWithRule(t, ruleJSON("cross-instance-object", "", list, action))
+					if err == nil {
+						t.Fatal("LoadPackage accepted an entity-reference object that is not provably instance-local")
+					}
+					for _, want := range []string{"cross-instance-object", list + "[0]", "object", "same instance"} {
+						if !strings.Contains(err.Error(), want) {
+							t.Fatalf("refusal %q does not name %q", err, want)
+						}
+					}
+				})
 			}
-			if !strings.Contains(err.Error(), "substitution") {
-				t.Fatalf("refusal %q does not say why an assembled name cannot be checked", err)
+		}
+	}
+}
+
+func TestLoadPackage_RefusesGraphObjectsThatCanInferCrossInstanceRelationships(t *testing.T) {
+	lists := []string{"on_enter", "on_exit", "while_true", "on_recovery", "actions"}
+	objectWritingTypes := []string{
+		rule.ActionTypeAddTriple,
+		rule.ActionTypeUpdateTriple,
+		rule.ActionTypeReplaceOwned,
+	}
+	objects := map[string]string{
+		"canonical entity ID literal": "other.semmachina.foreign.starter.character.rook",
+		"graph substitution":          "$entity.triple.world.location.current",
+		"message substitution":        "$message.description",
+	}
+	for _, list := range lists {
+		for _, actionType := range objectWritingTypes {
+			for name, object := range objects {
+				t.Run(list+"/"+actionType+"/"+name, func(t *testing.T) {
+					action := fmt.Sprintf(
+						`{"type":%q,"predicate":"world.entity.description","object":%q}`,
+						actionType, object)
+					err := loadWithRule(t, ruleJSON("inferred-cross-instance-object", "", list, action))
+					if err == nil {
+						t.Fatal("LoadPackage accepted an object that can become an inferred cross-instance relationship")
+					}
+					for _, want := range []string{
+						"inferred-cross-instance-object", list + "[0]", "object", "same instance",
+					} {
+						if !strings.Contains(err.Error(), want) {
+							t.Fatalf("refusal %q does not name %q", err, want)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestLoadPackage_AllowsOnlyProvablyInstanceLocalGraphReferences(t *testing.T) {
+	for name, definition := range map[string]string{
+		"implicit current subject and current object": ruleJSON("local-current", "", "on_enter",
+			`{"type":"add_triple","predicate":"world.relation.knows","object":"$entity.id"}`),
+		"current object remains safe on scalar predicate": ruleJSON("local-current-scalar", "", "on_enter",
+			`{"type":"add_triple","predicate":"world.entity.description","object":"$entity.id"}`),
+		"explicit current subject and literal object": ruleJSON("local-subject", "", "on_enter",
+			`{"type":"update_triple","subject":"$entity.id",`+
+				`"predicate":"world.entity.description","object":"changed here"}`),
+		"remove ignores object": ruleJSON("local-remove", "", "on_enter",
+			`{"type":"remove_triple","predicate":"world.entity.description",`+
+				`"object":"other.semmachina.foreign.starter.character.rook"}`),
+		"empty replace owned clears safely": ruleJSON("local-clear", "", "on_enter",
+			`{"type":"replace_owned","predicate":"world.relation.knows","object":""}`),
+		"narrowed related object": `{"id":"local-related","type":"expression","name":"local related",` +
+			`"enabled":true,"entity":{"pattern":"*.semmachina.*.*.character.*"},` +
+			`"related_patterns":["*.semmachina.*.*.character.*"],"conditions":[],"logic":"and",` +
+			`"on_enter":[{"type":"add_triple","predicate":"world.relation.knows","object":"$related.id"}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := loadWithRule(t, definition); err != nil {
+				t.Fatalf("LoadPackage refused a provably instance-local graph reference: %v", err)
 			}
 		})
+	}
+}
+
+func TestLoadPackage_RequiresBoundedPackageActionsAcrossEveryExecutableList(t *testing.T) {
+	lists := []string{"on_enter", "on_exit", "while_true", "on_recovery", "actions"}
+	graphTypes := []string{
+		rule.ActionTypeAddTriple,
+		rule.ActionTypeRemoveTriple,
+		rule.ActionTypeUpdateTriple,
+		rule.ActionTypeReplaceOwned,
+	}
+	for _, list := range lists {
+		for _, actionType := range graphTypes {
+			for _, cap := range []int{0, 5} {
+				t.Run(fmt.Sprintf("%s/%s/%d", list, actionType, cap), func(t *testing.T) {
+					action := fmt.Sprintf(
+						`{"type":%q,"predicate":"world.entity.description",`+
+							`"object":"changed","max_iterations":%d}`,
+						actionType, cap)
+					err := loadWithRule(t, ruleJSON("unsafe-action-cap", "", list, action))
+					if err == nil {
+						t.Fatal("LoadPackage accepted an unlimited or over-ceiling package action")
+					}
+					for _, want := range []string{"unsafe-action-cap", list + "[0]", "max_iterations", "4"} {
+						if !strings.Contains(err.Error(), want) {
+							t.Fatalf("refusal %q does not name %q", err, want)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestLoadPackage_AllowsDefaultAndPositivePackageActionBoundsThroughTheCeiling(t *testing.T) {
+	for _, maxIterations := range []string{"", `,"max_iterations":1`, `,"max_iterations":4`} {
+		action := `{"type":"add_triple","predicate":"world.entity.description","object":"changed"` +
+			maxIterations + `}`
+		if err := loadWithRule(t, ruleJSON("safe-action-cap", "", "on_enter", action)); err != nil {
+			t.Fatalf("LoadPackage refused a bounded package action %s: %v", action, err)
+		}
+	}
+}
+
+func TestWorldPackageDefaultActionBoundStaysInsideTheLoaderCeiling(t *testing.T) {
+	if rule.DefaultActionMaxIterations < 1 || rule.DefaultActionMaxIterations > 4 {
+		t.Fatalf("upstream default action bound = %d, outside downloadable-world range 1..4",
+			rule.DefaultActionMaxIterations)
+	}
+}
+
+func TestLoadPackage_RejectsUnassignedPackageCapabilitiesAcrossEveryExecutableList(t *testing.T) {
+	lists := []string{"on_enter", "on_exit", "while_true", "on_recovery", "actions"}
+	capabilities := map[string]string{
+		rule.ActionTypePublish:             `{"type":"publish","subject":"world.gatehouse.bell"}`,
+		rule.ActionTypePublishAgent:        `{"type":"publish_agent","subject":"world.gatehouse.actor","role":"narrator","prompt":"act"}`,
+		rule.ActionTypeApprove:             `{"type":"approve","subject":"world.gatehouse.verdict","reason":"fine"}`,
+		rule.ActionTypeUpdateKV:            `{"type":"update_kv","bucket":"GATEHOUSE_TALLY","key":"bells","payload":{}}`,
+		rule.ActionTypeLifecycleTransition: `{"type":"lifecycle_transition","workflow":"case","phase":"open"}`,
+		rule.ActionTypeLifecycleComplete:   `{"type":"lifecycle_complete","workflow":"case"}`,
+		rule.ActionTypeLifecycleFail:       `{"type":"lifecycle_fail","workflow":"case","reason":"lost"}`,
+	}
+	for _, list := range lists {
+		for actionType, action := range capabilities {
+			t.Run(list+"/"+actionType, func(t *testing.T) {
+				err := loadWithRule(t, ruleJSON("unassigned-capability", "", list, action))
+				if err == nil {
+					t.Fatal("LoadPackage accepted an action capability not assigned to world packages")
+				}
+				for _, want := range []string{"unassigned-capability", list + "[0]", actionType, "capability"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Fatalf("refusal %q does not name %q", err, want)
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -559,17 +527,16 @@ func TestLoadPackage_RefusesAnActionTypeTheBoundaryHasNotClassified(t *testing.T
 // world fact crossing a threshold, a world fact changing in response — is
 // exactly the content CLAUDE.md names as legitimate, and it must load.
 //
-// The second action is the sharp half: a triple action's `subject` is an
-// ENTITY ID override, not a NATS subject, and substitution there is how a rule
-// writes onto a related entity. A gate that refused every `$` would refuse
-// ordinary authoring while believing it was refusing an evasion.
+// The second action is the sharp half: an explicit `$entity.id` subject remains
+// instance-local after boot narrows the rule pattern, while an arbitrary
+// substituted subject cannot make that promise and is refused above.
 func TestLoadPackage_AdmitsAGenuineWorldReaction(t *testing.T) {
 	reaction := `{"id":"world_supplies_are_spent","type":"expression","name":"Spent supplies leave the scene",` +
 		`"enabled":true,"entity":{"pattern":"*.semmachina.*.*.item.*"},` +
 		`"conditions":[{"field":"item.attribute.quantity","operator":"lte","value":0}],` +
 		`"logic":"and","max_iterations":4,"on_enter":[` +
 		`{"type":"remove_triple","predicate":"world.location.current"},` +
-		`{"type":"add_triple","subject":"$entity.triple.world.location.current",` +
+		`{"type":"add_triple","subject":"$entity.id",` +
 		`"predicate":"world.relation.knows","object":"$entity.id"}]}`
 
 	if err := loadWithRule(t, reaction); err != nil {

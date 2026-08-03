@@ -78,6 +78,9 @@ func TestWorldEntity_TriplesProjectTheKindAndEveryFact(t *testing.T) {
 	if kind.Object != string(entity.Kind) {
 		t.Fatalf("kind triple object = %v, want %q", kind.Object, entity.Kind)
 	}
+	if kind.Datatype != "xsd:string" {
+		t.Fatalf("kind triple datatype = %q, want xsd:string", kind.Datatype)
+	}
 
 	for index, triple := range triples {
 		if triple.Subject != entity.ID {
@@ -108,12 +111,36 @@ func TestWorldEntity_TriplesProjectTheKindAndEveryFact(t *testing.T) {
 			if fact.Reference && triple.Datatype != message.EntityReferenceDatatype {
 				t.Fatalf("reference fact %q did not become an @id triple", fact.Predicate)
 			}
-			if !fact.Reference && triple.Datatype != "" {
-				t.Fatalf("literal fact %q got datatype %q", fact.Predicate, triple.Datatype)
+			if !fact.Reference {
+				if _, stringFact := fact.Object.(string); stringFact && triple.Datatype != "xsd:string" {
+					t.Fatalf("string literal fact %q got datatype %q, want xsd:string",
+						fact.Predicate, triple.Datatype)
+				}
+				if _, stringFact := fact.Object.(string); !stringFact && triple.Datatype != "" {
+					t.Fatalf("non-string literal fact %q got datatype %q", fact.Predicate, triple.Datatype)
+				}
 			}
 		}
 		if !found {
 			t.Fatalf("fact %q (%v) produced no triple", fact.Predicate, fact.Object)
+		}
+	}
+}
+
+func TestWorldEntity_CanonicalIDShapedStringsRemainLiterals(t *testing.T) {
+	canonicalText := "other.semmachina.foreign.starter.character.rook"
+	entity := validWorldEntity()
+	entity.Facts = []payload.WorldFact{
+		{Predicate: vocabulary.WorldEntityName, Object: canonicalText},
+		{Predicate: vocabulary.WorldEntityDescription, Object: canonicalText},
+	}
+
+	for _, triple := range entity.Triples()[1:] {
+		if triple.Datatype != "xsd:string" {
+			t.Fatalf("%s datatype = %q, want xsd:string", triple.Predicate, triple.Datatype)
+		}
+		if triple.IsRelationship() {
+			t.Fatalf("%s canonical-ID-shaped authored text was inferred as an entity relationship", triple.Predicate)
 		}
 	}
 }

@@ -27,6 +27,8 @@ import (
 // upstream of the last stage: an adjudicator that was never asked, a batch that
 // committed the wrong band, a narration nobody stored, an archive that missed it.
 func TestE2E_ANoRollTurnResolvesEndToEnd(t *testing.T) {
+	replaceBrokerWithFresh(t)
+
 	w := newWorld(t, "e2enoroll", "no-roll")
 	player := w.dial(t)
 
@@ -156,6 +158,8 @@ func TestE2E_ANoRollTurnResolvesEndToEnd(t *testing.T) {
 // intents — asserted by checking the other two bands' effects did NOT land, which
 // is the half that distinguishes "a band was committed" from "the right one was".
 func TestE2E_EachOutcomeBandIsSelectedBySeedAndCommitted(t *testing.T) {
+	replaceBrokerWithFresh(t)
+
 	for _, fixture := range bandFixtures {
 		t.Run(string(fixture.Band), func(t *testing.T) {
 			w := newWorld(t, fixture.WorldNS, fixture.Scenario, withCampaignSeed(pinnedSeed(t)))
@@ -277,14 +281,16 @@ func TestE2E_EachOutcomeBandIsSelectedBySeedAndCommitted(t *testing.T) {
 // with a CLOSED code and a stored explanation, the narrator is never billed for a
 // turn that did not happen, and the player is still told.
 func TestE2E_TheApplierRefusesAWrongKindTargetAndEndsTheTurn(t *testing.T) {
+	replaceBrokerWithFresh(t)
+
 	w := newWorld(t, "e2ereject", "invalid-effect")
 	player := w.dial(t)
 
 	// The facts the refused batch must leave exactly as it found them.
 	before := entityState(t, w.entity("character", starterCharacter))
 	locationBefore := stringObject(t, before, vocabulary.WorldLocationCurrent)
-	if locationBefore != w.entity("scene", starterScene) {
-		t.Fatalf("Rook starts at %q, and this test's premise is that he starts in the scene", locationBefore)
+	if locationBefore != w.entity("location", "gatehouse-place") {
+		t.Fatalf("Rook starts at %q, and this test's premise is that he starts in the starter place", locationBefore)
 	}
 
 	response := player.submit(t, "reject-1", "I climb inside the crowbar.")
@@ -364,6 +370,8 @@ func TestE2E_TheApplierRefusesAWrongKindTargetAndEndsTheTurn(t *testing.T) {
 // idempotency guards were written for. A second submission is refused at the
 // admission gate and would prove a different, easier thing.
 func TestE2E_ARedeliveredActionMakesOneTurnAndBuysNoSecondCall(t *testing.T) {
+	replaceBrokerWithFresh(t)
+
 	w := newWorldUnstarted(t, "e2edup", "duplicate-delivery")
 
 	// The stream has to exist before anything can be read off it, and the engine

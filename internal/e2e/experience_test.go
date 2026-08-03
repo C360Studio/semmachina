@@ -44,6 +44,8 @@ type experienceRun struct {
 // each experience serially because PERSONAS is intentionally global; sharing a
 // stable narrator ID makes the second boot replace the selected voice.
 func TestE2E_StarterExperienceSelectionIsIsolatedSealedAndRestartSafe(t *testing.T) {
+	replaceBrokerWithFresh(t)
+
 	plain := runStarterExperience(t, "e2eexpplain", "default", plainNarratorMarker,
 		alternateNarratorMarker, vocabulary.WorldRelationHostileTo, vocabulary.WorldRelationCarries)
 	plain.world.crash()
@@ -215,7 +217,7 @@ func runStarterExperience(
 
 func awaitExperienceReaction(t *testing.T, w *world, removed, preserved vocabulary.Predicate) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(turnBudget)
 	for {
 		rook := entityState(t, w.entity("character", starterCharacter))
 		if stringObject(t, rook, vocabulary.CharacterStatusCurrent) == string(vocabulary.StatusWounded) &&

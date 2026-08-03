@@ -5,10 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -68,6 +72,7 @@ const (
 const turnBudget = 90 * time.Second
 
 var broker struct {
+	mu     sync.Mutex
 	client *natsclient.TestClient
 	err    error
 }
@@ -80,18 +85,28 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "register semmachina predicates: %v\n", err)
 		os.Exit(1)
 	}
-	broker.client, broker.err = startBroker()
-	if broker.err != nil && testinfra.Skipped() {
+	client, err := startBroker()
+	broker.mu.Lock()
+	broker.client, broker.err = client, err
+	broker.mu.Unlock()
+	if err != nil && testinfra.Skipped() {
 		fmt.Fprintf(os.Stderr,
 			"\n================================================================\n"+
 				" END-TO-END TURN TESTS SKIPPED BY %s\n reason: %v\n"+
 				" NO TURN WAS RUN IN THIS RUN.\n"+
 				"================================================================\n\n",
-			testinfra.SkipEnv, broker.err)
+			testinfra.SkipEnv, err)
 	}
 	code := m.Run()
-	if broker.client != nil {
-		_ = broker.client.Terminate()
+	broker.mu.Lock()
+	client = broker.client
+	broker.client = nil
+	broker.mu.Unlock()
+	if client != nil {
+		if err := client.Terminate(); err != nil {
+			fmt.Fprintf(os.Stderr, "terminate current end-to-end NATS broker: %v\n", err)
+			code = 1
+		}
 	}
 	os.Exit(code)
 }
@@ -115,8 +130,11 @@ func startBroker() (*natsclient.TestClient, error) {
 
 func requireBroker(t *testing.T) *natsclient.TestClient {
 	t.Helper()
-	if broker.client != nil {
-		return broker.client
+	broker.mu.Lock()
+	client, err := broker.client, broker.err
+	broker.mu.Unlock()
+	if client != nil {
+		return client
 	}
 	if testinfra.Skipped() {
 		t.Skipf("SKIPPED by %s — no turn ran in this test", testinfra.SkipEnv)
@@ -125,8 +143,121 @@ func requireBroker(t *testing.T) *natsclient.TestClient {
 	t.Fatalf("a real NATS broker is required and unavailable: %v\n"+
 		"These tests run the production composition end to end; there is no substitute for it.\n"+
 		"Start Docker, or set %s=1 to run the rest of the suite without this proof.",
-		broker.err, testinfra.SkipEnv)
+		err, testinfra.SkipEnv)
 	return nil
+}
+
+// replaceBrokerWithFresh gives a state-sensitive acceptance test a bare NATS
+// server while keeping the package's TestMain ownership model intact. It is
+// serial-only: no E2E test may call t.Parallel, and no world may be active while
+// the broker rotates. It deliberately does not register a test cleanup because
+// TestMain must terminate whichever client is current after later tests use it.
+func replaceBrokerWithFresh(t *testing.T) {
+	t.Helper()
+	current := requireBroker(t)
+
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	if broker.client != current {
+		t.Fatal("replace the end-to-end NATS broker: current client changed during a serial-only rotation")
+	}
+	if err := current.Terminate(); err != nil {
+		t.Fatalf("replace the end-to-end NATS broker: terminate current client: %v", err)
+	}
+	broker.client = nil
+	broker.err = fmt.Errorf("the previous end-to-end NATS broker was terminated for a clean acceptance boundary")
+
+	client, err := startBroker()
+	broker.client, broker.err = client, err
+	if err != nil {
+		t.Fatalf("replace the end-to-end NATS broker: start fresh bare broker: %v", err)
+	}
+	if client == nil {
+		t.Fatal("replace the end-to-end NATS broker: startBroker returned a nil client without an error")
+	}
+}
+
+// Resetting the package-global broker is safe only while tests are serial. Pin
+// that structural precondition instead of relying on reviewers to notice a new
+// t.Parallel call in another file.
+func TestE2EHarness_DoesNotRunTestsInParallel(t *testing.T) {
+	files, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatalf("enumerate end-to-end test files: %v", err)
+	}
+	for _, file := range files {
+		parsed, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", file, err)
+		}
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if ok && selector.Sel.Name == "Parallel" {
+				t.Errorf("%s calls Parallel; package-global broker replacement requires serial E2E tests", file)
+			}
+			return true
+		})
+	}
+}
+
+// Every broker-consuming top-level acceptance gets a clean container once, at
+// its outer boundary. Variants, subtests, and restarts deliberately share that
+// test's broker so they still prove continuity within one acceptance scenario.
+func TestE2EHarness_BrokerAcceptancesStartWithFreshBroker(t *testing.T) {
+	// Keep exceptions explicit: a future pure TestE2E_* belongs here rather
+	// than weakening the first-statement contract for broker consumers.
+	nonBrokerTests := map[string]struct{}{}
+	seen := make(map[string]struct{})
+
+	files, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatalf("enumerate end-to-end test files: %v", err)
+	}
+	for _, file := range files {
+		parsed, err := parser.ParseFile(token.NewFileSet(), file, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", file, err)
+		}
+		for _, declaration := range parsed.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok || function.Recv != nil || !strings.HasPrefix(function.Name.Name, "TestE2E_") {
+				continue
+			}
+			name := function.Name.Name
+			seen[name] = struct{}{}
+			if _, allowed := nonBrokerTests[name]; allowed {
+				continue
+			}
+			if !startsWithFreshBroker(function) {
+				t.Errorf("%s in %s must call replaceBrokerWithFresh(t) as its first statement", name, file)
+			}
+		}
+	}
+	for name := range nonBrokerTests {
+		if _, exists := seen[name]; !exists {
+			t.Errorf("non-broker E2E allowlist names missing test %s", name)
+		}
+	}
+}
+
+func startsWithFreshBroker(function *ast.FuncDecl) bool {
+	if function.Body == nil || len(function.Body.List) == 0 {
+		return false
+	}
+	expression, ok := function.Body.List[0].(*ast.ExprStmt)
+	if !ok {
+		return false
+	}
+	call, ok := expression.X.(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return false
+	}
+	callee, ok := call.Fun.(*ast.Ident)
+	return ok && callee.Name == "replaceBrokerWithFresh"
 }
 
 // world is one instance under test: a scripted model, a booted engine, and the

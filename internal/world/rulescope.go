@@ -4,13 +4,11 @@ import (
 	"fmt"
 	"strings"
 
-	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 	ssvocab "github.com/c360studio/semstreams/vocabulary"
 
-	"github.com/c360studio/semmachina/internal/persona"
-	"github.com/c360studio/semmachina/internal/rulepack"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -34,16 +32,24 @@ import (
 //
 // # What this checks, and what it deliberately does not
 //
-// Four positions carry a name that reaches the engine, and each is checked:
+// Four positions can reach protected graph state, and each is checked:
 //
 //   - condition fields, including the per-action `when` guards upstream's own
 //     validator does not walk (processor/rule/config_validation.go
 //     validateConditionFields covers Definition.Conditions only);
 //   - the `predicate` of every triple-mutating action, which is the direct
-//     write path onto a turn entity's facts;
-//   - the `subject` of every action that publishes to NATS;
-//   - the `bucket` of every update_kv action, whose runtime backstop upstream
-//     covers only for graph buckets (see reservedBuckets).
+//     write path onto an entity's facts;
+//   - the `subject` of every triple-mutating action, which must remain the
+//     narrowed trigger entity;
+//   - reference-shaped `object` values, which may name only a narrowed entity.
+//
+// Actions also face a categorical capability allowlist and a mandatory bound.
+// Downloaded packages may mutate their narrowed graph entities or return a
+// deny verdict. They may not publish messages, dispatch personas, approve tool
+// calls, write arbitrary KV buckets, or drive lifecycle workflows. Those
+// capabilities require ownership contracts Stage 3 does not assign to world
+// packages. Every admitted action is bounded: omission uses upstream's default
+// of three, while an explicit value must be between one and four.
 //
 // The ENTITY PATTERN is deliberately not refused, and the reason is structural
 // rather than a claim that the position list above is exhaustive: a world rule
@@ -64,32 +70,11 @@ import (
 // import instead of at fire time, and a new capability someone has to look at
 // before a world may use it.
 //
-// # The half that is NOT here, stated so nobody reads this as complete
-//
-// The invariant also says caps are mandatory, and this file does not enforce
-// them. Every subject that reaches a model TODAY is reserved — the agentic root
-// and the tool-result lane cover all five of the loop's declared inputs, so no
-// action type dispatches, retries, or feeds a persona from world content — but
-// "you may not publish here at all" is a narrower claim than "you may publish
-// here if you bound it". What remains open is a world spending through a path
-// nobody has enumerated: some future component consuming a subject a world rule
-// may legitimately name.
-//
-// Whoever builds the cap check inherits one PRECONDITION that has already cost
-// this file a defect: WHICH FIELD IS THE CAP. `Definition.MaxIterations` is not
-// enforced for expression rules — the stateful evaluator records it into
-// MatchState and exposes it as `$state.max_iterations` for a `when` guard to
-// read, and cron rules reject the field outright — while the enforced cap is
-// per-ACTION (`Action.MaxIterations`, defaulting to
-// rule.DefaultActionMaxIterations when omitted). A check written against the
-// definition-level field would validate a field that does nothing and pass every
-// uncapped world.
-//
-// The rest is left undone deliberately rather than approximated, because "a rule
-// path that reaches an LLM" needs a definition first and a check that guessed
-// would either miss the path that spends or refuse the rules that cannot.
-// Reserving a subject was decidable today from a constant; deciding which paths
-// need caps is not. See the change's tasks file, 8.1b(a).
+// The cap is deliberately Action.MaxIterations, not Definition.MaxIterations.
+// The latter is not the execution bound for expression-rule actions. A nil
+// action pointer is safe while upstream resolves it to a value inside this
+// loader's ceiling (currently three); that default is checked at load. Explicit
+// zero means unlimited upstream and is therefore refused here.
 
 // reservedDomain is a predicate namespace a world rule may not name, carried
 // with the reason so a refusal can say what breaks rather than only that
@@ -221,168 +206,12 @@ func enginePredicateNamespaces() ([]reservedDomain, error) {
 	return domains, nil
 }
 
-// reservedSubject is a NATS subject space a world rule may not publish into,
-// carried with the reason, exactly as reservedDomain is.
-type reservedSubject struct {
-	root string
-	why  string
-}
-
-// reservedBucket is a KV bucket a world rule may not write, in the same idiom.
-type reservedBucket struct {
-	name string
-	why  string
-}
-
-// ruleStateBucket is the rule engine's own state bucket.
-//
-// Restated, like toolResultRoot and for the same kind of reason: upstream
-// declares it as a function-local unexported constant
-// (processor/rule/processor.go initializeStateTracker), so there is nothing to
-// derive from. Exporting it upstream would delete this line.
-const ruleStateBucket = "RULE_STATE"
-
-// reservedBuckets returns the KV buckets a world rule may not write through
-// update_kv.
-//
-// The framework-owned GRAPH buckets are taken from upstream's own list rather
-// than named here, so the set cannot fall behind it. Upstream already refuses
-// those at fire time; refusing at load only moves the answer to where the author
-// can act on it.
-//
-// RULE_STATE is the one that MATTERS, because upstream does NOT refuse it:
-// FrameworkOwnedBuckets() is graph buckets only, while RULE_STATE is created as
-// an ordinary KV bucket and holds MatchState — the per-action firing counters
-// (`ActionIterations`), the configured cap, and the `SourceRevision` the
-// bootstrap stale-replay guard reads. A world rule doing `update_kv` with
-// `merge: true` and an empty `action_iterations` map resets the caps on the
-// ENGINE's own hops, which is the cap discipline being switched off from world
-// content.
-//
-// Reaching a specific turn's key needs that turn's entity ID, whose instance
-// segment is a player-submitted action id an author cannot know — and that is
-// exactly why this is closed structurally instead. "You cannot guess the key" is
-// a secrecy argument, and it stops being true the day a key becomes derivable.
-func reservedBuckets() []reservedBucket {
-	owned := gtypes.FrameworkOwnedBuckets()
-	buckets := make([]reservedBucket, 0, len(owned)+1)
-	for _, name := range owned {
-		buckets = append(buckets, reservedBucket{
-			name: name,
-			why: "it is a framework-owned graph bucket whose writes belong to graph-ingest alone, so a " +
-				"world rule writing it would bypass the single-writer contract the whole graph rests on",
-		})
-	}
-	return append(buckets, reservedBucket{
-		name: ruleStateBucket,
-		why: "it holds the rule engine's own match state — the per-action firing counters, the configured " +
-			"caps, and the revision the bootstrap replay guard reads — so a world rule writing it could " +
-			"switch off the cap discipline on the engine's own rules",
-	})
-}
-
-// toolResultRoot is the agentic tool-result lane.
-//
-// The ONE restated root in this file, because nothing exports it: upstream
-// declares it inline as an input port subject (processor/agentic-loop/config.go
-// `tool.result.>`, and agentic-tools publishes onto it), and this repo has no
-// constant for it either. Restating a string is exactly what the rest of this
-// file avoids, so the drift risk is answered where it can be:
-// TestReservedSubjectRoots_CoverEveryAgenticLoopInput reads the loop's own
-// declared ports and fails if any input stops being covered. Upstream exporting
-// the lane is a small engine ask that would delete this constant.
-const toolResultRoot = "tool.result."
-
-// reservedSubjectRoots returns the subject spaces a world rule may not publish
-// into.
-//
-// THREE roots, reserved for different harms — which is why each carries its own
-// reason rather than sharing one:
-//
-//   - This engine's own root. Derived from the stage-trigger prefix's first
-//     segment rather than restated, and the ROOT rather than the stage prefix
-//     itself, because every subject this engine owns lives under it: stage
-//     triggers, the resolved notification, the campaign ledger, and the player
-//     intake task 9 has not written yet. A list of engine prefixes would be a
-//     list somebody forgets to extend on the day it starts mattering. A world
-//     rule has no legitimate business there — it owns no ports, so anything it
-//     publishes into that space is either a forgery or a message nothing reads.
-//
-//   - The whole AGENTIC root, not merely its task lane. This one is UPSTREAM's
-//     namespace, and the loop declares four inputs under it, each of which a
-//     published message reaches: `agent.task.*` dispatches a loop (spends),
-//     `agent.signal.*` carries `retry` (spends again) and `feedback` (injects
-//     author text into a running persona's context — world content steering the
-//     adjudicator), `agent.response.>` is model output a forgery could
-//     impersonate, and `agent.approval_response.*` answers a gated tool call, so
-//     a world could approve one. Reserving the task lane alone would leave three
-//     of the four open behind the weaker argument that an author cannot guess a
-//     runtime loop id — a secrecy argument, in a boundary that is otherwise
-//     structural.
-//
-//   - The tool-result lane, the loop's fifth input, which sits outside the
-//     agentic root. A forged tool result is fabricated evidence fed to a running
-//     adjudicator, and the iteration it triggers is billed.
-//
-// Reserving these subjects is not the deferred caps work and does not narrow
-// it. Caps answer "you may publish here, but bound it"; this answers "you may
-// not publish here at all". The second is decidable today from a constant; the
-// first still needs "reaching an LLM path" defined.
-func reservedSubjectRoots() ([]reservedSubject, error) {
-	engineRoot, _, found := strings.Cut(rulepack.StageSubjectPrefix, ".")
-	if !found || engineRoot == "" {
-		return nil, fmt.Errorf(
-			"cannot derive the engine subject root from the stage-trigger prefix %q: it has no leading segment",
-			rulepack.StageSubjectPrefix)
-	}
-
-	// The agentic root is derived from the filter that names the whole agentic
-	// subject space rather than from the task prefix, because the task lane is
-	// one of four and deriving from it would re-narrow the reservation the next
-	// time somebody reads this.
-	agenticRoot, hadWildcard := strings.CutSuffix(persona.AgentSubjectFilter, ">")
-	if !hadWildcard || !strings.HasSuffix(agenticRoot, ".") {
-		return nil, fmt.Errorf(
-			"cannot derive the agentic subject root from %q: it is not a `<root>.>` filter",
-			persona.AgentSubjectFilter)
-	}
-
-	return []reservedSubject{
-		{
-			root: engineRoot + ".",
-			why: "those subjects carry the engine's own work — the turn loop's stage triggers are " +
-				rulepack.StageSubjectFilter + ", and the campaign ledger and player intake share the root — " +
-				"so a world package publishing there could trigger, replay or forge a turn it does not own",
-		},
-		{
-			root: agenticRoot,
-			why: "those subjects are the agentic loop's own inputs — a task there is answered by " +
-				"calling a MODEL, a signal retries or feeds text into a running persona, a response " +
-				"impersonates model output, and an approval answers a gated tool call — so a world " +
-				"package publishing there spends money and steers the adjudicator; personas are " +
-				"dispatched by the engine's own stages, never by world content",
-		},
-		{
-			root: toolResultRoot,
-			why: "that subject is the agentic loop's tool-result input, so a world package publishing " +
-				"there feeds a running persona fabricated evidence, and the loop iteration it " +
-				"provokes is answered by calling a MODEL",
-		},
-	}, nil
-}
-
 // checkRuleScope refuses a world rule that reaches the engine.
 func checkRuleScope(definition rule.Definition) error {
 	domains, err := enginePredicateNamespaces()
 	if err != nil {
 		return err
 	}
-	roots, err := reservedSubjectRoots()
-	if err != nil {
-		return err
-	}
-	buckets := reservedBuckets()
-
 	for index, condition := range definition.Conditions {
 		where := fmt.Sprintf("condition[%d]", index)
 		if err := checkConditionScope(definition.ID, where, condition, domains); err != nil {
@@ -406,7 +235,9 @@ func checkRuleScope(definition rule.Definition) error {
 	for _, list := range lists {
 		for index, action := range list.actions {
 			where := fmt.Sprintf("%s[%d]", list.label, index)
-			if err := checkActionScope(definition.ID, where, action, domains, roots, buckets); err != nil {
+			if err := checkActionScope(
+				definition.ID, where, action, len(definition.RelatedPatterns) > 0, domains,
+			); err != nil {
 				return err
 			}
 		}
@@ -415,8 +246,8 @@ func checkRuleScope(definition rule.Definition) error {
 }
 
 func checkActionScope(
-	ruleID, where string, action rule.Action,
-	domains []reservedDomain, roots []reservedSubject, buckets []reservedBucket,
+	ruleID, where string, action rule.Action, hasRelatedPattern bool,
+	domains []reservedDomain,
 ) error {
 	for index, guard := range action.When {
 		guardWhere := fmt.Sprintf("%s when[%d]", where, index)
@@ -424,37 +255,14 @@ func checkActionScope(
 			return err
 		}
 	}
+	if err := checkActionBound(ruleID, where, action); err != nil {
+		return err
+	}
 
 	switch action.Type {
 	case rule.ActionTypeAddTriple, rule.ActionTypeRemoveTriple,
 		rule.ActionTypeUpdateTriple, rule.ActionTypeReplaceOwned:
-		// These write graph facts. Their `subject` is an ENTITY ID override,
-		// not a NATS subject, and substitution there is ordinary authoring —
-		// it is how a rule writes onto a related entity — so only the
-		// predicate is a reserved position.
-		return checkReservedPredicate(ruleID, where, action.Predicate, domains)
-
-	case rule.ActionTypePublish, rule.ActionTypePublishAgent, rule.ActionTypeApprove:
-		// These put a message on a NATS subject, and the SUBJECT is what is
-		// checked rather than the action type — which is what makes the check
-		// worth having. `publish` cannot forge an engine PAYLOAD (the rule
-		// engine's publish body is a fixed shape), but payload shape is not the
-		// harm on either reserved root: a stream captures core publishes on its
-		// own subject filter, so a publish into the stage space lands on
-		// TURN_STAGES as a malformed trigger for a stage runner to choke on,
-		// and a publish into the agent task space lands on AGENT for a loop to
-		// pick up. Refusing `publish_agent` alone would leave the plain-publish
-		// half of both open.
-		return checkReservedSubject(ruleID, where, action.Subject, roots)
-
-	case rule.ActionTypeUpdateKV:
-		// A fourth reserved position, and the one whose runtime backstop is
-		// incomplete. Upstream refuses update_kv against the framework-owned
-		// GRAPH buckets after substitution (executeUpdateKV →
-		// graph.IsFrameworkOwnedBucket), which is why ENTITY_STATES is safe —
-		// but RULE_STATE is not on that list, and it holds the rule engine's own
-		// MatchState. See reservedBuckets.
-		return checkReservedBucket(ruleID, where, action.Bucket, buckets)
+		return checkGraphActionScope(ruleID, where, action, hasRelatedPattern, domains)
 
 	case rule.ActionTypeDeny:
 		// Cannot reach the turn loop: deny returns a verdict to its caller and
@@ -462,19 +270,116 @@ func checkActionScope(
 		// subject and writes no triple.
 		return nil
 
-	case rule.ActionTypeLifecycleTransition, rule.ActionTypeLifecycleComplete, rule.ActionTypeLifecycleFail:
+	case rule.ActionTypePublish, rule.ActionTypePublishAgent, rule.ActionTypeApprove,
+		rule.ActionTypeUpdateKV, rule.ActionTypeLifecycleTransition,
+		rule.ActionTypeLifecycleComplete, rule.ActionTypeLifecycleFail:
 		return fmt.Errorf(
-			"rule %q %s uses %q, but downloadable worlds may not drive lifecycle workflows; "+
-				"case transitions are owned by the engine's built-in receipt rules",
-			ruleID, where, action.Type)
+			"rule %q %s uses action capability %q, which is not assigned to downloadable world packages: %s",
+			ruleID, where, action.Type, unassignedCapabilityReason(action.Type))
 
 	default:
 		return fmt.Errorf(
-			"rule %q %s has action type %q, which this loader cannot bound; a world rule may only use action "+
+			"rule %q %s has action capability %q, which this loader cannot bound; a world rule may only use action "+
 				"types whose reach into the engine has been decided, so an unrecognized type is refused rather "+
 				"than admitted unchecked",
 			ruleID, where, action.Type)
 	}
+}
+
+// maxWorldPackageActionIterations is the package ceiling. Four preserves the
+// shipped spent-supplies reaction, whose fourth bounded pass is intentional,
+// while still keeping downloaded work inside a small, reviewable envelope.
+const maxWorldPackageActionIterations = 4
+
+func checkActionBound(ruleID, where string, action rule.Action) error {
+	if action.MaxIterations == nil {
+		// Omission is safe only while upstream's default remains inside this
+		// loader's contract. Fail closed if the pinned dependency ever drifts.
+		if rule.DefaultActionMaxIterations >= 1 &&
+			rule.DefaultActionMaxIterations <= maxWorldPackageActionIterations {
+			return nil
+		}
+		return fmt.Errorf(
+			"rule %q %s omits max_iterations, but upstream's default %d is outside the downloadable-world "+
+				"range 1..%d",
+			ruleID, where, rule.DefaultActionMaxIterations, maxWorldPackageActionIterations)
+	}
+	if *action.MaxIterations > 0 && *action.MaxIterations <= maxWorldPackageActionIterations {
+		return nil
+	}
+	return fmt.Errorf(
+		"rule %q %s action max_iterations must be between 1 and %d when explicit; 0 is unlimited upstream "+
+			"(omit the field to use the bounded default of %d)",
+		ruleID, where, maxWorldPackageActionIterations, rule.DefaultActionMaxIterations)
+}
+
+func unassignedCapabilityReason(actionType string) string {
+	switch actionType {
+	case rule.ActionTypePublish:
+		return "no world-owned NATS subject contract exists at Stage 3"
+	case rule.ActionTypePublishAgent:
+		return "persona dispatch and paid model work are owned by engine stages"
+	case rule.ActionTypeApprove:
+		return "tool approval is an engine and operator authority"
+	case rule.ActionTypeUpdateKV:
+		return "no package-owned KV bucket namespace exists at Stage 3"
+	default:
+		return "lifecycle workflows are owned by the engine's built-in receipt rules"
+	}
+}
+
+// checkGraphActionScope closes both coordinates by which a downloaded rule can
+// escape the instance that boot narrows its entity patterns onto.
+//
+// Subject is the mutation target. The trigger entity is provably in-instance;
+// an arbitrary literal or graph-derived template is not. Every string Object
+// also faces the relationship rule used by message.Triple.IsRelationship:
+// canonical IDs become edges even when the predicate is scalar, because rule
+// actions emit no datatype. Related IDs are safe when a related pattern exists
+// because boot narrows every related pattern through the same four instance
+// positions as the primary.
+func checkGraphActionScope(
+	ruleID, where string,
+	action rule.Action,
+	hasRelatedPattern bool,
+	domains []reservedDomain,
+) error {
+	if err := checkReservedPredicate(ruleID, where, action.Predicate, domains); err != nil {
+		return err
+	}
+	if action.Subject != "" && action.Subject != "$entity.id" {
+		return fmt.Errorf(
+			"rule %q %s graph action subject %q is not provably in the same instance as its narrowed entity "+
+				"pattern; omit subject or use exactly $entity.id",
+			ruleID, where, action.Subject)
+	}
+
+	// remove_triple clears a predicate and upstream ignores Action.Object.
+	if action.Type == rule.ActionTypeRemoveTriple {
+		return nil
+	}
+	// Empty replace_owned is the explicit "clear this owned group" operation,
+	// so it creates no entity link and is safe.
+	if action.Type == rule.ActionTypeReplaceOwned && action.Object == "" {
+		return nil
+	}
+	switch action.Object {
+	case "$entity.id":
+		return nil
+	case "$related.id":
+		if hasRelatedPattern {
+			return nil
+		}
+	}
+	if strings.Contains(action.Object, "$") || message.IsValidEntityID(action.Object) ||
+		ObjectShapeFor(vocabulary.Predicate(action.Predicate)) == ShapeReference {
+		return fmt.Errorf(
+			"rule %q %s graph action object %q is an entity reference that is not provably in the same instance "+
+				"as its narrowed entity patterns; use $entity.id, or $related.id with a declared related pattern",
+			ruleID, where, action.Object)
+	}
+	// A non-ID literal on a non-reference predicate cannot become a graph edge.
+	return nil
 }
 
 // checkConditionScope refuses a condition that branches on an engine fact.
@@ -513,55 +418,13 @@ func checkReservedPredicate(ruleID, where, predicate string, domains []reservedD
 		ruleID, where, predicate, domain.prefix+"*", domain.why)
 }
 
-// checkReservedBucket refuses an update_kv write into a reserved KV bucket.
-func checkReservedBucket(ruleID, where, bucket string, buckets []reservedBucket) error {
-	if err := checkNameIsLiteral(ruleID, where, "bucket", bucket); err != nil {
-		return err
-	}
-	if bucket == "" {
-		return nil
-	}
-	for _, reserved := range buckets {
-		if bucket != reserved.name {
-			continue
-		}
-		return fmt.Errorf(
-			"rule %q %s writes the reserved KV bucket %q: %s. A world rule may keep its own state in its "+
-				"own bucket; the engine's is not world content",
-			ruleID, where, bucket, reserved.why)
-	}
-	return nil
-}
-
-// checkReservedSubject refuses a publish into a reserved subject space.
-func checkReservedSubject(ruleID, where, subject string, roots []reservedSubject) error {
-	if err := checkNameIsLiteral(ruleID, where, "subject", subject); err != nil {
-		return err
-	}
-	if subject == "" {
-		return nil
-	}
-	for _, reserved := range roots {
-		if !strings.HasPrefix(subject, reserved.root) {
-			continue
-		}
-		return fmt.Errorf(
-			"rule %q %s publishes to %q, which is inside the reserved %q subject space: %s. A world rule "+
-				"reacts inside the world; it does not hand work to the engine",
-			ruleID, where, subject, reserved.root+">", reserved.why)
-	}
-	return nil
-}
-
 // checkNameIsLiteral refuses a reserved-position name assembled at fire time.
 //
-// The rule engine substitutes `$...` tokens in Action.Predicate and
-// Action.Subject before it uses them (processor/rule/actions.go), so a template
-// resolves into whatever the trigger entity happened to carry — including a
-// name inside a reserved namespace. A load-time gate cannot read that, and a
-// gate that checked only literals would report a package clean while admitting
-// the evasion. Values are not reserved positions and stay freely templated;
-// this is about NAMES.
+// The rule engine substitutes `$...` tokens in Action.Predicate before it uses
+// it, so a template resolves into whatever the trigger entity happened to
+// carry — including a name inside a reserved namespace. A load-time gate cannot
+// read that. Values stay freely templated where their vocabulary shape permits;
+// this is about predicate names.
 func checkNameIsLiteral(ruleID, where, field, value string) error {
 	if !strings.Contains(value, "$") {
 		return nil

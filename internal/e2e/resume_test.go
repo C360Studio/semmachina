@@ -58,6 +58,8 @@ type crashPoint struct {
 // adjudication and one narration across BOTH processes, enforced by scripts that
 // hold exactly one step each. A second call runs off the end and is refused.
 func TestE2E_ACrashInEachStageLaneIsResumedByTheNextBoot(t *testing.T) {
+	replaceBrokerWithFresh(t)
+
 	stageConsumer := func(phase vocabulary.TurnPhase) func(*testing.T) string {
 		return func(*testing.T) string { return rulepack.StageConsumerName(phase) }
 	}
@@ -250,6 +252,8 @@ func TestE2E_ACrashInEachStageLaneIsResumedByTheNextBoot(t *testing.T) {
 // exists to answer about — the phase is written on stage ENTRY and cannot
 // distinguish "entered" from "finished", and the artifact can.
 func TestE2E_ADuplicateStageTriggerForAFinishedStageBuysNoSecondCall(t *testing.T) {
+	replaceBrokerWithFresh(t)
+
 	w := newWorld(t, "e2eguard", "crash-resume")
 
 	// The dice lane stops, so the turn holds still in `adjudicating` with the

@@ -98,6 +98,7 @@ type loop struct {
 	recorder  *turn.Recorder
 	namespace string
 
+	placeID     string
 	sceneID     string
 	characterID string
 	playerID    string
@@ -146,6 +147,7 @@ func startLoopWithAccusationGate(t *testing.T, gate *gatedDecisionStore) *loop {
 
 	world := &loop{
 		harness: harness, graph: store, content: artifacts, recorder: recorder, namespace: namespace,
+		placeID:     composeID(t, namespace, "location", "gatehouse-place"),
 		sceneID:     composeID(t, namespace, "scene", "gatehouse"),
 		characterID: composeID(t, namespace, "character", "rook"),
 		playerID:    composeID(t, namespace, "player", "one"),
@@ -204,20 +206,27 @@ func composeID(t *testing.T, namespace, kind, instance string) string {
 // somewhere to be, someone to be it, and a player bound to them.
 func (l *loop) seedWorld(t *testing.T) {
 	t.Helper()
+	l.createEntity(t, l.placeID, map[string]any{
+		vocabulary.WorldEntityKind.String(): string(vocabulary.EntityKindLocation),
+		vocabulary.WorldEntityName.String(): "The Gatehouse Place",
+	})
 	l.createEntity(t, l.sceneID, map[string]any{
-		vocabulary.WorldEntityKind.String(): string(vocabulary.EntityKindScene),
-		vocabulary.WorldEntityName.String(): "The Gatehouse",
+		vocabulary.WorldEntityKind.String():      string(vocabulary.EntityKindScene),
+		vocabulary.WorldEntityName.String():      "The Gatehouse",
+		vocabulary.SceneLocationCurrent.String(): l.placeID,
 	})
 	l.createEntity(t, l.characterID, map[string]any{
 		vocabulary.WorldEntityKind.String():        string(vocabulary.EntityKindCharacter),
 		vocabulary.WorldEntityName.String():        "Rook",
-		vocabulary.WorldLocationCurrent.String():   l.sceneID,
+		vocabulary.WorldLocationCurrent.String():   l.placeID,
 		vocabulary.CharacterStatusCurrent.String(): string(vocabulary.StatusHealthy),
 	})
 	l.createEntity(t, l.playerID, map[string]any{
 		vocabulary.WorldEntityKind.String():        string(vocabulary.EntityKindPlayer),
 		vocabulary.PlayerCharacterCurrent.String(): l.characterID,
 	})
+	l.harness.AwaitEntity(t, l.placeID)
+	l.harness.AwaitEntity(t, l.sceneID)
 	l.harness.AwaitEntity(t, l.characterID)
 	l.harness.AwaitEntity(t, l.playerID)
 }
