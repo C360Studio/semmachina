@@ -155,8 +155,8 @@ vision but are NOT on the active MVP path.
    ontology can say "Rook is in the gatehouse" but cannot say "the gatehouse
    connects to the courtyard" — there is no edge between places, so no map is
    expressible. Vocabulary is cheapest to change before more templates bind to it.
-4. **Creator surface + sense of place** (active; `add-minimal-creator-surface`) — minimal Svelte
-   client: action in,
+4. **Creator surface + sense of place** (complete; archived as
+   `2026-08-03-add-minimal-creator-surface`) — minimal Svelte client: action in,
    narration out, and a **resolution card** (plausibility, risk, modifiers, roll,
    consequence) so outcomes are legible, never arbitrary; typed
    progress/error/reconnect. Plus the two orientation widgets a player needs to

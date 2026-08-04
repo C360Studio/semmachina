@@ -262,6 +262,9 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Prove the OpenSpec gate uses the exact repository pin
+        run: bash scripts/check-openspec_fixture_test.sh
+
       - name: openspec validate --all --strict
         # --all is load-bearing: `openspec validate --strict` with no target
         # validates nothing and exits 0. The script also asserts the reported

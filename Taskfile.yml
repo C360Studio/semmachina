@@ -108,6 +108,7 @@ tasks:
   spec:
     desc: openspec validate --all --strict (the --all is load-bearing; without it nothing is validated)
     cmds:
+      - bash scripts/check-openspec_fixture_test.sh
       - bash scripts/check-openspec.sh
 
   tool-versions:
@@ -151,6 +152,16 @@ tasks:
         msg: "GEMINI_API_KEY is empty — copy .env.example to .env and fill it in, or export it."
     cmds:
       - exec node web/tests/run-bellweather-surface.mjs
+
+  demo:surface:
+    desc: Interactive headed Bellweather surface demo; every submitted action may incur Gemini charges
+    preconditions:
+      - sh: test "$SEMMACHINA_PAID_SMOKE" = "1"
+        msg: "Paid demo is disabled — set SEMMACHINA_PAID_SMOKE=1 explicitly."
+      - sh: test -n "$GEMINI_API_KEY"
+        msg: "GEMINI_API_KEY is empty — copy .env.example to .env and fill it in, or export it."
+    cmds:
+      - exec node web/tests/run-bellweather-surface.mjs --demo
 
   smoke:surface:preflight:
     desc: Action-free real-stack browser preflight; never invokes a model provider

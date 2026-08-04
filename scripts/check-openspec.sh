@@ -14,16 +14,23 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-# Pinned rather than `openspec@latest`: a validator that can change under CI can
-# turn a green branch red with no commit, which is the same version-drift
-# problem the revive `tool` pin solves for lint.
-OPENSPEC_VERSION=${OPENSPEC_VERSION:-1.5.0}
+# This is an internal repository pin, not configuration. A caller-provided
+# version or a global executable would make the same commit validate under a
+# different contract on different machines.
+readonly OPENSPEC_VERSION=1.7.0
+runner=(npx --yes "@fission-ai/openspec@${OPENSPEC_VERSION}")
 
-if command -v openspec >/dev/null 2>&1; then
-  runner=(openspec)
-else
-  runner=(npx --yes "@fission-ai/openspec@${OPENSPEC_VERSION}")
+reported_version=$("${runner[@]}" --version 2>&1) && version_status=0 || version_status=$?
+if [ "$version_status" -ne 0 ]; then
+  echo "$reported_version"
+  echo "FAIL: could not verify the pinned OpenSpec version."
+  exit "$version_status"
 fi
+if [ "$reported_version" != "$OPENSPEC_VERSION" ]; then
+  echo "FAIL: OpenSpec reported version '$reported_version'; expected exactly '$OPENSPEC_VERSION'."
+  exit 1
+fi
+echo "OK: verified OpenSpec version $reported_version"
 
 output=$("${runner[@]}" validate --all --strict 2>&1) && status=0 || status=$?
 echo "$output"

@@ -126,8 +126,6 @@ The following are supporting checks, not deployment-isolation proof:
 
 Firewall rules, separate network namespaces, or an equivalently enforced network policy create the
 boundary. Startup checks, browser controls, and no-request assertions cannot substitute for them.
-Task 2.2 remains open until this live-read-first acceptance passes in the supported deployment and
-its automated gate.
 
 ## Same-origin authentication and player bridge
 

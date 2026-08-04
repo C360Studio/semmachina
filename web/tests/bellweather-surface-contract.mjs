@@ -116,6 +116,283 @@ const SURFACE_CHECKPOINTS = new Set([
 	'browser_tests_complete'
 ]);
 
+export const DEMO_STARTUP_LIMIT_MS = 180_000;
+export const DEMO_PRESENTER_MARKER = '[surface-demo-bootstrap] presenter_ready';
+export const DEMO_BOOTSTRAP_STAGES = Object.freeze([
+	'started',
+	'document_loaded',
+	'login_complete',
+	'world_ready',
+	'audit_detached',
+	'marker_written',
+	'close_ack_received'
+]);
+const DEMO_BOOTSTRAP_STAGE_SET = new Set(DEMO_BOOTSTRAP_STAGES);
+export const DEMO_PRE_NAVIGATION_FAILURE_CATEGORIES = Object.freeze([
+	'credential_invalid',
+	'world_scope_invalid',
+	'close_signal_invalid'
+]);
+const DEMO_PRE_NAVIGATION_FAILURE_CATEGORY_SET = new Set(DEMO_PRE_NAVIGATION_FAILURE_CATEGORIES);
+export const DEMO_NAVIGATION_FAILURE_CATEGORIES = Object.freeze([
+	'navigation_timeout',
+	'connection_refused',
+	'tls_failure',
+	'page_closed',
+	'http_status',
+	'other'
+]);
+const DEMO_NAVIGATION_FAILURE_CATEGORY_SET = new Set(DEMO_NAVIGATION_FAILURE_CATEGORIES);
+const DEMO_READY_LINES = Object.freeze([
+	'[surface-demo] presenter_ready',
+	'URL: https://127.0.0.1:4181',
+	'Login: the browser opens and authenticates automatically; see README.md.',
+	'Each submitted action may incur Gemini API charges.',
+	'Close the browser or press Ctrl-C to stop.'
+]);
+
+/** @param {string} line */
+export function parseDemoBootstrapDiagnostic(line) {
+	const normalized = line.trim();
+	if (normalized === DEMO_PRESENTER_MARKER) return Object.freeze({ kind: 'ready' });
+	const preNavigation = normalized.match(
+		/^\[surface-demo-bootstrap\] pre_navigation_failed:([a-z_]+)$/
+	);
+	if (preNavigation !== null && DEMO_PRE_NAVIGATION_FAILURE_CATEGORY_SET.has(preNavigation[1])) {
+		return Object.freeze({ kind: 'pre_navigation_failed', category: preNavigation[1] });
+	}
+	const navigation = normalized.match(/^\[surface-demo-bootstrap\] navigation_failed:([a-z_]+)$/);
+	if (navigation !== null && DEMO_NAVIGATION_FAILURE_CATEGORY_SET.has(navigation[1])) {
+		return Object.freeze({ kind: 'navigation_failed', category: navigation[1] });
+	}
+	const match = normalized.match(/^\[surface-demo-bootstrap\] (progress|failed):([a-z_]+)$/);
+	if (match === null || !DEMO_BOOTSTRAP_STAGE_SET.has(match[2])) return undefined;
+	return Object.freeze({ kind: match[1], stage: match[2] });
+}
+
+/**
+ * @param {unknown} error
+ * @returns {'navigation_timeout' | 'connection_refused' | 'tls_failure' | 'page_closed' | 'other'}
+ */
+export function classifyDemoNavigationFailure(error) {
+	const name =
+		error !== null && typeof error === 'object' && 'name' in error && typeof error.name === 'string'
+			? error.name
+			: '';
+	const message =
+		error !== null &&
+		typeof error === 'object' &&
+		'message' in error &&
+		typeof error.message === 'string'
+			? error.message
+			: '';
+	const signature = `${name}\n${message}`;
+	if (name === 'TimeoutError' || /timeout/i.test(signature)) return 'navigation_timeout';
+	if (/ERR_CONNECTION_REFUSED|ECONNREFUSED/i.test(signature)) return 'connection_refused';
+	if (/ERR_CERT|ERR_SSL|\bTLS\b|certificate/i.test(signature)) return 'tls_failure';
+	if (/Target page.*closed|page.*closed|browser.*closed|context.*closed/i.test(signature)) {
+		return 'page_closed';
+	}
+	return 'other';
+}
+
+export class DemoWorkerAuthorityError extends Error {
+	/** @param {'credential_invalid' | 'close_signal_invalid'} category */
+	constructor(category) {
+		super(`demo worker authority ${category}`);
+		this.category = category;
+	}
+}
+
+/**
+ * @template T
+ * @param {Record<string, string | undefined>} environment
+ * @param {(authority: {credential: string, closeSignalPath: string | undefined}) => Promise<T>} use
+ */
+export async function runDemoWorkerAuthorityFixture(environment, use) {
+	const credential = environment.REAL_SURFACE_DEMO_CREDENTIAL;
+	const closeSignalPath = environment.REAL_SURFACE_DEMO_CLOSE_SIGNAL_PATH;
+	delete environment.REAL_SURFACE_DEMO_CREDENTIAL;
+	delete environment.REAL_SURFACE_DEMO_CLOSE_SIGNAL_PATH;
+	if (credential === undefined || !/^[A-Za-z0-9_-]{43}$/.test(credential)) {
+		throw new DemoWorkerAuthorityError('credential_invalid');
+	}
+	if (
+		closeSignalPath !== undefined &&
+		(!nodePath.isAbsolute(closeSignalPath) || nodePath.basename(closeSignalPath) !== 'close.signal')
+	) {
+		throw new DemoWorkerAuthorityError('close_signal_invalid');
+	}
+	const authority = { credential, closeSignalPath };
+	try {
+		return await use(authority);
+	} finally {
+		authority.credential = '';
+		authority.closeSignalPath = undefined;
+	}
+}
+
+/** @param {() => Promise<boolean>} consume */
+export function createSerializedDemoCloseSignalCheck(consume) {
+	let requested = false;
+	/** @type {Promise<boolean> | undefined} */
+	let active;
+	return () => {
+		requested = true;
+		if (active !== undefined) return active;
+		active = (async () => {
+			let consumed = false;
+			while (requested && !consumed) {
+				requested = false;
+				consumed = await consume();
+			}
+			return consumed;
+		})().finally(() => {
+			active = undefined;
+		});
+		return active;
+	};
+}
+
+/** @param {readonly string[]} arguments_ */
+export function parseSurfaceRunnerArguments(arguments_) {
+	if (arguments_.length === 0) return Object.freeze({ mode: 'paid' });
+	if (arguments_.length === 1 && arguments_[0] === '--preflight') {
+		return Object.freeze({ mode: 'preflight', interruptProof: false });
+	}
+	if (
+		arguments_.length === 2 &&
+		arguments_[0] === '--preflight' &&
+		arguments_[1] === '--interrupt-proof'
+	) {
+		return Object.freeze({ mode: 'preflight', interruptProof: true });
+	}
+	if (arguments_.length === 1 && arguments_[0] === '--demo') {
+		return Object.freeze({ mode: 'demo' });
+	}
+	throw new Error('unsupported runner arguments');
+}
+
+/** @param {(size: number) => Buffer} [generate] */
+export function createDemoCreatorCredential(generate = randomBytes) {
+	const bytes = generate(32);
+	if (!Buffer.isBuffer(bytes) || bytes.byteLength !== 32) {
+		throw new Error('demo credential generation failed');
+	}
+	return bytes.toString('base64url');
+}
+
+/**
+ * @param {{temporaryRoot?: string, mkdtemp?: (prefix: string) => Promise<string>,
+ * chmod?: (path: string, mode: number) => Promise<void>,
+ * remove?: (path: string, options: {force: boolean, recursive: boolean}) => Promise<void>}} [dependencies]
+ */
+export async function createDemoCloseSignal(dependencies = {}) {
+	const root = dependencies.temporaryRoot ?? tmpdir();
+	const makeDirectory = dependencies.mkdtemp ?? mkdtemp;
+	const setMode = dependencies.chmod ?? chmod;
+	const remove = dependencies.remove ?? rm;
+	let directory;
+	try {
+		directory = await makeDirectory(nodePath.join(root, 'semmachina-demo-close-'));
+		await setMode(directory, 0o700);
+		return Object.freeze({ directory, path: nodePath.join(directory, 'close.signal') });
+	} catch (error) {
+		if (directory !== undefined) {
+			await remove(directory, { force: true, recursive: true });
+		}
+		throw error;
+	}
+}
+
+/**
+ * @param {{directory: string, path: string}} signal
+ * @param {{writeFile?: (path: string, content: string, options: {encoding: 'utf8', flag: 'wx',
+ * mode: number}) => Promise<void>, rename?: (from: string, to: string) => Promise<void>}} [dependencies]
+ */
+export async function publishDemoCloseSignal(signal, dependencies = {}) {
+	const write = dependencies.writeFile ?? writeFile;
+	const move = dependencies.rename ?? rename;
+	const pending = `${signal.path}.pending`;
+	await write(pending, 'close\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+	await move(pending, signal.path);
+}
+
+/**
+ * @param {{directory: string, path: string} | undefined} signal
+ * @param {{remove?: (path: string, options: {force: boolean, recursive: boolean}) => Promise<void>}} [dependencies]
+ */
+export async function cleanupDemoCloseSignal(signal, dependencies = {}) {
+	if (signal === undefined) return;
+	await (dependencies.remove ?? rm)(signal.directory, { force: true, recursive: true });
+}
+
+/** @param {string} secret @param {readonly string[]} candidates */
+export function requireDemoSecretAbsent(secret, candidates) {
+	if (candidates.some((candidate) => candidate.includes(secret))) {
+		throw new Error('surface demo secret boundary failed');
+	}
+}
+
+/** @param {(line: string) => void} [write] */
+export function emitDemoReady(write = console.log) {
+	for (const line of DEMO_READY_LINES) write(line);
+}
+
+/** @param {() => number} [now] */
+export function createDemoStartupDeadline(now = Date.now) {
+	return now() + DEMO_STARTUP_LIMIT_MS;
+}
+
+/**
+ * @template T
+ * @param {Promise<T>} stage
+ * @param {number} deadline
+ * @param {{now?: () => number, setTimer?: typeof setTimeout, clearTimer?: typeof clearTimeout}} [dependencies]
+ */
+export async function withinDemoStartupDeadline(stage, deadline, dependencies = {}) {
+	const now = dependencies.now ?? Date.now;
+	const setTimer = dependencies.setTimer ?? setTimeout;
+	const clearTimer = dependencies.clearTimer ?? clearTimeout;
+	const remaining = deadline - now();
+	if (!Number.isFinite(deadline) || remaining <= 0 || remaining > DEMO_STARTUP_LIMIT_MS) {
+		throw new Error('surface demo startup timed out');
+	}
+	let timer;
+	const timeout = new Promise((_, reject) => {
+		timer = setTimer(() => reject(new Error('surface demo startup timed out')), remaining);
+		timer.unref?.();
+	});
+	try {
+		return await Promise.race([stage, timeout]);
+	} finally {
+		clearTimer(timer);
+	}
+}
+
+/**
+ * @param {Promise<void>} presenterReady
+ * @param {Promise<{code: number | null, signal: NodeJS.Signals | null}>} browserExit
+ * @param {(line: string) => void} [write]
+ * @param {() => Promise<void>} [afterReady]
+ */
+export async function holdDemoPresentation(
+	presenterReady,
+	browserExit,
+	write = console.log,
+	afterReady = async () => undefined
+) {
+	const first = await Promise.race([
+		presenterReady.then(() => ({ kind: 'ready' })),
+		browserExit.then((exit) => ({ kind: 'exit', exit }))
+	]);
+	if (first.kind === 'exit') throw new Error('demo browser exited before presenter readiness');
+	emitDemoReady(write);
+	await afterReady();
+	const exit = await browserExit;
+	if (exit.code !== 0 || exit.signal !== null) throw new Error('demo browser exited unexpectedly');
+}
+
 export const DEFAULT_BROWSER_TEST_MATCH = '**/*.e2e.{ts,js}';
 export const REAL_BROWSER_TEST_MATCH = '**/*.real.e2e.ts';
 export const REAL_BROWSER_TEST_IGNORE = '**/*.real.e2e.ts';
@@ -278,6 +555,17 @@ export function buildWebServerEnvironment(manifest) {
 	});
 }
 
+/** @param {StackManifest} manifest @param {string} creatorCredential */
+export function buildDemoWebServerEnvironment(manifest, creatorCredential) {
+	if (!/^[A-Za-z0-9_-]{43}$/.test(creatorCredential)) {
+		throw new Error('invalid demo creator credential');
+	}
+	return Object.freeze({
+		...buildWebServerEnvironment(manifest),
+		SEMMACHINA_CREATOR_CREDENTIAL: creatorCredential
+	});
+}
+
 /** @param {StackManifest} manifest */
 export function buildBrowserTestEnvironment(manifest) {
 	const surface = buildSurfaceEnvironment(manifest);
@@ -288,6 +576,17 @@ export function buildBrowserTestEnvironment(manifest) {
 	});
 }
 
+/** @param {StackManifest} manifest @param {string} creatorCredential */
+export function buildDemoBrowserEnvironment(manifest, creatorCredential) {
+	if (!/^[A-Za-z0-9_-]{43}$/.test(creatorCredential)) {
+		throw new Error('invalid demo creator credential');
+	}
+	return Object.freeze({
+		REAL_SURFACE_WORLD_PREFIX: manifest.world_prefix,
+		REAL_SURFACE_DEMO_CREDENTIAL: creatorCredential
+	});
+}
+
 /** @param {Record<string, string | undefined>} environment */
 export function sanitizeBrowserEnvironment(environment) {
 	const clean = { ...environment };
@@ -295,6 +594,7 @@ export function sanitizeBrowserEnvironment(environment) {
 		if (
 			key === 'GEMINI_API_KEY' ||
 			key === 'SEMMACHINA_PAID_SMOKE' ||
+			key === 'SEMMACHINA_DEMO_AUTO_CLOSE_PROOF' ||
 			key.startsWith('REAL_SURFACE_') ||
 			key.startsWith('SEMMACHINA_GRAPHQL_') ||
 			key.startsWith('SEMMACHINA_PLAYER_') ||
@@ -1153,3 +1453,7 @@ export function controlledTerminationSignals(source = process) {
 		}
 	};
 }
+import { randomBytes } from 'node:crypto';
+import { chmod, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import nodePath from 'node:path';
