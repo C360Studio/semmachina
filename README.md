@@ -27,6 +27,7 @@ voice.
 | Document | What it holds |
 |---|---|
 | [`Founding proposal`](docs/proposals/fiction-first-rpg.md) | Idea review and engine decomposition |
+| [`Federation roadmap`](docs/proposals/living-world-federation-roadmap.md) | Hypothetical zone and handoff proof |
 | [`World authoring guide`](docs/guides/world-authoring.md) | Packages, overlays, places, rules, and migration |
 | [`Gemini smoke runbook`](docs/runbooks/bellweather-gemini-smoke.md) | Operator-only paid smoke |
 | [`openspec/project.md`](openspec/project.md) | Purpose, product boundary (game repo vs engine asks), conventions |
