@@ -91,7 +91,7 @@ describe('CreatorSurface', () => {
 			worldLoader,
 			keyFactory: () => 'key-1'
 		});
-		const credential = screen.getByLabelText('Creator credential');
+		const credential = screen.getByLabelText('World passphrase');
 
 		await credential.fill('creator-secret');
 		await screen.getByRole('button', { name: 'Enter world' }).click();
@@ -220,6 +220,9 @@ describe('CreatorSurface', () => {
 		await expect.element(terminalRegion).toHaveFocus();
 		await expect.element(resolution).toBeVisible();
 		expect(resolution.length).toBe(1);
+		// The mechanics disclosure defaults closed in fiction presentation
+		// (CreatorSurface's default); expand it before asserting on dl content.
+		await resolution.getByText('Mechanics').click();
 		await expect.element(screen.getByText('hint (hint level: connect)')).toBeVisible();
 
 		const continueButton = screen.getByRole('button', { name: 'Continue' });
@@ -230,6 +233,104 @@ describe('CreatorSurface', () => {
 
 		await continueButton.click();
 		expect(controller.events.at(-1)).toEqual({ type: 'TerminalAcknowledged' });
+	});
+
+	it('accumulates one past history entry above the current resolution when a second distinct terminal arrives', async () => {
+		const controller = new FakeController();
+		const screen = await render(CreatorSurface, {
+			controllerFactory: () => controller,
+			worldLoader: async () => world,
+			keyFactory: () => 'key-1'
+		});
+		const firstDelivery = rolledDelivery as unknown as TurnDelivery;
+		const secondDelivery = {
+			...rolledDelivery,
+			result: {
+				...rolledDelivery.result,
+				turn_id: 'turn-act-2',
+				action_id: 'act-2',
+				narration_ref: 'obj://ARTIFACTS/narration/turn-act-2',
+				resolution: { ...rolledDelivery.result.resolution, band: 'full' }
+			},
+			narration: {
+				...rolledDelivery.narration,
+				turn_id: 'turn-act-2',
+				band: 'full',
+				prose: 'The second latch gives way cleanly.'
+			}
+		} as unknown as TurnDelivery;
+
+		controller.emit(terminal(firstDelivery));
+		await expect
+			.element(
+				screen.getByRole('article', {
+					name: `Resolution for turn ${rolledDelivery.result.turn_id}`
+				})
+			)
+			.toBeVisible();
+		expect(screen.container.querySelectorAll('.history-entry')).toHaveLength(0);
+
+		controller.emit(terminal(secondDelivery));
+		await expect
+			.element(screen.getByRole('article', { name: 'Resolution for turn turn-act-2' }))
+			.toBeVisible();
+
+		const historyEntries = screen.container.querySelectorAll('.history-entry');
+		expect(historyEntries).toHaveLength(1);
+		expect(historyEntries[0].textContent).toContain('You: Open');
+		expect(historyEntries[0].textContent).toContain('The hinges scream, but the gate gives.');
+		const chip = historyEntries[0].querySelector('[data-band]');
+		expect(chip?.getAttribute('data-band')).toBe('partial');
+		expect(chip?.textContent).toBe('partial');
+		expect(
+			screen
+				.getByRole('article', {
+					name: `Resolution for turn ${rolledDelivery.result.turn_id}`
+				})
+				.query()
+		).toBeNull();
+	});
+
+	it('resets turn history when authenticationGeneration advances after re-authentication', async () => {
+		const controller = new FakeController();
+		const screen = await render(CreatorSurface, {
+			controllerFactory: () => controller,
+			worldLoader: async () => world,
+			keyFactory: () => 'key-1'
+		});
+		const firstDelivery = rolledDelivery as unknown as TurnDelivery;
+		const secondDelivery = {
+			...rolledDelivery,
+			result: { ...rolledDelivery.result, turn_id: 'turn-act-2', action_id: 'act-2' }
+		} as unknown as TurnDelivery;
+
+		controller.emit(terminal(firstDelivery));
+		// Yield so the history effect observes the first identity before the
+		// second terminal arrives — two emits back-to-back with no await in
+		// between would otherwise collapse into one flush that only ever sees
+		// the second (final) resolution.
+		await expect
+			.element(
+				screen.getByRole('article', {
+					name: `Resolution for turn ${rolledDelivery.result.turn_id}`
+				})
+			)
+			.toBeVisible();
+		controller.emit(terminal(secondDelivery));
+		await expect
+			.element(screen.getByRole('article', { name: 'Resolution for turn turn-act-2' }))
+			.toBeVisible();
+		expect(screen.container.querySelectorAll('.history-entry')).toHaveLength(1);
+
+		// Re-authentication (sign-out, then a fresh sign-in) bumps
+		// authenticationGeneration. Stale history from the prior session must
+		// not survive into the newly authenticated one.
+		controller.emit({ ...idle(), authenticationGeneration: 2 });
+
+		await vi.waitFor(() =>
+			expect(screen.container.querySelectorAll('.history-entry')).toHaveLength(0)
+		);
+		expect(screen.getByRole('article', { name: /Resolution for turn/ }).query()).toBeNull();
 	});
 
 	it('removes terminal presentation and fails closed only when the machine reports protocol_error', async () => {

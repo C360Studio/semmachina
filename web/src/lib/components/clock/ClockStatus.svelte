@@ -15,7 +15,7 @@
 	aria-label="Clock status"
 >
 	{#if clock.state === 'configured'}
-		<span class="state-label">Configured</span>
+		<span class="state-label sr-only">Configured</span>
 		<dl>
 			<dt>{clock.label}</dt>
 			<dd>{clock.value} {clock.unit}</dd>
@@ -31,15 +31,46 @@
 
 <style>
 	.clock-status {
-		border-inline-start: 0.25rem solid currentColor;
+		background: var(--color-surface);
+		border: 1px solid var(--color-border);
+		border-inline-start: 0.25rem solid var(--color-accent);
+		border-radius: var(--radius-md);
+		box-shadow: var(--shadow-sm);
 		display: grid;
-		gap: 0.25rem;
-		padding: 0.75rem 1rem;
+		gap: var(--space-2);
+		padding: var(--space-3) var(--space-4);
 	}
 
-	.state-label,
-	dt {
+	.clock-status[data-state='not_configured'] {
+		border-inline-start-color: var(--color-ink-faint);
+	}
+
+	.clock-status[data-state='error'] {
+		border-inline-start-color: var(--color-danger);
+		background: var(--color-danger-surface);
+	}
+
+	.state-label {
+		font-size: var(--font-size-xs);
 		font-weight: 650;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: var(--color-ink-muted);
+	}
+
+	.clock-status[data-state='error'] .state-label {
+		color: var(--color-danger-ink);
+	}
+
+	/* The "Configured" label is redundant for sighted users once the clock's
+	   own label/value pair is visible (e.g. "Day — 3 days"), but screen
+	   reader users still benefit from the explicit state announcement.
+	   .sr-only is defined once, globally, in src/lib/styles/app.css. */
+
+	dt {
+		font-size: var(--font-size-xs);
+		font-weight: 600;
+		color: var(--color-ink-muted);
 	}
 
 	dl,
@@ -50,7 +81,20 @@
 
 	dl {
 		display: grid;
-		grid-template-columns: max-content 1fr;
-		gap: 0.25rem 0.75rem;
+		gap: 0.1rem;
+	}
+
+	dd {
+		font-size: var(--font-size-lg);
+		font-weight: 600;
+	}
+
+	.clock-status p {
+		color: var(--color-ink-muted);
+		font-size: var(--font-size-sm);
+	}
+
+	.clock-status[data-state='error'] p {
+		color: var(--color-danger-ink);
 	}
 </style>

@@ -39,7 +39,7 @@ export async function completeActionFreeJourney(page: Page, worldPrefix: string)
 		);
 		const login = page.waitForResponse((response) => response.url().endsWith('/api/auth/login'));
 		const world = page.waitForResponse((response) => response.url().endsWith('/api/world'));
-		const credentialInput = page.getByLabel('Creator credential');
+		const credentialInput = page.getByLabel('World passphrase');
 		await credentialInput.fill(creatorCredential);
 		await page.getByRole('button', { name: 'Enter world' }).click();
 		emitSurfaceCheckpoint('login_submitted');

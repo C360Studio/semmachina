@@ -30,6 +30,12 @@ describe('SchematicTopology', () => {
 			.element(screen.getByText('Schematic mode — some positions are inferred.'))
 			.toBeVisible();
 		await expect.element(screen.getByRole('region', { name: 'Topology details' })).toBeVisible();
+
+		// The "World details" disclosure defaults closed; expand it before
+		// asserting on its content (a closed <details> hides content from
+		// toBeVisible, and its descendants are excluded from the accessibility
+		// tree entirely).
+		await screen.getByText('World details').click();
 		await expect.element(screen.getByText('North Gate (north-gate)')).toBeVisible();
 		await expect.element(screen.getByText('Market Square (market)')).toBeVisible();
 		await expect.element(screen.getByText('North Gate to Market Square')).toBeVisible();
@@ -146,10 +152,10 @@ describe('SchematicTopology', () => {
 			'[data-edge-from="rect-source"][data-edge-to="rect-target"]'
 		);
 
-		expect(Number(circleEdge?.getAttribute('x2'))).toBeCloseTo(86);
+		expect(Number(circleEdge?.getAttribute('x2'))).toBeCloseTo(84);
 		expect(Number(circleEdge?.getAttribute('y2'))).toBeCloseTo(0);
-		expect(Number(rectangleEdge?.getAttribute('x2'))).toBeCloseTo(86);
-		expect(Number(rectangleEdge?.getAttribute('y2'))).toBeCloseTo(93);
+		expect(Number(rectangleEdge?.getAttribute('x2'))).toBeCloseTo(84);
+		expect(Number(rectangleEdge?.getAttribute('y2'))).toBeCloseTo(92);
 	});
 
 	it('renders self and coincident-position edges as visible directed loops outside node bounds', async () => {
@@ -186,8 +192,8 @@ describe('SchematicTopology', () => {
 			'path[data-edge-from="coincident-source"][data-edge-to="coincident-target"][data-edge-kind="loop"]'
 		);
 
-		expect(selfLoop).toHaveAttribute('d', 'M 114 100 C 148 52 52 52 86 100');
-		expect(coincidentLoop).toHaveAttribute('d', 'M 314 300 C 348 252 252 252 286 300');
+		expect(selfLoop).toHaveAttribute('d', 'M 116 100 C 148 52 52 52 84 100');
+		expect(coincidentLoop).toHaveAttribute('d', 'M 316 300 C 348 252 252 252 284 300');
 		expect(selfLoop).toHaveAttribute('marker-end', 'url(#topology-arrow)');
 		expect(coincidentLoop).toHaveAttribute('marker-end', 'url(#topology-arrow)');
 		expect(visual?.querySelector('line[data-edge-from="self"][data-edge-to="self"]')).toBeNull();
@@ -203,6 +209,8 @@ describe('SchematicTopology', () => {
 		expect(left).toBeLessThan(52);
 		expect(top).toBeLessThan(52);
 		expect(left + width).toBeGreaterThan(348);
+
+		await screen.getByText('World details').click();
 		await expect.element(screen.getByText('Loop Node to Loop Node')).toBeVisible();
 		await expect.element(screen.getByText('Coincident Source to Coincident Target')).toBeVisible();
 	});
@@ -229,6 +237,9 @@ describe('SchematicTopology', () => {
 	it('activates nodes in their labelled keyboard focus order', async () => {
 		const onNodeActivate = vi.fn();
 		const screen = await render(SchematicTopology, { layout: mixedLayout, onNodeActivate });
+		// The activation buttons live inside the "World details" disclosure,
+		// which defaults closed; open it so the buttons are focusable.
+		await screen.getByText('World details').click();
 		const northGate = screen.getByRole('button', { name: 'Activate North Gate' });
 		const market = screen.getByRole('button', { name: 'Activate Market Square' });
 		const buttons = screen.getByRole('button').elements() as HTMLButtonElement[];
@@ -253,6 +264,7 @@ describe('SchematicTopology', () => {
 		const screen = await render(SchematicTopology, { layout: mixedLayout });
 
 		expect(screen.getByRole('button').elements()).toHaveLength(0);
+		await screen.getByText('World details').click();
 		await expect.element(screen.getByText('North Gate (north-gate)')).toBeVisible();
 		await expect.element(screen.getByText('Market Square (market)')).toBeVisible();
 	});

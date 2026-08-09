@@ -1,0 +1,119 @@
+/*
+ * Design tokens for the SemMachina web surface.
+ *
+ * Every component color goes through these custom properties rather than a
+ * literal value: a world package will eventually ship palette overrides as
+ * data, and tokens are the seam that makes that possible without touching
+ * component markup.
+ *
+ * Light theme (warm paper-and-ink) is the default; dark theme responds to
+ * prefers-color-scheme. The accent stays in the deep oxblood/brass family in
+ * both themes deliberately, to avoid reading as a generic SaaS blue.
+ */
+
+:root {
+	/* Color */
+	--color-bg: #f3ead9;
+	--color-surface: #fffcf5;
+	--color-surface-raised: #ffffff;
+	--color-border: #ddcdaf;
+
+	--color-ink: #291f16;
+	--color-ink-muted: #6d5d49;
+	--color-ink-faint: #9a8a72;
+
+	--color-accent: #7a2e2e;
+	--color-accent-strong: #5c2020;
+	--color-accent-ink: #fff8f0;
+
+	--color-danger: #9c2b23;
+	--color-danger-surface: #f7e1db;
+	--color-danger-ink: #5a1712;
+
+	--color-success: #3d6b45;
+	--color-success-surface: #e4ecdb;
+
+	--color-amber: #9c6a1f;
+	--color-amber-surface: #f2e4c5;
+
+	--color-neutral: #5c5646;
+	--color-neutral-surface: #ece4d3;
+
+	--color-focus-ring: #7a2e2e;
+
+	/* Typography */
+	--font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+	--font-serif: Georgia, 'Iowan Old Style', 'Palatino Linotype', Palatino, serif;
+	--font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+
+	--font-size-xs: 0.75rem;
+	--font-size-sm: 0.875rem;
+	--font-size-md: 1rem;
+	--font-size-lg: 1.125rem;
+	--font-size-xl: 1.375rem;
+	--font-size-2xl: 1.75rem;
+
+	--line-height-prose: 1.65;
+	--line-height-ui: 1.45;
+
+	/* Spacing scale */
+	--space-1: 0.25rem;
+	--space-2: 0.5rem;
+	--space-3: 0.75rem;
+	--space-4: 1rem;
+	--space-5: 1.5rem;
+	--space-6: 2rem;
+	--space-7: 3rem;
+	--space-8: 4rem;
+
+	/* Radii */
+	--radius-sm: 0.25rem;
+	--radius-md: 0.5rem;
+	--radius-lg: 1rem;
+	--radius-pill: 999px;
+
+	/* Elevation */
+	--shadow-sm: 0 1px 2px rgba(41, 31, 22, 0.1);
+	--shadow-md: 0 8px 24px rgba(41, 31, 22, 0.14);
+	--shadow-action-bar: 0 -2px 14px rgba(41, 31, 22, 0.12);
+
+	/* Motion */
+	--transition-fast: 120ms ease;
+	--transition-base: 200ms ease;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--color-bg: #1b1512;
+		--color-surface: #251e18;
+		--color-surface-raised: #2e261e;
+		--color-border: #4a3c2c;
+
+		--color-ink: #f1e5d2;
+		--color-ink-muted: #c2b096;
+		--color-ink-faint: #8c7a61;
+
+		--color-accent: #cf9264;
+		--color-accent-strong: #e0aa7e;
+		--color-accent-ink: #241209;
+
+		--color-danger: #e28779;
+		--color-danger-surface: #3b1f19;
+		--color-danger-ink: #ffe2da;
+
+		--color-success: #8fb587;
+		--color-success-surface: #223021;
+
+		--color-amber: #d3a75a;
+		--color-amber-surface: #3a2d16;
+
+		--color-neutral: #b7ab93;
+		--color-neutral-surface: #2c2720;
+
+		--color-focus-ring: #d3a75a;
+
+		--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+		--shadow-md: 0 8px 24px rgba(0, 0, 0, 0.5);
+		--shadow-action-bar: 0 -2px 14px rgba(0, 0, 0, 0.5);
+	}
+}
