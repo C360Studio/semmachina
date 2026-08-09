@@ -1,0 +1,195 @@
+@import './tokens.css';
+
+/* Reset */
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	height: 100%;
+}
+
+body {
+	margin: 0;
+	background: var(--color-bg);
+	color: var(--color-ink);
+	font-family: var(--font-sans);
+	font-size: var(--font-size-md);
+	line-height: var(--line-height-ui);
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
+}
+
+img,
+svg {
+	max-width: 100%;
+	display: block;
+}
+
+/* Base typography */
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+	margin: 0 0 var(--space-3);
+	font-weight: 650;
+	line-height: 1.25;
+}
+
+p {
+	margin: 0 0 var(--space-3);
+}
+
+p:last-child {
+	margin-bottom: 0;
+}
+
+ul,
+ol {
+	margin: 0;
+	padding-inline-start: 1.25em;
+}
+
+dl,
+dd {
+	margin: 0;
+}
+
+a {
+	color: var(--color-accent);
+}
+
+small {
+	color: var(--color-ink-muted);
+}
+
+/* Form controls */
+
+button,
+input,
+textarea,
+select {
+	font: inherit;
+	color: inherit;
+}
+
+label {
+	display: block;
+	margin-bottom: var(--space-1);
+	font-size: var(--font-size-sm);
+	font-weight: 600;
+	color: var(--color-ink-muted);
+}
+
+input[type='text'],
+input[type='password'],
+input[type='search'] {
+	width: 100%;
+	background: var(--color-surface);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-sm);
+	padding: var(--space-2) var(--space-3);
+	color: var(--color-ink);
+	transition: border-color var(--transition-fast);
+}
+
+input[type='text']:focus-visible,
+input[type='password']:focus-visible,
+input[type='search']:focus-visible {
+	border-color: var(--color-accent);
+}
+
+button {
+	cursor: pointer;
+	background: var(--color-accent);
+	color: var(--color-accent-ink);
+	border: 1px solid var(--color-accent);
+	border-radius: var(--radius-sm);
+	padding: var(--space-2) var(--space-4);
+	font-weight: 600;
+	transition:
+		background var(--transition-fast),
+		opacity var(--transition-fast),
+		border-color var(--transition-fast);
+}
+
+button:hover:not(:disabled) {
+	background: var(--color-accent-strong);
+	border-color: var(--color-accent-strong);
+}
+
+button:disabled,
+input:disabled {
+	opacity: 0.55;
+	cursor: not-allowed;
+}
+
+button[type='button'] {
+	background: var(--color-surface);
+	color: var(--color-ink);
+	border-color: var(--color-border);
+}
+
+button[type='button']:hover:not(:disabled) {
+	background: var(--color-surface);
+	border-color: var(--color-accent);
+	color: var(--color-accent);
+}
+
+details > summary {
+	cursor: pointer;
+}
+
+details > summary::-webkit-details-marker {
+	color: var(--color-ink-muted);
+}
+
+/* Focus visibility */
+
+:focus-visible {
+	outline: 2px solid var(--color-focus-ring);
+	outline-offset: 2px;
+}
+
+/* Visually hidden but still available to assistive tech. Keeps a nonzero
+   (1px) footprint rather than display:none/width:0 — some assistive tech
+   skips zero-size elements. */
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect(0, 0, 0, 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+/* Status and alert affordances */
+
+[role='alert'] {
+	color: var(--color-danger-ink);
+	background: var(--color-danger-surface);
+	border: 1px solid var(--color-danger);
+	border-radius: var(--radius-sm);
+	padding: var(--space-3) var(--space-4);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
+	}
+}

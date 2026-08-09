@@ -50,6 +50,12 @@ describe('ResolutionCard', () => {
 		await expect.element(article.getByRole('heading', { name: 'Resolution' })).toBeVisible();
 		expect(article.element().querySelector('dl')).not.toBeNull();
 		await expect.element(article.getByText('The hinges scream, but the gate gives.')).toBeVisible();
+		// The chip strip is visible in the collapsed (default, fiction) state; the
+		// exact-match "Risk high" text is unambiguous even though the dl below,
+		// once expanded, separately renders a bare "high" dd for the same field.
+		await expect.element(article.getByText('Risk high', { exact: true })).toBeVisible();
+
+		await article.getByText('Mechanics').click();
 		await expect.element(article.getByText('partial', { exact: true })).toBeVisible();
 		await expect.element(article.getByText('2d6-pbta/v1')).toBeVisible();
 		await expect.element(article.getByText('4, 4')).toBeVisible();
@@ -78,6 +84,7 @@ describe('ResolutionCard', () => {
 		} as const satisfies Readonly<ResolutionView>;
 		const screen = await render(ResolutionCard, { resolution: noRoll });
 
+		await screen.getByText('Mechanics').click();
 		await expect.element(screen.getByText('Not required')).toBeVisible();
 		expect(screen.getByText('Dice').query()).toBeNull();
 		expect(screen.getByText('Modifier total').query()).toBeNull();
@@ -105,13 +112,36 @@ describe('ResolutionCard', () => {
 		} as const satisfies Readonly<ResolutionView>;
 		const screen = await render(ResolutionCard, { resolution: failed });
 
+		await expect.element(screen.getByText('The mechanism jams.')).toBeVisible();
+		await screen.getByText('Mechanics').click();
 		await expect.element(screen.getByText('Failed', { exact: true })).toBeVisible();
 		await expect.element(screen.getByText('effect-invalid')).toBeVisible();
-		await expect.element(screen.getByText('The mechanism jams.')).toBeVisible();
 		await expect.element(screen.getByText('unlikely')).toBeVisible();
-		await expect.element(screen.getByText('moderate')).toBeVisible();
+		// Exact match, not a substring match: the risk chip in the summary
+		// (always rendered, open or closed) reads "Risk moderate", which would
+		// otherwise collide with the dl's bare "moderate" dd under Playwright's
+		// strict-mode element resolution.
+		await expect.element(screen.getByText('moderate', { exact: true })).toBeVisible();
 		await expect.element(screen.getByText('setback')).toBeVisible();
 		expect(screen.getByText('Roll', { exact: true }).query()).toBeNull();
 		expect(screen.getByText('Dice').query()).toBeNull();
+	});
+
+	it('defaults the mechanics disclosure closed in fiction presentation and open in crunch presentation', async () => {
+		const fictionScreen = await render(ResolutionCard, {
+			resolution: rolled,
+			presentation: 'fiction'
+		});
+		const fictionDetails = fictionScreen.container.querySelector('details.mechanics');
+		expect(fictionDetails).not.toBeNull();
+		expect((fictionDetails as HTMLDetailsElement).open).toBe(false);
+
+		const crunchScreen = await render(ResolutionCard, {
+			resolution: rolled,
+			presentation: 'crunch'
+		});
+		const crunchDetails = crunchScreen.container.querySelector('details.mechanics');
+		expect(crunchDetails).not.toBeNull();
+		expect((crunchDetails as HTMLDetailsElement).open).toBe(true);
 	});
 });

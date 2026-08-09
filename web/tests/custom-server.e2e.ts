@@ -52,7 +52,7 @@ async function fixtureState(request: APIRequestContext): Promise<FixtureState> {
 
 async function enterWorld(page: Page): Promise<void> {
 	await page.goto(browserURL);
-	await page.getByLabel('Creator credential').fill(credential);
+	await page.getByLabel('World passphrase').fill(credential);
 	const preauth = page.waitForResponse((response) => response.url().endsWith('/api/auth/preauth'));
 	const login = page.waitForResponse((response) => response.url().endsWith('/api/auth/login'));
 	await page.getByRole('button', { name: 'Enter world' }).click();
@@ -244,6 +244,10 @@ test.describe.serial('Group 7 deterministic creator acceptance', () => {
 			'data-position-kind',
 			'schematic'
 		);
+		// The "World details" disclosure defaults closed (entity IDs and
+		// coordinates are technical detail); expand it before asserting on
+		// the directed-connections content it hides.
+		await page.getByText('World details').click();
 		await expect(page.getByText('Greenhouse to Bellweather Maze', { exact: true })).toBeVisible();
 		await expect(page.getByText('Clock not configured.', { exact: true })).toBeVisible();
 

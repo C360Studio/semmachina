@@ -11,9 +11,17 @@
 		readonly onNodeActivate?: (nodeId: string) => void;
 	}
 
-	const NODE_HALF_SIZE = 14;
-	const LABEL_OFFSET = 20;
-	const LABEL_CHARACTER_ALLOWANCE = 14;
+	// Panel-legibility constants. The panel this renders into is ~20rem wide
+	// (≈300px of actual SVG); node x/y positions come from the schematic-layout
+	// module (off-limits) and can easily span 700+ user units, so the viewBox
+	// gets scaled down by roughly half. A larger source font size and a tighter
+	// label-width estimate (less viewBox inflation from long labels) both push
+	// the effective on-panel text size up without touching node coordinates.
+	const NODE_HALF_SIZE = 16;
+	const LABEL_OFFSET = 22;
+	// Measured glyph width ≈8.6px/char at the 18px label font below; rounded up
+	// so long labels don't under-budget against the fixed LABEL_OFFSET padding.
+	const LABEL_CHARACTER_ALLOWANCE = 9;
 	const LOOP_EXTENT = 48;
 	const VISUAL_PADDING = 32;
 	const EMPTY_VIEW_BOX = '-32 -32 64 64';
@@ -188,70 +196,85 @@
 					transform={transform(node)}
 				>
 					{#if node.position.kind === 'authored'}
-						<circle r="14"></circle>
+						<circle r={NODE_HALF_SIZE}></circle>
 					{:else}
-						<rect x="-14" y="-14" width="28" height="28" rx="3"></rect>
+						<rect
+							x={-NODE_HALF_SIZE}
+							y={-NODE_HALF_SIZE}
+							width={NODE_HALF_SIZE * 2}
+							height={NODE_HALF_SIZE * 2}
+							rx={NODE_HALF_SIZE / 2}
+						></rect>
 					{/if}
-					<text x="20" y="5">{node.label}</text>
+					<text x={LABEL_OFFSET} y="6">{node.label}</text>
 				</g>
 			{/each}
 		</g>
 	</svg>
 
 	<section class="topology-details" aria-label="Topology details">
-		<h2>Places</h2>
-		<ul>
-			{#each layout.nodes as node (node.id)}
-				<li>
-					{#if onNodeActivate === undefined}
-						<span>{node.label} ({node.id})</span>
-					{:else}
-						<button type="button" onclick={() => onNodeActivate?.(node.id)}>
-							<span class="action">Activate</span>
-							{node.label}
-						</button>
-						<span> ({node.id})</span>
-					{/if}
-					<span class="position"> {positionDescription(node)}</span>
-				</li>
-			{/each}
-		</ul>
+		<details class="world-details">
+			<summary>World details</summary>
 
-		<h2>Directed connections</h2>
-		{#if layout.edges.length === 0}
-			<p>No directed connections.</p>
-		{:else}
+			<h2>Places</h2>
 			<ul>
-				{#each layout.edges as edge (`${edge.from}:${edge.to}`)}
-					<li>{nodeLabel(edge.from)} to {nodeLabel(edge.to)}</li>
+				{#each layout.nodes as node (node.id)}
+					<li>
+						{#if onNodeActivate === undefined}
+							<span>{node.label} ({node.id})</span>
+						{:else}
+							<button type="button" onclick={() => onNodeActivate?.(node.id)}>
+								<span class="action">Activate</span>
+								{node.label}
+							</button>
+							<span> ({node.id})</span>
+						{/if}
+						<span class="position"> {positionDescription(node)}</span>
+					</li>
 				{/each}
 			</ul>
-		{/if}
+
+			<h2>Directed connections</h2>
+			{#if layout.edges.length === 0}
+				<p>No directed connections.</p>
+			{:else}
+				<ul>
+					{#each layout.edges as edge (`${edge.from}:${edge.to}`)}
+						<li>{nodeLabel(edge.from)} to {nodeLabel(edge.to)}</li>
+					{/each}
+				</ul>
+			{/if}
+		</details>
 	</section>
 </section>
 
 <style>
 	.topology {
 		display: grid;
-		gap: 1rem;
+		gap: var(--space-4);
+		color: var(--color-ink);
 	}
 
 	.mode-label {
-		font-weight: 650;
+		font-style: italic;
+		font-size: var(--font-size-sm);
+		font-weight: 400;
+		color: var(--color-ink-muted);
 		margin: 0;
 	}
 
 	svg {
-		background: var(--topology-background, #f8fafc);
-		border: 1px solid currentColor;
+		background: var(--color-surface);
+		border: 1px solid var(--color-border);
+		border-radius: var(--radius-md);
 		inline-size: 100%;
-		min-block-size: 20rem;
+		min-block-size: 18rem;
 	}
 
 	line,
 	.directed-edge {
-		stroke: currentColor;
-		stroke-width: 2;
+		stroke: var(--color-ink-faint);
+		stroke-width: 1.5;
 		vector-effect: non-scaling-stroke;
 	}
 
@@ -260,44 +283,74 @@
 	}
 
 	marker path {
-		fill: currentColor;
+		fill: var(--color-ink-faint);
 	}
 
 	circle,
 	rect {
-		fill: var(--topology-node-background, white);
-		stroke: currentColor;
+		fill: var(--color-surface-raised);
+		stroke: var(--color-accent);
 		stroke-width: 2;
 		vector-effect: non-scaling-stroke;
 	}
 
 	.schematic rect {
-		stroke-dasharray: 4 2;
+		stroke-dasharray: 3 3;
+		stroke-linecap: round;
 	}
 
 	text {
-		fill: currentColor;
-		font:
-			14px system-ui,
-			sans-serif;
+		fill: var(--color-ink);
+		/* Sized well above the app's base UI font: this SVG is scaled down to
+		   fit the ~20rem side panel against a viewBox shaped by (off-limits)
+		   node coordinates, so the rendered label ends up meaningfully smaller
+		   than the source font-size. Starting from a larger source size is what
+		   keeps the scaled-down result legible. */
+		font: 600 18px/1.2 var(--font-sans);
+		/* Halo the label in the SVG background color so it stays legible where
+		   an edge line runs underneath it. */
+		paint-order: stroke fill;
+		stroke: var(--color-surface);
+		stroke-width: 5px;
+		stroke-linejoin: round;
 	}
 
 	.topology-details {
-		border-inline-start: 0.25rem solid currentColor;
-		padding-inline-start: 1rem;
+		border-inline-start: 0.25rem solid var(--color-border);
+		padding-inline-start: var(--space-4);
+	}
+
+	.world-details summary {
+		font-weight: 600;
+		font-size: var(--font-size-sm);
+		color: var(--color-ink-muted);
+		padding-block: var(--space-1);
 	}
 
 	.topology-details h2 {
-		font-size: 1rem;
-		margin-block: 0.5rem;
+		font-size: var(--font-size-sm);
+		font-weight: 650;
+		color: var(--color-ink-muted);
+		margin-block: var(--space-3) var(--space-1);
 	}
 
 	.topology-details ul {
-		margin-block: 0.25rem 1rem;
+		list-style: none;
+		padding-inline-start: 0;
+		margin-block: var(--space-1) var(--space-3);
+		display: grid;
+		gap: var(--space-1);
+	}
+
+	.topology-details li {
+		font-size: var(--font-size-sm);
 	}
 
 	.position {
 		display: block;
+		font-family: var(--font-mono);
+		font-size: var(--font-size-xs);
+		color: var(--color-ink-faint);
 	}
 
 	.action {

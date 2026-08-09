@@ -184,7 +184,7 @@ test('authenticates the headed demo and yields control to the presenter', async 
 			);
 			const login = page.waitForResponse((response) => response.url().endsWith('/api/auth/login'));
 			const world = page.waitForResponse((response) => response.url().endsWith('/api/world'));
-			const input = page.getByLabel('Creator credential');
+			const input = page.getByLabel('World passphrase');
 			await input.fill(demoAuthority.credential);
 			await page.getByRole('button', { name: 'Enter world' }).click();
 			for (const [label, response] of [

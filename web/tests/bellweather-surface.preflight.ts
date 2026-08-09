@@ -83,7 +83,7 @@ async function assertBrowserAuthorityBoundary(
 			'current URL exposed the creator credential'
 		).toBe(false);
 		if (requireCredentialInputGone) {
-			await expect(page.getByLabel('Creator credential')).toHaveCount(0);
+			await expect(page.getByLabel('World passphrase')).toHaveCount(0);
 		}
 	} catch (error) {
 		throw new Error('action-free preflight failed at browser authority boundary', { cause: error });
