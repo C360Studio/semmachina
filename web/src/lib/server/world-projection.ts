@@ -20,10 +20,13 @@ const LATITUDE = 'geo.location.latitude';
 const LONGITUDE = 'geo.location.longitude';
 const CONNECTS_TO = 'location.relation.connects-to';
 
-export const LOCATIONS_QUERY = `query SemMachinaLocations($prefix: String!, $limit: Int!) {
-  entitiesByPrefix(prefix: $prefix, limit: $limit) {
-    id
-    triples { subject predicate object datatype }
+export const LOCATIONS_QUERY = `query SemMachinaLocations($prefix: String!, $limit: Int!, $cursor: String) {
+  entitiesByPrefix(prefix: $prefix, limit: $limit, cursor: $cursor) {
+    entities {
+      id
+      triples { subject predicate object datatype }
+    }
+    next_cursor
   }
 }`;
 
@@ -32,7 +35,10 @@ export const RELATIONSHIPS_QUERY = `query SemMachinaRelationships($entityId: Str
 }`;
 
 export const ENTITY_QUERY = `query SemMachinaEntity($id: String!) {
-  entity(id: $id) { id triples { subject predicate object datatype } }
+  entity(id: $id) {
+    entity { id triples { subject predicate object datatype } }
+    kvRevision
+  }
 }`;
 
 export type ProjectionErrorCode =
@@ -40,6 +46,7 @@ export type ProjectionErrorCode =
 	| 'scope_violation'
 	| 'dangling_relationship'
 	| 'projection_capacity_exceeded'
+	| 'index_not_ready'
 	| 'invalid_clock'
 	| 'invalid_upstream'
 	| 'upstream_unavailable';
@@ -268,20 +275,15 @@ function readRepresentation(
 function parseRelationship(value: unknown, scope: DeploymentScope): Relationship {
 	const candidate = record(value);
 	if (candidate === undefined) throw new ProjectionError('invalid_upstream');
-	const corrected = readRepresentation(candidate, ['from', 'to', 'predicate']);
-	const beta159 = readRepresentation(candidate, ['from_entity_id', 'to_entity_id', 'edge_type']);
-	if (corrected === undefined && beta159 === undefined)
-		throw new ProjectionError('invalid_upstream');
 	if (
-		corrected !== undefined &&
-		beta159 !== undefined &&
-		(corrected.from !== beta159.from ||
-			corrected.to !== beta159.to ||
-			corrected.predicate !== beta159.predicate)
+		Object.keys(candidate).length !== 3 ||
+		!['from', 'to', 'predicate'].every((key) => Object.hasOwn(candidate, key))
 	) {
 		throw new ProjectionError('invalid_upstream');
 	}
-	const relationship = corrected ?? (beta159 as Relationship);
+	const corrected = readRepresentation(candidate, ['from', 'to', 'predicate']);
+	if (corrected === undefined) throw new ProjectionError('invalid_upstream');
+	const relationship = corrected;
 	if (
 		!isScopedEntityId(relationship.from, scope.basePrefix) ||
 		!isScopedEntityId(relationship.to, scope.basePrefix)
@@ -350,6 +352,16 @@ function extractGraphQLField(document: unknown, field: string): unknown {
 	const root = record(document);
 	if (root === undefined) throw new ProjectionError('invalid_upstream');
 	if ('errors' in root && (!Array.isArray(root.errors) || root.errors.length > 0)) {
+		if (
+			Array.isArray(root.errors) &&
+			root.errors.some((value) => {
+				const error = record(value);
+				const extensions = record(error?.extensions);
+				return extensions?.code === 'index_not_ready';
+			})
+		) {
+			throw new ProjectionError('index_not_ready');
+		}
 		throw new ProjectionError('invalid_upstream');
 	}
 	const data = record(root.data);
@@ -454,13 +466,25 @@ export function createWorldProjectionAdapter(
 	async function projectClock(signal: AbortSignal): Promise<ClockProjection> {
 		const clock = config.clock;
 		if (clock.state === 'not_configured') return Object.freeze({ state: 'not_configured' });
-		const raw = await query(ENTITY_QUERY, { id: clock.entityId }, 'entity', signal);
-		if (!isScopedEntityId(clock.entityId, scope.basePrefix) || raw === null) {
+		const rawExact = await query(ENTITY_QUERY, { id: clock.entityId }, 'entity', signal);
+		if (!isScopedEntityId(clock.entityId, scope.basePrefix) || rawExact === null) {
 			throw new ProjectionError('invalid_clock');
 		}
 		let entity: ReturnType<typeof parseRawEntity>;
 		try {
-			entity = parseRawEntity(raw, scope, clock.entityId);
+			const exact = record(rawExact);
+			if (
+				exact === undefined ||
+				Object.keys(exact).length !== 2 ||
+				!Object.hasOwn(exact, 'entity') ||
+				!Object.hasOwn(exact, 'kvRevision') ||
+				typeof exact.kvRevision !== 'number' ||
+				!Number.isSafeInteger(exact.kvRevision) ||
+				exact.kvRevision < 1
+			) {
+				throw new ProjectionError('invalid_clock');
+			}
+			entity = parseRawEntity(exact.entity, scope, clock.entityId);
 		} catch {
 			throw new ProjectionError('invalid_clock');
 		}
@@ -490,15 +514,52 @@ export function createWorldProjectionAdapter(
 			const controller = new AbortController();
 			const deadline = setTimeout(() => controller.abort(), deadlineMs);
 			try {
-				const rawLocations = await query(
-					LOCATIONS_QUERY,
-					{ prefix: scope.locationPrefix, limit: config.graphql.placeLimit },
-					'entitiesByPrefix',
-					controller.signal
-				);
-				if (!Array.isArray(rawLocations)) throw new ProjectionError('invalid_upstream');
-				if (rawLocations.length >= config.graphql.placeLimit) {
-					throw new ProjectionError('projection_capacity_exceeded');
+				const rawLocations: unknown[] = [];
+				const seenCursors = new Set<string>();
+				let cursor: string | null = null;
+				for (let pageNumber = 0; ; pageNumber += 1) {
+					if (pageNumber >= config.graphql.placePageLimit) {
+						throw new ProjectionError('projection_capacity_exceeded');
+					}
+					const rawPage = await query(
+						LOCATIONS_QUERY,
+						{
+							prefix: scope.locationPrefix,
+							limit: config.graphql.placePageSize,
+							cursor
+						},
+						'entitiesByPrefix',
+						controller.signal
+					);
+					const page = record(rawPage);
+					const pageKeys = page === undefined ? [] : Object.keys(page);
+					if (
+						page === undefined ||
+						!pageKeys.every((key) => key === 'entities' || key === 'next_cursor') ||
+						!pageKeys.includes('entities') ||
+						!Array.isArray(page.entities) ||
+						!(
+							page.next_cursor === undefined ||
+							page.next_cursor === null ||
+							typeof page.next_cursor === 'string'
+						)
+					) {
+						throw new ProjectionError('invalid_upstream');
+					}
+					if (page.entities.length > config.graphql.placePageSize) {
+						throw new ProjectionError('projection_capacity_exceeded');
+					}
+					rawLocations.push(...page.entities);
+					if (rawLocations.length >= config.graphql.placeLimit) {
+						throw new ProjectionError('projection_capacity_exceeded');
+					}
+					const nextCursor = page.next_cursor;
+					if (nextCursor === undefined || nextCursor === null || nextCursor === '') break;
+					if (page.entities.length === 0 || seenCursors.has(nextCursor)) {
+						throw new ProjectionError('invalid_upstream');
+					}
+					seenCursors.add(nextCursor);
+					cursor = nextCursor;
 				}
 				const locations = rawLocations
 					.map((value) => parseLocation(value, scope))

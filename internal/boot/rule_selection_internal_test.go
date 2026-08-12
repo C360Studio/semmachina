@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/payloadregistry"
 	sspersona "github.com/c360studio/semstreams/persona"
+	"github.com/c360studio/semstreams/pkg/projection"
 	"github.com/c360studio/semstreams/processor/rule"
 
 	"github.com/c360studio/semmachina/fixtures"
@@ -65,9 +66,22 @@ func TestRuleProcessorConfig_ComposesOnlySelectedMechanicsAfterFixedEngineRules(
 	normalized.InlineRules = baseline.InlineRules
 	normalized.EntityWatchBuckets = baseline.EntityWatchBuckets
 	if !got.EnableGraphIntegration {
-		t.Fatal("selected remove_triple mechanics did not enable the processor's graph mutation lane")
+		t.Fatal("selected mechanics projection did not enable graph integration")
 	}
 	normalized.EnableGraphIntegration = baseline.EnableGraphIntegration
+	if len(got.ProjectionContracts) != 1 {
+		t.Fatalf("projection contracts = %#v, want one selected-pack contract", got.ProjectionContracts)
+	}
+	contract := got.ProjectionContracts[0]
+	if contract.Name != "mechanics-selected" ||
+		contract.EntityPattern != "c360.semmachina.mechanics.starter.*.*" {
+		t.Fatalf("selected mechanics contract = %#v", contract)
+	}
+	if len(contract.Groups) != 1 || contract.Groups[0].Mode != projection.ModeReconcile ||
+		!reflect.DeepEqual(contract.Groups[0].Predicates, []string{"world.location.current"}) {
+		t.Fatalf("selected mechanics groups = %#v", contract.Groups)
+	}
+	normalized.ProjectionContracts = baseline.ProjectionContracts
 	if !reflect.DeepEqual(normalized, baseline) {
 		t.Fatal("world mechanics changed fixed processor settings outside inline rules, watch patterns, and the required graph lane")
 	}
@@ -80,6 +94,59 @@ func TestRuleProcessorConfig_ComposesOnlySelectedMechanicsAfterFixedEngineRules(
 	for _, definition := range got.InlineRules {
 		if definition.ID == "unselected-runtime-invalid" {
 			t.Fatal("an unselected mechanics file entered the runtime rule configuration")
+		}
+	}
+	for _, definition := range got.InlineRules[len(baseline.InlineRules):] {
+		if len(definition.OnEnter) != 1 {
+			t.Fatalf("selected rule %q on_enter = %#v", definition.ID, definition.OnEnter)
+		}
+		action := definition.OnEnter[0]
+		if action.Type != rule.ActionTypeReconcilePredicates || action.ProjectionContract != contract.Name ||
+			action.ProjectionGroup != contract.Groups[0].Name {
+			t.Fatalf("selected rule %q action was not bound to its typed projection: %#v", definition.ID, action)
+		}
+	}
+}
+
+func TestRuleProcessorConfig_RejectsLegacyAppendBecauseItIsNotACompleteDesiredGroup(t *testing.T) {
+	registerRuleSelectionPredicates(t)
+	engine := ruleSelectionEngine(t, []string{"rules/selected.json"}, map[string]string{
+		"rules/selected.json": strings.Replace(
+			worldRuleJSON("selected-append", "item.attribute.quantity"),
+			`"type":"remove_triple","predicate":"world.location.current"`,
+			`"type":"add_triple","predicate":"item.attribute.quantity","object":"1"`, 1),
+	})
+
+	_, err := engine.ruleProcessorConfig()
+	if err == nil {
+		t.Fatal("ruleProcessorConfig accepted append semantics as a complete projection reconcile")
+	}
+	for _, want := range []string{"rules/selected.json", "selected-append", "add_triple", "complete desired group"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("legacy append refusal %q does not contain %q", err, want)
+		}
+	}
+}
+
+func TestRuleProcessorConfig_RejectsASelectorOutsideTheSelectedPackProjection(t *testing.T) {
+	registerRuleSelectionPredicates(t)
+	action := `{"type":"reconcile_predicates","predicate":"world.location.current",` +
+		`"projection_contract":"another-pack","projection_group":"location","max_iterations":1}`
+	definition := fmt.Sprintf(`{"id":"selected-foreign-selector","type":"expression","name":"selected",`+
+		`"enabled":true,"entity":{"pattern":"*.semmachina.*.*.item.*"},`+
+		`"conditions":[{"field":"item.attribute.quantity","operator":"lte","value":0}],`+
+		`"logic":"and","on_enter":[%s]}`, action)
+	engine := ruleSelectionEngine(t, []string{"rules/selected.json"}, map[string]string{
+		"rules/selected.json": definition,
+	})
+
+	_, err := engine.ruleProcessorConfig()
+	if err == nil {
+		t.Fatal("ruleProcessorConfig accepted a selector outside its selected-pack projection")
+	}
+	for _, want := range []string{"selected-foreign-selector", "another-pack", "mechanics-selected"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("foreign selector refusal %q does not contain %q", err, want)
 		}
 	}
 }
@@ -130,7 +197,7 @@ func TestDefinitionMutatesGraph_InspectsEveryExecutableActionList(t *testing.T) 
 		rule.ActionTypeAddTriple,
 		rule.ActionTypeRemoveTriple,
 		rule.ActionTypeUpdateTriple,
-		rule.ActionTypeReplaceOwned,
+		rule.ActionTypeReconcilePredicates,
 	}
 	for _, actionType := range graphActions {
 		action := rule.Action{Type: actionType}

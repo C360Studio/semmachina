@@ -1,32 +1,38 @@
+//go:build integration
+
 package turn_test
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
-	graphingest "github.com/c360studio/semstreams/processor/graph-ingest"
+	"github.com/c360studio/semstreams/pkg/projection"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/effect"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/testinfra"
 	"github.com/c360studio/semmachina/internal/turn"
 	"github.com/c360studio/semmachina/internal/vocabulary"
+	"github.com/c360studio/semmachina/internal/world"
 )
 
 // "Exactly one turn per action" and "exactly one phase per turn" are claims
 // about the GRAPH and about a real durable consumer, and both are where they can
 // be false. The mutation API offers two lanes that accept the same triples — one
-// merges by (subject, predicate) and one appends — and picking the wrong one
+// reconciles a complete predicate group and one appends — and picking the wrong one
 // leaves a turn holding two phases, with a success response and no error
 // anywhere. A fake with one lane cannot see that, and neither can a fake
 // consumer see an acknowledgment that never happened.
@@ -58,10 +64,11 @@ type countingStore struct {
 
 func (s *countingStore) CreateEntity(
 	ctx context.Context,
+	contract string,
 	entity *graph.EntityState,
 ) (graphio.CreateResult, error) {
 	s.creates.Add(1)
-	return s.Store.CreateEntity(ctx, entity)
+	return s.Store.CreateEntity(ctx, contract, entity)
 }
 
 // liveTurns is one world namespace with a recorder over the real graph and the
@@ -107,10 +114,16 @@ func startTurns(t *testing.T) *liveTurns {
 	if err != nil {
 		t.Fatalf("NewRecorder: %v", err)
 	}
-	return &liveTurns{
+	live := &liveTurns{
 		harness: harness, store: store, counted: counted, content: contentStore, recorder: recorder,
 		identity: identity, namespace: namespace,
 	}
+	// beta.160 no longer materializes relationship-target stubs. Production
+	// worlds already import the instance-configured player before intake starts;
+	// this integration fixture must establish the same precondition before the
+	// recorder reconciles player.turn.current after a turn birth.
+	live.bornPlayer(t, live.action("fixture-player-birth").PlayerID)
+	return live
 }
 
 // action builds a canonical action whose identity fields live in this test's own
@@ -172,7 +185,7 @@ func (w *liveTurns) advance(t *testing.T, a turn.Acceptance, phases ...vocabular
 
 // phaseValues reads every phase object the graph holds for a turn. A slice
 // rather than a single value on purpose: "how many values does this predicate
-// hold?" is the question that distinguishes a replace-lane write from an
+// hold?" is the question that distinguishes a complete reconcile from an
 // append-lane one.
 func (w *liveTurns) phaseValues(t *testing.T, turnEntityID string) []any {
 	t.Helper()
@@ -487,7 +500,7 @@ func TestIntegration_AnIdleGapLongerThanTheAckDeadlineDoesNotDegradeTheNextTurn(
 
 // The property the whole design rests on: a duplicate stage trigger leaves the
 // turn holding exactly one phase. The guard declines the second trigger, and
-// even a caller that wrote anyway converges, because the merge lane replaces.
+// even a caller that wrote anyway converges, because the reconcile lane replaces.
 func TestIntegration_ADuplicateStageTriggerLeavesExactlyOnePhase(t *testing.T) {
 	live := startTurns(t)
 	acceptance := live.accept(t, "act-stage")
@@ -509,8 +522,8 @@ func TestIntegration_ADuplicateStageTriggerLeavesExactlyOnePhase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Triples: %v", err)
 	}
-	if _, err := live.store.MergeTriples(t.Context(), acceptance.TurnEntityID, triples); err != nil {
-		t.Fatalf("MergeTriples: %v", err)
+	if _, err := live.store.Reconcile(t.Context(), projectioncontract.TurnPhaseState, acceptance.TurnEntityID, triples); err != nil {
+		t.Fatalf("Reconcile phase-state: %v", err)
 	}
 
 	phases := live.phaseValues(t, acceptance.TurnEntityID)
@@ -527,9 +540,9 @@ func TestIntegration_ADuplicateStageTriggerLeavesExactlyOnePhase(t *testing.T) {
 // APPEND lane really does leave a turn holding two phases, with a success
 // response and no error anywhere. Choosing between the two lanes is therefore a
 // correctness decision, and if a future semstreams version changes this, the
-// reason the phase writer uses MergeTriples changes with it and this test says
+// reason the phase writer uses a reconcile group changes with it and this test says
 // so.
-func TestIntegration_TheAppendLaneLeavesTwoPhasesWhichIsWhyTheMergeLaneIsUsed(t *testing.T) {
+func TestIntegration_TheAppendLaneLeavesTwoPhasesWhichIsWhyReconcileIsUsed(t *testing.T) {
 	live := startTurns(t)
 	acceptance := live.accept(t, "act-append")
 
@@ -540,36 +553,20 @@ func TestIntegration_TheAppendLaneLeavesTwoPhasesWhichIsWhyTheMergeLaneIsUsed(t 
 	}
 
 	for attempt := range 2 {
-		// beta.159 deduplicates an identical six-field tuple. These are two
+		// The append lane deduplicates an identical six-field tuple. These are two
 		// distinct observations of the same single-valued phase, which the add
-		// lane must preserve and the merge lane must replace.
+		// lane must preserve and the reconcile lane must replace.
 		for idx := range triples {
 			triples[idx].Context = fmt.Sprintf("append-control-%d", attempt)
 		}
-		request, err := json.Marshal(graph.AddTriplesBatchRequest{Triples: triples})
-		if err != nil {
-			t.Fatalf("encode add_batch: %v", err)
-		}
-		reply, err := live.harness.Client.RequestClassified(
-			t.Context(), graphingest.SubjectTripleAddBatch, request, 5*time.Second)
-		if err != nil {
-			t.Fatalf("add_batch attempt %d: %v", attempt+1, err)
-		}
-		var response graph.AddTriplesBatchResponse
-		if err := json.Unmarshal(reply, &response); err != nil {
-			t.Fatalf("decode add_batch response: %v", err)
-		}
-		if response.WrittenCount != len(triples) || response.Deduplicated != 0 ||
-			len(response.FailedSubjects) != 0 {
-			t.Fatalf("distinct-context add response = %+v, want written=%d deduplicated=0 and no failures",
-				response, len(triples))
-		}
+		live.appendControl(t, projectioncontract.TurnPhaseState, acceptance.TurnEntityID,
+			fmt.Sprintf("phase-append-control-%d", attempt), triples)
 	}
 
 	phases := live.phaseValues(t, acceptance.TurnEntityID)
 	if len(phases) < 2 {
 		t.Fatalf("two append-lane writes left %d phase value(s) (%v); if the append lane now replaces, "+
-			"the reason the phase writer uses the merge lane is no longer true and its doc comment is stale",
+			"the reason the phase writer uses the reconcile lane is no longer true and its documentation is stale",
 			len(phases), phases)
 	}
 
@@ -708,13 +705,12 @@ func TestIntegration_AFailedTurnRecordsAClosedReasonAndAResolvableDetailReferenc
 }
 
 // The ingress admission gate's one durable fact, written where it can be wrong.
-// The pointer takes the entity merge lane; the mutation API offers a second lane
+// The pointer takes its complete reconcile group; the mutation API offers a second lane
 // accepting the same triples that APPENDS, and through it a player's second turn
 // leaves them holding two pointers, with a success response and no error.
 func TestIntegration_AcceptingATurnPointsTheRealPlayerEntityAtIt(t *testing.T) {
 	live := startTurns(t)
 	action := live.action("act-1")
-	live.bornPlayer(t, action.PlayerID)
 
 	acceptance := live.accept(t, "act-1")
 	state := live.harness.AwaitEntity(t, action.PlayerID)
@@ -722,10 +718,6 @@ func TestIntegration_AcceptingATurnPointsTheRealPlayerEntityAtIt(t *testing.T) {
 	pointers := testinfra.ObjectsFor(state, vocabulary.PlayerTurnCurrent.String())
 	if len(pointers) != 1 || pointers[0] != acceptance.TurnEntityID {
 		t.Fatalf("the player holds %v, want exactly [%s]", pointers, acceptance.TurnEntityID)
-	}
-	if state.IsStub() {
-		t.Fatal("writing the pointer left the player reading as a referential stub; the gateway would " +
-			"refuse to authenticate them from their own turn")
 	}
 }
 
@@ -735,52 +727,44 @@ func TestIntegration_AcceptingATurnPointsTheRealPlayerEntityAtIt(t *testing.T) {
 // It matters because the answer decides whether intake acknowledges. The pointer
 // write is a second write after the atomic create, and a failure there is
 // transient — intake naks and redelivers forever, loudly. If a real graph
-// refused a merge onto an entity nobody created, then a turn accepted for an
+// refused a reconcile onto an entity nobody created, then a turn accepted for an
 // unimported player would nak-loop rather than complete, and every unit test
-// here would still be green because a fake has no referential-stub lane.
+// here would still be green because a fake cannot prove the real mutation
+// service's missing-authority response.
 //
-// What actually happens: the turn's own birth record carries turn.action.player,
-// so graph-ingest materializes a referential STUB at the player's key, and the
-// merge lands on that. The write succeeds, intake acknowledges, and the player
-// entity stays a stub — which the gateway refuses to authenticate, so nothing
-// downstream mistakes it for a real player.
-func TestIntegration_APointerAtAnUnimportedPlayerLandsOnTheStubRatherThanFailing(t *testing.T) {
+// beta.160 removed relationship-target stubs, so the turn reference does not
+// create an authority entry for the absent player and the pointer reconcile
+// returns not-found.
+func TestIntegration_APointerAtAnUnimportedPlayerFailsAsNotFound(t *testing.T) {
 	live := startTurns(t)
 	action := live.action("act-1")
-
-	acceptance, err := live.recorder.Accept(t.Context(), action)
-	if err != nil {
-		t.Fatalf("accepting a turn for an unimported player failed, so intake would nak forever: %v", err)
+	missingPlayerID, composeErr := vocabulary.ComposeEntityID(
+		testOrg, live.namespace, testTemplate, string(vocabulary.EntityKindPlayer), "missing")
+	if composeErr != nil {
+		t.Fatalf("compose missing player: %v", composeErr)
 	}
-	live.harness.AwaitEntity(t, acceptance.TurnEntityID)
+	action.PlayerID = missingPlayerID
 
-	deadline := time.Now().Add(20 * time.Second)
-	for time.Now().Before(deadline) {
-		state, err := live.harness.QueryEntity(t.Context(), action.PlayerID)
-		if err == nil && len(testinfra.ObjectsFor(state, vocabulary.PlayerTurnCurrent.String())) == 1 {
-			if !state.IsStub() {
-				t.Fatalf("the unimported player %s reads as a REAL entity; the gateway would authenticate "+
-					"somebody nothing ever imported", action.PlayerID)
-			}
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
+	_, err := live.recorder.Accept(t.Context(), action)
+	if !errors.Is(err, graphio.ErrEntityNotFound) {
+		t.Fatalf("accepting for an unimported player returned %v, want ErrEntityNotFound", err)
 	}
-	t.Fatalf("the pointer never landed at the unimported player %s", action.PlayerID)
+	if _, readErr := live.harness.QueryEntity(t.Context(), action.PlayerID); readErr == nil {
+		t.Fatalf("the turn reference materialized absent player %s", action.PlayerID)
+	}
 }
 
 // The property the in-memory fake states and cannot prove, measured here.
 //
 // It matters because it is the only thing that makes an append anomaly
-// RECOVERABLE. If a merge replaced only one of the values a triple-add lane left
+// RECOVERABLE. If a reconcile replaced only one of the values an append lane left
 // behind, a player who once ended up holding two current-turn pointers would
 // hold two forever, and the ingress gate would answer a coin flip about whether
 // they may act for the rest of the campaign. The fake in turn_test.go models
 // replace-ALL because of this test, not the other way round.
-func TestIntegration_AMergeConvergesAPredicateThatAlreadyHoldsTwoValues(t *testing.T) {
+func TestIntegration_AReconcileConvergesAPredicateThatAlreadyHoldsTwoValues(t *testing.T) {
 	live := startTurns(t)
 	action := live.action("act-1")
-	live.bornPlayer(t, action.PlayerID)
 
 	entity := func(instance string) string {
 		id, err := vocabulary.ComposeEntityID(testOrg, live.namespace, testTemplate, turn.TypeSegment, instance)
@@ -802,15 +786,15 @@ func TestIntegration_AMergeConvergesAPredicateThatAlreadyHoldsTwoValues(t *testi
 	if err != nil {
 		t.Fatalf("compose the pointer: %v", err)
 	}
-	if _, err := live.store.MergeTriples(t.Context(), action.PlayerID, triples); err != nil {
-		t.Fatalf("MergeTriples: %v", err)
+	if _, err := live.store.Reconcile(t.Context(), projectioncontract.PlayerCurrentTurn, action.PlayerID, triples); err != nil {
+		t.Fatalf("Reconcile current-turn: %v", err)
 	}
 
 	live.awaitPointerCount(t, action.PlayerID, 1)
 	state := live.harness.AwaitEntity(t, action.PlayerID)
 	got := testinfra.ObjectsFor(state, vocabulary.PlayerTurnCurrent.String())
 	if got[0] != latest {
-		t.Fatalf("the merge left the player pointing at %v, want [%s]", got, latest)
+		t.Fatalf("the reconcile left the player pointing at %v, want [%s]", got, latest)
 	}
 }
 
@@ -822,21 +806,50 @@ func (w *liveTurns) appendPointer(t *testing.T, playerID, turnID, turnEntityID s
 	if err != nil {
 		t.Fatalf("compose the pointer: %v", err)
 	}
-	request, err := json.Marshal(graph.AddTriplesBatchRequest{Triples: triples})
+	w.appendControl(t, projectioncontract.PlayerCurrentTurn, playerID,
+		"pointer-append-"+turnID, triples)
+}
+
+func (w *liveTurns) appendControl(
+	t *testing.T, target projectioncontract.Target, entityID, requestID string, triples []message.Triple,
+) {
+	t.Helper()
+	triples = append([]message.Triple(nil), triples...)
+	for index := range triples {
+		// beta.160 reserves Context for request correlation on append and
+		// rejects any explicit value that differs from Metadata.RequestID.
+		triples[index].Context = requestID
+	}
+	messageType := payload.Domain + "." + payload.CategoryTurnState + "." + payload.SchemaVersion
+	pattern := "*.semmachina.*.*.turn.*"
+	if target == projectioncontract.PlayerCurrentTurn {
+		messageType = payload.Domain + "." + payload.CategoryWorldEntity + "." + payload.SchemaVersion
+		pattern = "*.semmachina.*.*.player.*"
+	}
+	client, err := projection.NewMutationClient(projection.MutationClientConfig{
+		NATS: w.harness.Client,
+		Contracts: []projection.Contract{{
+			Name: "test-append-control", MessageType: messageType, EntityPattern: pattern,
+			Groups: []projection.PredicateGroup{{
+				Name: target.Group, Mode: projection.ModeAppend,
+				Predicates: projectioncontract.Predicates(target),
+			}},
+		}}, Timeout: graphio.DefaultTimeout,
+	})
 	if err != nil {
-		t.Fatalf("encode add_batch: %v", err)
+		t.Fatalf("build append control client: %v", err)
 	}
-	reply, err := w.harness.Client.RequestClassified(
-		t.Context(), graphingest.SubjectTripleAddBatch, request, 5*time.Second)
+	receipt, err := client.Append(t.Context(), projection.AppendMutation{
+		Contract: "test-append-control", Group: target.Group, EntityID: entityID, Triples: triples,
+		Metadata: projection.MutationMetadata{
+			RequestID: requestID, Source: triples[0].Source, Timestamp: triples[0].Timestamp,
+		},
+	})
 	if err != nil {
-		t.Fatalf("add_batch: %v", err)
+		t.Fatalf("append control %s: %v", requestID, err)
 	}
-	var response graph.AddTriplesBatchResponse
-	if err := json.Unmarshal(reply, &response); err != nil {
-		t.Fatalf("decode add_batch response: %v", err)
-	}
-	if len(response.FailedSubjects) != 0 {
-		t.Fatalf("add_batch reported failed subjects: %v", response.FailedSubjects)
+	if receipt.Commit != projection.CommitVerified {
+		t.Fatalf("append control receipt = %+v, want verified", receipt)
 	}
 }
 
@@ -862,24 +875,20 @@ func (w *liveTurns) awaitPointerCount(t *testing.T, playerID string, n int) {
 func (w *liveTurns) bornPlayer(t *testing.T, playerID string) {
 	t.Helper()
 	at := time.Now().UTC()
-	entity := &graph.EntityState{
-		ID: playerID,
-		MessageType: message.Type{
-			Domain: payload.Domain, Category: payload.CategoryWorldEntity, Version: payload.SchemaVersion,
-		},
-		Version:   1,
-		UpdatedAt: at,
-		Triples: []message.Triple{{
-			Subject:    playerID,
-			Predicate:  vocabulary.WorldEntityKind.String(),
-			Object:     string(vocabulary.EntityKindPlayer),
-			Source:     "integration-world-import",
-			Timestamp:  at,
-			Confidence: 1.0,
-		}},
+	parts := strings.Split(playerID, ".")
+	entity := &payload.WorldEntity{
+		ID: playerID, Kind: vocabulary.EntityKindPlayer,
+		Template:   payload.TemplateRef{ID: parts[3], Version: "test", LocalID: parts[5]},
+		Facts:      []payload.WorldFact{{Predicate: vocabulary.WorldEntityName, Object: parts[5]}},
+		RecordedAt: at,
 	}
-	if _, err := w.store.CreateEntity(t.Context(), entity); err != nil {
-		t.Fatalf("create the player entity: %v", err)
+	wire, err := json.Marshal(message.NewBaseMessage(
+		entity.Schema(), entity, "integration-world-import", message.WithTime(at)))
+	if err != nil {
+		t.Fatalf("encode the player entity: %v", err)
+	}
+	if _, err := w.harness.Client.PublishToStreamWithAck(t.Context(), world.DefaultImportSubject, wire); err != nil {
+		t.Fatalf("publish the player entity: %v", err)
 	}
 	w.harness.AwaitEntity(t, playerID)
 }
@@ -1023,62 +1032,19 @@ func TestIntegration_AnUnclassifiedApplierFailureDoesNotFailTheTurn(t *testing.T
 	}
 }
 
-// A referential stub is queryable and factless, so "no phase recorded" read off
-// one would be a false negative — and this component's answer decides whether a
-// stage runs. Reachable only against real graph-ingest, which is what mints
-// stubs.
-func TestIntegration_AStubAtATurnsKeyIsRefusedRatherThanReadAsAPhaselessTurn(t *testing.T) {
+// A missing turn must remain a missing authority entry rather than looking like
+// an entity with no phase. This component's answer decides whether a stage runs,
+// so the real graph response is load-bearing.
+func TestIntegration_AMissingTurnIsRefusedRatherThanReadAsAPhaselessTurn(t *testing.T) {
 	live := startTurns(t)
 
-	// Referencing a turn id from another entity is what mints a stub at that
-	// key. Nothing in the engine does this — turn references point outward — so
-	// this is the shape of an anomaly, deliberately provoked.
-	stubbedTurn, err := vocabulary.ComposeEntityID(testOrg, live.namespace, testTemplate, "turn", "turn-act-stub")
+	// Nothing created this turn ID, so beta.160 must report it as missing.
+	missingTurn, err := vocabulary.ComposeEntityID(testOrg, live.namespace, testTemplate, "turn", "turn-act-missing")
 	if err != nil {
 		t.Fatalf("compose turn id: %v", err)
 	}
-	referrer, err := vocabulary.ComposeEntityID(testOrg, live.namespace, testTemplate, "character", "rook")
-	if err != nil {
-		t.Fatalf("compose referrer id: %v", err)
-	}
-	if _, err := live.store.CreateEntity(t.Context(), &graph.EntityState{
-		ID:          referrer,
-		MessageType: turn.EntityMessageType,
-		Version:     1,
-		UpdatedAt:   time.Now().UTC(),
-		Triples: []message.Triple{{
-			Subject:    referrer,
-			Predicate:  vocabulary.WorldRelationKnows.String(),
-			Object:     stubbedTurn,
-			Source:     "integration-test",
-			Timestamp:  time.Now().UTC(),
-			Confidence: 1.0,
-		}},
-	}); err != nil {
-		t.Fatalf("create referrer: %v", err)
-	}
-
-	// Wait for the stub to exist at all — it is created by the reference, not by
-	// its own message.
-	deadline := time.Now().Add(20 * time.Second)
-	var stub *graph.EntityState
-	for time.Now().Before(deadline) {
-		state, err := live.harness.QueryEntity(t.Context(), stubbedTurn)
-		if err == nil {
-			stub = state
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if stub == nil {
-		t.Fatal("no stub was ever minted at the referenced turn key; this test proves nothing")
-	}
-	if !stub.IsStub() {
-		t.Fatalf("the referenced turn key holds a real entity, not a stub: %+v", stub.MessageType)
-	}
-
-	if _, err := live.recorder.Current(t.Context(), stubbedTurn); err == nil {
-		t.Fatal("a referential stub was read as a turn phase")
+	if _, err := live.recorder.Current(t.Context(), missingTurn); !errors.Is(err, graphio.ErrEntityNotFound) {
+		t.Fatalf("Current on a missing turn returned %v, want ErrEntityNotFound", err)
 	}
 }
 

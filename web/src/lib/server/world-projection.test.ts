@@ -46,6 +46,16 @@ function entity(id: string, name = 'A place') {
 	};
 }
 
+function entityPage(entities: unknown[], next_cursor?: string | null) {
+	return next_cursor === undefined || next_cursor === null
+		? { entities }
+		: { entities, next_cursor };
+}
+
+function exactEntity(value: unknown, kvRevision = 1) {
+	return { entity: value, kvRevision };
+}
+
 function jsonResponse(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), {
 		status,
@@ -144,6 +154,27 @@ describe('world projection route', () => {
 		expect(body).not.toContain('graph.internal');
 	});
 
+	it('returns a retryable service status for index_not_ready without leaking upstream detail', async () => {
+		const config = loadDeploymentConfig(environment);
+		const projectWorld = vi.fn(async () => {
+			const error = new Error('index_not_ready') as Error & { code: string; name: string };
+			error.name = 'ProjectionError';
+			error.code = 'index_not_ready';
+			throw error;
+		});
+		const adapter = createWorldProjectionAdapter(
+			config,
+			queuedFetch([jsonResponse({ errors: [{ extensions: { code: 'index_not_ready' } }] })])
+		);
+		const response = await createWorldProjectionRoute({
+			projectWorld: (principal) => adapter.projectWorld(principal),
+			authorize: async () => issueProjectionPrincipal(config)
+		})(new Request('https://surface.test/api/world'));
+		expect(projectWorld).not.toHaveBeenCalled();
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({ error: { code: 'index_not_ready' } });
+	});
+
 	it('validates deployment configuration eagerly while retaining default-deny assembly', async () => {
 		const fetcher = vi.fn<typeof fetch>();
 		expect(() =>
@@ -160,8 +191,8 @@ describe('world projection route', () => {
 	it('assembles one immutable config and adapter for every request', async () => {
 		const identities: object[] = [];
 		const fetcher = queuedFetch([
-			jsonResponse({ data: { entitiesByPrefix: [] } }),
-			jsonResponse({ data: { entitiesByPrefix: [] } })
+			jsonResponse({ data: { entitiesByPrefix: entityPage([]) } }),
+			jsonResponse({ data: { entitiesByPrefix: entityPage([]) } })
 		]);
 		const route = assembleWorldProjectionRoute({
 			environment,
@@ -200,8 +231,160 @@ describe('world projection route', () => {
 	});
 });
 
-describe('fixed beta.159 GraphQL adapter', () => {
-	it('ignores beta.159 graph-ingest bookkeeping strings with an omitted datatype', async () => {
+describe('fixed beta.160 GraphQL adapter', () => {
+	it('traverses every EntityPage and forwards opaque cursors', async () => {
+		const config = loadDeploymentConfig(environment);
+		const fetcher = queuedFetch([
+			jsonResponse({ data: { entitiesByPrefix: entityPage([entity(LOCATION_A)], 'opaque-2') } }),
+			jsonResponse({ data: { entitiesByPrefix: entityPage([entity(LOCATION_B)]) } }),
+			jsonResponse({ data: { relationships: [] } }),
+			jsonResponse({ data: { relationships: [] } })
+		]);
+
+		await expect(
+			createWorldProjectionAdapter(config, fetcher).projectWorld(issueProjectionPrincipal(config))
+		).resolves.toMatchObject({ places: [{ id: LOCATION_A }, { id: LOCATION_B }] });
+		const prefixBodies = fetcher.mock.calls
+			.slice(0, 2)
+			.map((call) => JSON.parse(String(call[1]?.body)));
+		expect(prefixBodies.map((body) => body.variables.cursor)).toEqual([null, 'opaque-2']);
+	});
+
+	it.each([
+		[
+			'repeated cursor',
+			entityPage([entity(LOCATION_A)], 'again'),
+			entityPage([entity(LOCATION_B)], 'again')
+		],
+		[
+			'malformed later page',
+			entityPage([entity(LOCATION_A)], 'next'),
+			{ entities: [], next_cursor: 7 }
+		],
+		[
+			'later-page scope violation',
+			entityPage([entity(LOCATION_A)], 'next'),
+			entityPage([entity(FOREIGN_LOCATION)])
+		]
+	])('fails the whole projection for %s', async (_name, first, second) => {
+		const config = loadDeploymentConfig(environment);
+		const adapter = createWorldProjectionAdapter(
+			config,
+			queuedFetch([
+				jsonResponse({ data: { entitiesByPrefix: first } }),
+				jsonResponse({ data: { entitiesByPrefix: second } })
+			])
+		);
+		await expect(adapter.projectWorld(issueProjectionPrincipal(config))).rejects.toMatchObject({
+			name: 'ProjectionError'
+		});
+	});
+
+	it('requires the beta.160 ExactEntity envelope for a configured clock', async () => {
+		const config = loadDeploymentConfig({
+			...environment,
+			SEMMACHINA_CLOCK_ENTITY_ID: CLOCK_ID,
+			SEMMACHINA_CLOCK_PREDICATE: 'campaign.clock.current',
+			SEMMACHINA_CLOCK_LABEL: 'Village time',
+			SEMMACHINA_CLOCK_UNIT: 'minute',
+			SEMMACHINA_CLOCK_VALUE_TYPE: 'number'
+		});
+		const adapter = createWorldProjectionAdapter(
+			config,
+			queuedFetch([
+				jsonResponse({ data: { entitiesByPrefix: entityPage([]) } }),
+				jsonResponse({ data: { entity: { id: CLOCK_ID, triples: [] } } })
+			])
+		);
+		await expect(adapter.projectWorld(issueProjectionPrincipal(config))).rejects.toMatchObject({
+			code: 'invalid_clock'
+		});
+	});
+
+	it('rejects beta.159 relationship aliases even alongside canonical fields', async () => {
+		const config = loadDeploymentConfig(environment);
+		const adapter = createWorldProjectionAdapter(
+			config,
+			queuedFetch([
+				jsonResponse({ data: { entitiesByPrefix: entityPage([entity(LOCATION_A)]) } }),
+				jsonResponse({
+					data: {
+						relationships: [
+							{
+								from: LOCATION_A,
+								to: CLOCK_ID,
+								predicate: 'world.entity.belongs-to',
+								from_entity_id: LOCATION_A,
+								to_entity_id: CLOCK_ID,
+								edge_type: 'world.entity.belongs-to'
+							}
+						]
+					}
+				})
+			])
+		);
+		await expect(adapter.projectWorld(issueProjectionPrincipal(config))).rejects.toMatchObject({
+			code: 'invalid_upstream'
+		});
+	});
+
+	it('classifies beta.160 index_not_ready errors as explicitly retryable', async () => {
+		const config = loadDeploymentConfig(environment);
+		const adapter = createWorldProjectionAdapter(
+			config,
+			queuedFetch([
+				jsonResponse({
+					errors: [{ message: 'not ready', extensions: { code: 'index_not_ready' } }]
+				})
+			])
+		);
+		await expect(adapter.projectWorld(issueProjectionPrincipal(config))).rejects.toMatchObject({
+			code: 'index_not_ready'
+		});
+	});
+
+	it('rejects a continuation chain beyond the configured page cap', async () => {
+		const config = loadDeploymentConfig(environment);
+		const responses = Array.from({ length: config.graphql.placePageLimit }, (_, index) =>
+			jsonResponse({
+				data: {
+					entitiesByPrefix: entityPage(
+						[entity(`c360.semmachina.bellweather.bellweather-maze.location.page-${index}`)],
+						`cursor-${index + 1}`
+					)
+				}
+			})
+		);
+		await expect(
+			createWorldProjectionAdapter(config, queuedFetch(responses)).projectWorld(
+				issueProjectionPrincipal(config)
+			)
+		).rejects.toMatchObject({ code: 'projection_capacity_exceeded' });
+	});
+
+	it('rejects the aggregate entity cap across otherwise valid pages', async () => {
+		const config = loadDeploymentConfig(environment);
+		const responses = Array.from({ length: 5 }, (_, pageIndex) =>
+			jsonResponse({
+				data: {
+					entitiesByPrefix: entityPage(
+						Array.from({ length: 200 }, (_, entityIndex) =>
+							entity(
+								`c360.semmachina.bellweather.bellweather-maze.location.cap-${pageIndex}-${entityIndex}`
+							)
+						),
+						pageIndex === 4 ? null : `aggregate-${pageIndex + 1}`
+					)
+				}
+			})
+		);
+		await expect(
+			createWorldProjectionAdapter(config, queuedFetch(responses)).projectWorld(
+				issueProjectionPrincipal(config)
+			)
+		).rejects.toMatchObject({ code: 'projection_capacity_exceeded' });
+	});
+	it('ignores beta.160 graph-ingest bookkeeping strings with an omitted datatype', async () => {
 		const config = loadDeploymentConfig(environment);
 		const candidate = entity(LOCATION_A, 'Fete Green');
 		candidate.triples.push(
@@ -214,17 +397,12 @@ describe('fixed beta.159 GraphQL adapter', () => {
 				subject: LOCATION_A,
 				predicate: 'core.identity.referenced-by',
 				object: 'c360.semmachina.bellweather.bellweather-maze.scene.green'
-			},
-			{
-				subject: LOCATION_A,
-				predicate: 'core.identity.stub-owner',
-				object: 'semmachina.world_entity.v1'
 			}
 		);
 		const adapter = createWorldProjectionAdapter(
 			config,
 			queuedFetch([
-				jsonResponse({ data: { entitiesByPrefix: [candidate] } }),
+				jsonResponse({ data: { entitiesByPrefix: entityPage([candidate]) } }),
 				jsonResponse({ data: { relationships: [] } })
 			])
 		);
@@ -239,7 +417,7 @@ describe('fixed beta.159 GraphQL adapter', () => {
 		const config = loadDeploymentConfig(environment);
 		const principal = issueProjectionPrincipal(config);
 		const fetcher = queuedFetch([
-			jsonResponse({ data: { entitiesByPrefix: [entity(LOCATION_A, 'Green')] } }),
+			jsonResponse({ data: { entitiesByPrefix: entityPage([entity(LOCATION_A, 'Green')]) } }),
 			jsonResponse({ data: { relationships: [] } })
 		]);
 		const adapter = createWorldProjectionAdapter(config, fetcher);
@@ -251,7 +429,8 @@ describe('fixed beta.159 GraphQL adapter', () => {
 				query: LOCATIONS_QUERY,
 				variables: {
 					prefix: 'c360.semmachina.bellweather.bellweather-maze.location',
-					limit: 1000
+					limit: 200,
+					cursor: null
 				}
 			},
 			{
@@ -299,7 +478,7 @@ describe('fixed beta.159 GraphQL adapter', () => {
 			SEMMACHINA_GRAPHQL_POSTURE: 'auth_proxy',
 			SEMMACHINA_GRAPHQL_AUTH_TOKEN: 'server-only-proxy-token'
 		});
-		const fetcher = queuedFetch([jsonResponse({ data: { entitiesByPrefix: [] } })]);
+		const fetcher = queuedFetch([jsonResponse({ data: { entitiesByPrefix: entityPage([]) } })]);
 		await createWorldProjectionAdapter(config, fetcher).projectWorld(
 			issueProjectionPrincipal(config)
 		);
@@ -328,14 +507,16 @@ describe('fixed beta.159 GraphQL adapter', () => {
 			}
 		);
 		const fetcher = queuedFetch([
-			jsonResponse({ data: { entitiesByPrefix: [located, entity(LOCATION_B, 'Prize Maze')] } }),
+			jsonResponse({
+				data: { entitiesByPrefix: entityPage([located, entity(LOCATION_B, 'Prize Maze')]) }
+			}),
 			jsonResponse({
 				data: {
 					relationships: [
 						{
-							from_entity_id: LOCATION_A,
-							to_entity_id: LOCATION_B,
-							edge_type: 'location.relation.connects-to'
+							from: LOCATION_A,
+							to: LOCATION_B,
+							predicate: 'location.relation.connects-to'
 						}
 					]
 				}
@@ -360,14 +541,17 @@ describe('fixed beta.159 GraphQL adapter', () => {
 	});
 
 	it.each([
-		['out-of-prefix entity', { data: { entitiesByPrefix: [entity(FOREIGN_LOCATION)] } }],
+		[
+			'out-of-prefix entity',
+			{ data: { entitiesByPrefix: entityPage([entity(FOREIGN_LOCATION)]) } }
+		],
 		[
 			'component-prefix collision',
 			{
 				data: {
-					entitiesByPrefix: [
+					entitiesByPrefix: entityPage([
 						entity('c360.semmachina.bellweather10.bellweather-maze.location.green')
-					]
+					])
 				}
 			}
 		],
@@ -389,8 +573,10 @@ describe('fixed beta.159 GraphQL adapter', () => {
 			queuedFetch([
 				jsonResponse({
 					data: {
-						entitiesByPrefix: Array.from({ length: 1000 }, (_, index) =>
-							entity(`c360.semmachina.bellweather.bellweather-maze.location.place-${index}`)
+						entitiesByPrefix: entityPage(
+							Array.from({ length: 1000 }, (_, index) =>
+								entity(`c360.semmachina.bellweather.bellweather-maze.location.place-${index}`)
+							)
 						)
 					}
 				})
@@ -406,14 +592,14 @@ describe('fixed beta.159 GraphQL adapter', () => {
 		const adapter = createWorldProjectionAdapter(
 			config,
 			queuedFetch([
-				jsonResponse({ data: { entitiesByPrefix: [entity(LOCATION_A)] } }),
+				jsonResponse({ data: { entitiesByPrefix: entityPage([entity(LOCATION_A)]) } }),
 				jsonResponse({
 					data: {
 						relationships: [
 							{
-								from_entity_id: LOCATION_A,
-								to_entity_id: FOREIGN_LOCATION,
-								edge_type: 'location.relation.connects-to'
+								from: LOCATION_A,
+								to: FOREIGN_LOCATION,
+								predicate: 'location.relation.connects-to'
 							}
 						]
 					}
@@ -430,14 +616,14 @@ describe('fixed beta.159 GraphQL adapter', () => {
 		const adapter = createWorldProjectionAdapter(
 			config,
 			queuedFetch([
-				jsonResponse({ data: { entitiesByPrefix: [entity(LOCATION_A)] } }),
+				jsonResponse({ data: { entitiesByPrefix: entityPage([entity(LOCATION_A)]) } }),
 				jsonResponse({
 					data: {
 						relationships: [
 							{
-								from_entity_id: LOCATION_A,
-								to_entity_id: CLOCK_ID,
-								edge_type: 'world.entity.belongs-to'
+								from: LOCATION_A,
+								to: CLOCK_ID,
+								predicate: 'world.entity.belongs-to'
 							}
 						]
 					}
@@ -459,7 +645,9 @@ describe('fixed beta.159 GraphQL adapter', () => {
 			object: LOCATION_B,
 			datatype: '@id'
 		});
-		const fetcher = queuedFetch([jsonResponse({ data: { entitiesByPrefix: [place] } })]);
+		const fetcher = queuedFetch([
+			jsonResponse({ data: { entitiesByPrefix: entityPage([place]) } })
+		]);
 		const adapter = createWorldProjectionAdapter(config, fetcher);
 		await expect(adapter.projectWorld(issueProjectionPrincipal(config))).rejects.toMatchObject({
 			code: 'dangling_relationship'
@@ -467,7 +655,7 @@ describe('fixed beta.159 GraphQL adapter', () => {
 		expect(fetcher).toHaveBeenCalledTimes(1);
 	});
 
-	it('accepts corrected relationship fields but rejects conflicting dual representations', async () => {
+	it('accepts canonical relationship fields but rejects beta.159 aliases', async () => {
 		const config = loadDeploymentConfig(environment);
 		const place = entity(LOCATION_A);
 		place.triples.push({
@@ -476,7 +664,7 @@ describe('fixed beta.159 GraphQL adapter', () => {
 			object: LOCATION_B,
 			datatype: '@id'
 		});
-		const places = { data: { entitiesByPrefix: [place, entity(LOCATION_B)] } };
+		const places = { data: { entitiesByPrefix: entityPage([place, entity(LOCATION_B)]) } };
 		const corrected = {
 			data: {
 				relationships: [
@@ -521,7 +709,7 @@ describe('fixed beta.159 GraphQL adapter', () => {
 	it('enforces byte and relationship count caps without returning partial projections', async () => {
 		const config = loadDeploymentConfig(environment);
 		const oversized = jsonResponse({
-			data: { entitiesByPrefix: [] },
+			data: { entitiesByPrefix: entityPage([]) },
 			padding: 'x'.repeat(MAX_GRAPHQL_RESPONSE_BYTES)
 		});
 		const byteLimited = createWorldProjectionAdapter(config, queuedFetch([oversized]));
@@ -537,14 +725,14 @@ describe('fixed beta.159 GraphQL adapter', () => {
 			datatype: '@id'
 		});
 		const relationship = {
-			from_entity_id: LOCATION_A,
-			to_entity_id: LOCATION_B,
-			edge_type: 'location.relation.connects-to'
+			from: LOCATION_A,
+			to: LOCATION_B,
+			predicate: 'location.relation.connects-to'
 		};
 		const countLimited = createWorldProjectionAdapter(
 			config,
 			queuedFetch([
-				jsonResponse({ data: { entitiesByPrefix: [place, entity(LOCATION_B)] } }),
+				jsonResponse({ data: { entitiesByPrefix: entityPage([place, entity(LOCATION_B)]) } }),
 				jsonResponse({
 					data: {
 						relationships: Array.from(
@@ -612,7 +800,7 @@ describe('fixed beta.159 GraphQL adapter', () => {
 		const config = loadDeploymentConfig(environment);
 		const adapter = createWorldProjectionAdapter(
 			config,
-			queuedFetch([jsonResponse({ data: { entitiesByPrefix: [candidate] } })])
+			queuedFetch([jsonResponse({ data: { entitiesByPrefix: entityPage([candidate]) } })])
 		);
 		await expect(adapter.projectWorld(issueProjectionPrincipal(config))).rejects.toMatchObject({
 			name: 'ProjectionError'
@@ -662,7 +850,7 @@ describe('fixed beta.159 GraphQL adapter', () => {
 		mutate(candidate);
 		const adapter = createWorldProjectionAdapter(
 			config,
-			queuedFetch([jsonResponse({ data: { entitiesByPrefix: [candidate] } })])
+			queuedFetch([jsonResponse({ data: { entitiesByPrefix: entityPage([candidate]) } })])
 		);
 		await expect(adapter.projectWorld(issueProjectionPrincipal(config))).rejects.toMatchObject({
 			code
@@ -670,7 +858,7 @@ describe('fixed beta.159 GraphQL adapter', () => {
 	});
 
 	it('returns not_configured without issuing an exact entity query', async () => {
-		const fetcher = queuedFetch([jsonResponse({ data: { entitiesByPrefix: [] } })]);
+		const fetcher = queuedFetch([jsonResponse({ data: { entitiesByPrefix: entityPage([]) } })]);
 		const config = loadDeploymentConfig(environment);
 		const result = await createWorldProjectionAdapter(config, fetcher).projectWorld(
 			issueProjectionPrincipal(config)
@@ -704,8 +892,8 @@ describe('fixed beta.159 GraphQL adapter', () => {
 		const adapter = createWorldProjectionAdapter(
 			config,
 			queuedFetch([
-				jsonResponse({ data: { entitiesByPrefix: [] } }),
-				jsonResponse({ data: { entity: clockEntity } })
+				jsonResponse({ data: { entitiesByPrefix: entityPage([]) } }),
+				jsonResponse({ data: { entity: exactEntity(clockEntity) } })
 			])
 		);
 		await expect(adapter.projectWorld(issueProjectionPrincipal(config))).rejects.toMatchObject({
@@ -723,10 +911,10 @@ describe('fixed beta.159 GraphQL adapter', () => {
 			SEMMACHINA_CLOCK_VALUE_TYPE: 'number'
 		});
 		const fetcher = queuedFetch([
-			jsonResponse({ data: { entitiesByPrefix: [] } }),
+			jsonResponse({ data: { entitiesByPrefix: entityPage([]) } }),
 			jsonResponse({
 				data: {
-					entity: {
+					entity: exactEntity({
 						id: CLOCK_ID,
 						triples: [
 							{
@@ -736,7 +924,7 @@ describe('fixed beta.159 GraphQL adapter', () => {
 								datatype: ''
 							}
 						]
-					}
+					})
 				}
 			})
 		]);
@@ -765,10 +953,10 @@ describe('fixed beta.159 GraphQL adapter', () => {
 		const adapter = createWorldProjectionAdapter(
 			config,
 			queuedFetch([
-				jsonResponse({ data: { entitiesByPrefix: [] } }),
+				jsonResponse({ data: { entitiesByPrefix: entityPage([]) } }),
 				jsonResponse({
 					data: {
-						entity: {
+						entity: exactEntity({
 							id: CLOCK_ID,
 							triples: [
 								{
@@ -778,7 +966,7 @@ describe('fixed beta.159 GraphQL adapter', () => {
 									datatype: 'xsd:double'
 								}
 							]
-						}
+						})
 					}
 				})
 			])
@@ -811,23 +999,32 @@ describe('fixed beta.159 GraphQL adapter', () => {
 		);
 		const relationships = [
 			...ids.slice(1).map((target) => ({
-				from_entity_id: source.id,
-				to_entity_id: target,
-				edge_type: 'location.relation.connects-to'
+				from: source.id,
+				to: target,
+				predicate: 'location.relation.connects-to'
 			})),
 			{
-				from_entity_id: source.id,
-				to_entity_id: CLOCK_ID,
-				edge_type: 'world.entity.belongs-to'
+				from: source.id,
+				to: CLOCK_ID,
+				predicate: 'world.entity.belongs-to'
 			}
 		];
 		const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
 			const body = JSON.parse(String(init?.body)) as {
 				query: string;
-				variables: { entityId?: string };
+				variables: { entityId?: string; cursor?: string | null };
 			};
 			if (body.query === LOCATIONS_QUERY) {
-				return jsonResponse({ data: { entitiesByPrefix: locations } });
+				const start = body.variables.cursor === null ? 0 : Number(body.variables.cursor);
+				const end = Math.min(start + 200, locations.length);
+				return jsonResponse({
+					data: {
+						entitiesByPrefix: entityPage(
+							locations.slice(start, end),
+							end < locations.length ? String(end) : null
+						)
+					}
+				});
 			}
 			return jsonResponse({
 				data: { relationships: body.variables.entityId === source.id ? relationships : [] }
@@ -841,7 +1038,7 @@ describe('fixed beta.159 GraphQL adapter', () => {
 			MAX_RELATIONSHIPS_PER_PLACE - 1
 		);
 		expect(relationships).toHaveLength(MAX_RELATIONSHIPS_PER_PLACE);
-		expect(fetcher).toHaveBeenCalledTimes(1000);
+		expect(fetcher).toHaveBeenCalledTimes(1004);
 	});
 
 	it.each(['request', 'body'] as const)(

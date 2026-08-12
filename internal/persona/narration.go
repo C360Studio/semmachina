@@ -13,6 +13,7 @@ import (
 
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 )
 
 // NarrationStore is the durable home of a turn's prose.
@@ -113,7 +114,7 @@ func (e *NarrationExecutor) Execute(ctx context.Context, call agentic.ToolCall) 
 	if err != nil {
 		return internalFailure(call, "project the narration reference onto the turn", err)
 	}
-	if _, err := e.graph.MergeTriples(ctx, identity.TurnEntityID, triples); err != nil {
+	if _, err := e.graph.Reconcile(ctx, projectioncontract.TurnNarration, identity.TurnEntityID, triples); err != nil {
 		// The prose is stored and unreferenced. That is the survivable half of
 		// the ordering, and the survival does not depend on the retry producing
 		// the same bytes: a re-dispatched call writes this narration again, while

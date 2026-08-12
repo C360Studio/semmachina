@@ -223,12 +223,12 @@ func (a *Assembler) Assemble(ctx context.Context, turnID, turnEntityID string) (
 // turn, scene, and persistent location.
 const fixedEntities = 3
 
-// readSolid reads one entity and refuses a referential stub.
+// readSolid reads one entity required by every assembled view.
 //
-// A stub answers a read successfully while carrying none of its own facts, so
-// "the id resolved" is not "the entity is loaded" (F11). For the turn and the
-// scene that is fatal rather than an exclusion: a persona cannot be given a turn
-// with no phase or a room with no name and asked to judge what happens in it.
+// A missing turn, scene, or location is fatal rather than an exclusion: a
+// persona cannot be given a turn with no phase or a room with no name and asked
+// to judge what happens in it. The nil check also refuses a malformed reader
+// result that reports success without returning the required state.
 func (a *Assembler) readSolid(ctx context.Context, id, role string) (*graph.EntityState, error) {
 	state, err := a.graph.GetEntity(ctx, id)
 	if err != nil {
@@ -236,12 +236,6 @@ func (a *Assembler) readSolid(ctx context.Context, id, role string) (*graph.Enti
 	}
 	if state == nil {
 		return nil, fmt.Errorf("read %s entity %s: the graph returned nothing", role, id)
-	}
-	if state.IsStub() {
-		return nil, fmt.Errorf(
-			"%s entity %s is a referential stub: it is queryable and holds none of its own facts, so "+
-				"assembling context from it would hand a persona an empty %s that reads as a real one",
-			role, id, role)
 	}
 	return state, nil
 }
@@ -461,9 +455,9 @@ func (a *Assembler) memberIDs(ctx context.Context, locationID string) ([]string,
 // location, and location's members point at that is not already in the view.
 //
 // This is where a referenced-but-undelivered entity actually turns up. A member
-// carrying an item that was never imported has a perfectly good edge to a
-// perfectly queryable stub, and hydrating it without checking is how a persona
-// is handed a thing with no name and narrates it anyway.
+// carrying an item that was never imported has a valid edge to a missing target,
+// and hydration reports that target as an exclusion instead of silently handing
+// the persona an incomplete thing.
 //
 // The TURN is one of the three sources, and that is not incidental: the turn's
 // player reference is the only thing that says WHICH of the people in the room
@@ -509,10 +503,6 @@ func (a *Assembler) hydrate(ctx context.Context, ids []string) ([]Entity, []Excl
 	var excluded []Exclusion
 	for idx := range result.Entities {
 		state := &result.Entities[idx]
-		if state.IsStub() {
-			excluded = append(excluded, Exclusion{ID: state.ID, Reason: ExcludedStub})
-			continue
-		}
 		entities = append(entities, project(state))
 	}
 	// A requested id the graph did not return is an exclusion too, and reporting
@@ -545,9 +535,9 @@ func (a *Assembler) checkCap(sceneID string, entities int) error {
 // OversizeError reports a scene too large to assemble a bounded context from.
 //
 // It is an error rather than a truncation on purpose. Trimming to fit would make
-// a persona's world quietly incomplete, which is the same silent hole a stub is,
-// and it would hide the one thing an operator needs to know: that a scene has
-// grown past what the cost model was built for.
+// a persona's world quietly incomplete, just as silently dropping a missing
+// target would, and it would hide the one thing an operator needs to know: that
+// a scene has grown past what the cost model was built for.
 type OversizeError struct {
 	// SceneID is the scene that is too big.
 	SceneID string

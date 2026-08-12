@@ -146,14 +146,6 @@ func (w *Writer) Reconcile(ctx context.Context) (Reconciliation, error) {
 func (w *Writer) reconcileTurn(ctx context.Context, state *graph.EntityState, report *Reconciliation) {
 	report.Scanned++
 
-	// A stub is queryable and factless. It is not a failure — nothing has gone
-	// wrong when an entity is referenced before it is born — but it has no phase
-	// and therefore nothing to archive.
-	if state.IsStub() {
-		report.InFlight++
-		return
-	}
-
 	turnID, err := turnIDOf(state.ID)
 	if err != nil {
 		report.Failures = append(report.Failures, TurnFailure{TurnEntityID: state.ID, Err: err})

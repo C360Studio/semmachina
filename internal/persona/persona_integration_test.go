@@ -1,3 +1,5 @@
+//go:build integration
+
 package persona_test
 
 import (
@@ -5,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -17,6 +20,7 @@ import (
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/persona"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/testinfra"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
@@ -138,21 +142,29 @@ func roundTripped(t *testing.T, identity persona.Identity, band vocabulary.Outco
 
 func createTurn(t *testing.T, store *graphio.Store, id string) {
 	t.Helper()
-	if _, err := store.CreateEntity(t.Context(), &graph.EntityState{
+	parts := strings.Split(id, ".")
+	turnID := parts[len(parts)-1]
+	birth := &payload.TurnState{TurnID: turnID, Phase: vocabulary.PhaseAccepted,
+		PlayerID:  strings.Join(append(append([]string(nil), parts[:4]...), "player", "test"), "."),
+		SceneID:   strings.Join(append(append([]string(nil), parts[:4]...), "scene", "test"), "."),
+		ActionRef: "obj://TEST/turn/" + turnID + "/action"}
+	triples, err := birth.Triples(id, "test", testTime)
+	if err != nil {
+		t.Fatalf("turn birth triples: %v", err)
+	}
+	if _, err := store.CreateEntity(t.Context(), projectioncontract.TurnBirthContract, &graph.EntityState{
 		ID:          id,
 		MessageType: message.Type{Domain: payload.Domain, Category: payload.CategoryTurnState, Version: payload.SchemaVersion},
 		Version:     1,
 		UpdatedAt:   testTime,
-		Triples: []message.Triple{{
-			Subject:    id,
-			Predicate:  vocabulary.TurnPhaseCurrent.String(),
-			Object:     string(vocabulary.PhaseAdjudicating),
-			Source:     "test",
-			Timestamp:  testTime,
-			Confidence: 1.0,
-		}},
+		Triples:     triples,
 	}); err != nil {
 		t.Fatalf("create turn entity: %v", err)
+	}
+	phase := []message.Triple{{Subject: id, Predicate: vocabulary.TurnPhaseCurrent.String(),
+		Object: string(vocabulary.PhaseAdjudicating), Source: "test", Timestamp: testTime, Confidence: 1}}
+	if _, err := store.Reconcile(t.Context(), projectioncontract.TurnPhaseState, id, phase); err != nil {
+		t.Fatalf("advance test turn: %v", err)
 	}
 }
 
@@ -191,7 +203,7 @@ func splitSix(entityID string) [6]string {
 // resumed persona that exits a second time must leave ONE verdict on the turn.
 // The negative control below is the whole reason this test exists — a distinct
 // observation of the same scalar through the appending lane leaves two, with a
-// success response and no error anywhere. beta.159 correctly deduplicates a
+// success response and no error anywhere. The append lane deduplicates a
 // byte-identical six-field retry, so provenance is varied deliberately.
 func TestIntegration_ARepeatedVerdictLeavesOneValuePerPredicate(t *testing.T) {
 	world := startLive(t)
@@ -216,13 +228,13 @@ func TestIntegration_ARepeatedVerdictLeavesOneValuePerPredicate(t *testing.T) {
 	}
 
 	// The negative control: the same triples through the lane that appends. A
-	// test that only ever saw the merge lane could not tell a correct write from
+	// test that only ever saw the reconcile lane could not tell a correct write from
 	// a lane that happens to be idempotent for other reasons.
 	appendSameVerdict(t, world, state)
 	after := world.harness.AwaitEntity(t, world.entityID)
 	if got := testinfra.ObjectsFor(after, vocabulary.TurnVerdictPlausibility.String()); len(got) != 2 {
 		t.Fatalf("the appending lane left %d values for %s; if it leaves one, this graph is not the trap the "+
-			"merge lane exists to avoid and the guard above proves nothing",
+			"reconcile lane exists to avoid and the guard above proves nothing",
 			len(got), vocabulary.TurnVerdictPlausibility)
 	}
 }
@@ -242,21 +254,21 @@ func appendSameVerdict(t *testing.T, world *live, state *graph.EntityState) {
 		t.Fatal("the turn carries no plausibility to duplicate")
 	}
 	existing.Context = "append-lane-negative-control"
-	request, err := json.Marshal(graph.AddTriplesBatchRequest{Triples: []message.Triple{existing}})
+	request, err := json.Marshal(graph.AppendTriplesRequest{Triples: []message.Triple{existing}})
 	if err != nil {
 		t.Fatalf("encode batch add: %v", err)
 	}
 	reply, err := world.harness.Client.RequestClassified(
-		t.Context(), "graph.mutation.triple.add_batch", request, graphio.DefaultTimeout)
+		t.Context(), "graph.mutation.triple.append", request, graphio.DefaultTimeout)
 	if err != nil {
 		t.Fatalf("the appending lane refused the write, so the control proves nothing: %v", err)
 	}
-	var response graph.AddTriplesBatchResponse
+	var response graph.AppendTriplesResponse
 	if err := json.Unmarshal(reply, &response); err != nil {
 		t.Fatalf("decode append-lane response: %v", err)
 	}
-	if response.WrittenCount != 1 || response.Deduplicated != 0 || len(response.FailedSubjects) != 0 {
-		t.Fatalf("distinct-context add response = %+v, want written=1 deduplicated=0 and no failures", response)
+	if len(response.Results) != 1 || response.Results[0].Outcome != graph.MutationApplied {
+		t.Fatalf("distinct-context append response = %+v, want one applied result", response)
 	}
 }
 
@@ -330,8 +342,8 @@ func freshContentStore(t *testing.T, client *natsclient.Client, bucket string) *
 
 // The resume check against the graph it actually reads: a stage whose verdict is
 // on the turn is skipped, and one whose narration is not is run. Both answers
-// come from a real query surface rather than from a map that cannot be a stub or
-// return two values.
+// come from a real query surface rather than from a map that cannot report a
+// missing authority entry or return two values.
 func TestIntegration_TheResumeCheckReadsTheArtifactTheGraphActuallyHolds(t *testing.T) {
 	world := startLive(t)
 	guard, err := persona.NewGuard(world.graph)

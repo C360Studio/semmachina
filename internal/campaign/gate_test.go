@@ -15,6 +15,7 @@ import (
 
 	"github.com/c360studio/semmachina/internal/campaign"
 	"github.com/c360studio/semmachina/internal/graphio"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -26,7 +27,7 @@ var testClock = func() time.Time { return time.Date(2026, 7, 28, 9, 15, 30, 0, t
 
 // fakeStore is an in-memory create-or-fail store with the same atomicity the
 // real one has. It exists for the failure shapes a broker will not produce on
-// demand (degraded write, stub resident, missing seed triple); the atomic and
+// demand (missing seed triple and mutation failures); the atomic and
 // concurrent paths are ALSO proven against real NATS in gate_integration_test.go,
 // because a fake that agreed with itself would prove nothing about the contract
 // this design rests on.
@@ -34,7 +35,6 @@ type fakeStore struct {
 	mu       sync.Mutex
 	entities map[string]*graph.EntityState
 
-	degrade    bool
 	createErr  error
 	getErr     error
 	mergeErr   error
@@ -46,10 +46,13 @@ func newFakeStore() *fakeStore {
 	return &fakeStore{entities: make(map[string]*graph.EntityState)}
 }
 
-func (s *fakeStore) CreateEntity(_ context.Context, entity *graph.EntityState) (graphio.CreateResult, error) {
+func (s *fakeStore) CreateEntity(_ context.Context, contract string, entity *graph.EntityState) (graphio.CreateResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.createCall++
+	if contract != projectioncontract.CampaignBirthContract {
+		return graphio.CreateResult{}, fmt.Errorf("create uses contract %q, want %q", contract, projectioncontract.CampaignBirthContract)
+	}
 	if s.createErr != nil {
 		return graphio.CreateResult{}, s.createErr
 	}
@@ -57,9 +60,6 @@ func (s *fakeStore) CreateEntity(_ context.Context, entity *graph.EntityState) (
 		return graphio.CreateResult{}, fmt.Errorf("create entity %s: %w", entity.ID, graphio.ErrEntityExists)
 	}
 	s.entities[entity.ID] = entity
-	if s.degrade {
-		return graphio.CreateResult{Degraded: true, DegradedReason: "read-back failed"}, nil
-	}
 	return graphio.CreateResult{Entity: entity, Revision: uint64(len(s.entities))}, nil
 }
 
@@ -77,20 +77,21 @@ func (s *fakeStore) GetEntity(_ context.Context, id string) (*graph.EntityState,
 	return entity, nil
 }
 
-// MergeTriples replaces by (subject, predicate), which is the property every
-// caller of the real merge lane depends on. A fake that appended would agree
-// with the WRONG lane and would make the marker tests pass while the production
-// write left two completion instants on one campaign.
-func (s *fakeStore) MergeTriples(
+// Reconcile replaces the complete contract group, which is the property every
+// caller of the canonical mutation lane depends on.
+func (s *fakeStore) Reconcile(
 	_ context.Context,
+	target projectioncontract.Target,
 	entityID string,
 	triples []message.Triple,
-	_ ...graphio.MergeOption,
 ) (*graph.EntityState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.mergeErr != nil {
 		return nil, s.mergeErr
+	}
+	if target != projectioncontract.CampaignImport {
+		return nil, fmt.Errorf("reconcile target = %+v, want %+v", target, projectioncontract.CampaignImport)
 	}
 	entity, ok := s.entities[entityID]
 	if !ok {
@@ -123,11 +124,11 @@ func (s *fakeStore) MergeTriples(
 // first assertion mean something.
 type appendingStore struct{ *fakeStore }
 
-func (s *appendingStore) MergeTriples(
+func (s *appendingStore) Reconcile(
 	_ context.Context,
+	_ projectioncontract.Target,
 	entityID string,
 	triples []message.Triple,
-	_ ...graphio.MergeOption,
 ) (*graph.EntityState, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -267,29 +268,6 @@ func TestGateClaim_LosingTheRaceReturnsTheStoredSeed(t *testing.T) {
 	}
 }
 
-// A degraded create COMMITTED. Retrying it would come back as
-// entity_already_exists and a caller reading that as "someone beat me to it"
-// would skip the import of a world nobody imported.
-func TestGateClaim_TreatsADegradedCreateAsACommittedFreshWorld(t *testing.T) {
-	store := newFakeStore()
-	store.degrade = true
-	gate := newTestGate(t, store)
-
-	claim, err := gate.Claim(t.Context(), testExperience)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
-	if !claim.Fresh {
-		t.Fatal("a committed-but-unechoed create was reported as an existing campaign")
-	}
-	if claim.Seed.IsZero() {
-		t.Fatal("a degraded create returned no seed; the dice would have nothing to derive from")
-	}
-	if store.createCall != 1 {
-		t.Fatalf("the gate issued %d creates; a degraded write must not be retried", store.createCall)
-	}
-}
-
 // Every way the stored seed can be unreadable is a STOP. The tempting recovery
 // — mint a fresh seed and carry on — would leave a campaign whose recorded
 // rolls all validate and none reproduce.
@@ -299,17 +277,6 @@ func TestGateClaim_RefusesToProceedWhenTheStoredSeedIsUnreadable(t *testing.T) {
 		resident *graph.EntityState
 		wantErr  string
 	}{
-		{
-			name: "a referential stub occupies the key",
-			resident: &graph.EntityState{
-				ID:          testCampaignID,
-				MessageType: graph.StubMessageType,
-				Triples: []message.Triple{{
-					Subject: testCampaignID, Predicate: graph.PredStubMarker, Object: "true", Confidence: 1.0,
-				}},
-			},
-			wantErr: "referential stub",
-		},
 		{
 			name: "the campaign carries no seed triple",
 			resident: &graph.EntityState{
@@ -401,9 +368,10 @@ type seedDroppingStore struct{ *fakeStore }
 
 func (s *seedDroppingStore) CreateEntity(
 	ctx context.Context,
+	contract string,
 	entity *graph.EntityState,
 ) (graphio.CreateResult, error) {
-	result, err := s.fakeStore.CreateEntity(ctx, entity)
+	result, err := s.fakeStore.CreateEntity(ctx, contract, entity)
 	if err != nil || result.Entity == nil {
 		return result, err
 	}
@@ -488,10 +456,7 @@ func TestNewGate_RequiresAStore(t *testing.T) {
 	}
 }
 
-// The campaign entity must not read as a referential stub: boot-readiness and
-// the gate's own recovery path both key on the envelope, and a zero envelope is
-// indistinguishable from a stub.
-func TestGateClaim_StampsARealEnvelopeOnTheCampaignEntity(t *testing.T) {
+func TestGateClaim_StampsTheCanonicalCampaignEnvelope(t *testing.T) {
 	store := newFakeStore()
 	gate := newTestGate(t, store)
 
@@ -502,11 +467,8 @@ func TestGateClaim_StampsARealEnvelopeOnTheCampaignEntity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetEntity: %v", err)
 	}
-	if stored.IsStub() {
-		t.Fatal("the created campaign entity reads as a referential stub")
-	}
-	if !stored.MessageType.IsValid() {
-		t.Fatalf("the campaign entity carries an invalid envelope %v", stored.MessageType)
+	if stored.MessageType != campaign.EntityMessageType {
+		t.Fatalf("campaign message type = %v, want %v", stored.MessageType, campaign.EntityMessageType)
 	}
 	if !stored.UpdatedAt.Equal(testClock()) {
 		t.Fatalf("the campaign entity is stamped %v, want the injected clock %v", stored.UpdatedAt, testClock())

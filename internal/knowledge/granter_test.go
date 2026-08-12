@@ -14,6 +14,7 @@ import (
 
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/graphio"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -41,8 +42,24 @@ type journalGraph struct {
 	failRevelation bool
 }
 
-func (s *journalGraph) CreateEntity(_ context.Context, entity *graph.EntityState) (graphio.CreateResult, error) {
+func (s *journalGraph) CreateEntity(_ context.Context, contract string, entity *graph.EntityState) (graphio.CreateResult, error) {
 	kind := fmt.Sprint(entity.Triples[0].Object)
+	wantContract := projectioncontract.KnowledgeBirthContract
+	if kind == string(vocabulary.EntityKindRevelation) {
+		wantContract = projectioncontract.RevelationBirthContract
+	}
+	if contract != wantContract {
+		return graphio.CreateResult{}, fmt.Errorf("create uses contract %q, want %q", contract, wantContract)
+	}
+	allowed := make(map[string]struct{})
+	for _, predicate := range projectioncontract.BirthPredicates(contract) {
+		allowed[predicate] = struct{}{}
+	}
+	for _, triple := range entity.Triples {
+		if _, ok := allowed[triple.Predicate]; !ok {
+			return graphio.CreateResult{}, fmt.Errorf("predicate %q is outside birth contract %q", triple.Predicate, contract)
+		}
+	}
 	*s.journal = append(*s.journal, "create-"+kind)
 	if kind == string(vocabulary.EntityKindRevelation) && s.failRevelation {
 		s.failRevelation = false
@@ -59,8 +76,11 @@ func (s *journalGraph) GetEntity(_ context.Context, id string) (*graph.EntitySta
 	*s.journal = append(*s.journal, "verify-existing")
 	return s.entities[id], nil
 }
-func (s *journalGraph) MergeTriples(_ context.Context, _ string, triples []message.Triple, _ ...graphio.MergeOption) (*graph.EntityState, error) {
+func (s *journalGraph) Reconcile(_ context.Context, target projectioncontract.Target, _ string, triples []message.Triple) (*graph.EntityState, error) {
 	*s.journal = append(*s.journal, "turn-ref-last")
+	if target != projectioncontract.TurnKnowledge {
+		return nil, errors.New("unexpected turn knowledge projection target")
+	}
 	if len(triples) != 1 || triples[0].Predicate != vocabulary.TurnKnowledgeRef.String() {
 		return nil, errors.New("wrong final witness")
 	}
@@ -141,13 +161,6 @@ func TestExactEntitySemantics_AllowsOnlyEnumeratedFrameworkIdentityFacts(t *test
 		fact(id, vocabulary.KnowledgeActorHolder, testActor, at),
 		fact(id, vocabulary.KnowledgeEvidenceRef, testEvidence, at))
 	got := want.Clone()
-	got.Triples = append(got.Triples, message.Triple{
-		Subject: id, Predicate: graph.PredStubMarker, Object: true,
-	})
-	if err := exactEntitySemantics(got, want); err != nil {
-		t.Fatalf("framework-injected identity changed owned semantics: %v", err)
-	}
-	got = want.Clone()
 	got.Triples = append(got.Triples, message.Triple{
 		Subject: id, Predicate: ssvocab.EntityIndexingProfile, Object: ssvocab.IndexingProfileControl,
 	})

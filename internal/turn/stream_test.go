@@ -10,17 +10,17 @@ import (
 	"github.com/c360studio/semmachina/internal/turn"
 )
 
-// beta.159 has no auto-create retention default to compare against. The seam
+// beta.160 has no auto-create retention default to compare against. The seam
 // now refuses an ordinary stream whose author did not state BOTH bounds, and
 // the action stream must pass that same production check.
-func TestActionStreamConfig_DeclaresTheBoundsBeta159Requires(t *testing.T) {
+func TestActionStreamConfig_DeclaresTheRequiredBounds(t *testing.T) {
 	undeclared := jetstream.StreamConfig{Name: turn.ActionStream}
 	if err := natsclient.CheckStreamBounds(undeclared, "test negative control"); !errors.Is(err, natsclient.ErrStreamBoundsUndeclared) {
 		t.Fatalf("an unbounded ordinary stream returned %v, want ErrStreamBoundsUndeclared", err)
 	}
 
 	if err := natsclient.CheckStreamBounds(turn.ActionStreamConfig(), "turn.ActionStreamConfig"); err != nil {
-		t.Fatalf("ActionStreamConfig does not satisfy beta.159's finite-bounds contract: %v", err)
+		t.Fatalf("ActionStreamConfig does not satisfy beta.160's finite-bounds contract: %v", err)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semmachina/internal/effect"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/stage"
 	"github.com/c360studio/semmachina/internal/turn"
 	"github.com/c360studio/semmachina/internal/vocabulary"
@@ -39,11 +40,11 @@ func (s *retryingEffectStore) GetEntity(_ context.Context, entityID string) (*gr
 	return state, nil
 }
 
-func (s *retryingEffectStore) MergeTriples(
+func (s *retryingEffectStore) Reconcile(
 	_ context.Context,
+	target projectioncontract.Target,
 	entityID string,
-	triples []message.Triple,
-	opts ...graphio.MergeOption,
+	desired []message.Triple,
 ) (*graph.EntityState, error) {
 	s.writes[entityID]++
 	if err := s.failNext[entityID]; err != nil {
@@ -52,19 +53,16 @@ func (s *retryingEffectStore) MergeTriples(
 	}
 
 	state := s.entities[entityID]
-	request := graph.UpdateEntityWithTriplesRequest{
-		Entity:     &graph.EntityState{ID: entityID},
-		AddTriples: triples,
+	allowed := projectioncontract.Predicates(target)
+	if len(allowed) == 0 {
+		return nil, errors.New("unexpected effect projection target")
 	}
-	for _, opt := range opts {
-		opt(&request)
-	}
-	replaced := make(map[string]bool, len(request.AddTriples)+len(request.RemoveTriples))
-	for _, triple := range request.AddTriples {
-		replaced[triple.Predicate] = true
-	}
-	for _, predicate := range request.RemoveTriples {
+	replaced := make(map[string]bool, len(allowed))
+	for _, predicate := range allowed {
 		replaced[predicate] = true
+	}
+	for _, triple := range desired {
+		replaced[triple.Predicate] = true
 	}
 	kept := state.Triples[:0]
 	for _, triple := range state.Triples {
@@ -72,7 +70,7 @@ func (s *retryingEffectStore) MergeTriples(
 			kept = append(kept, triple)
 		}
 	}
-	state.Triples = append(kept, request.AddTriples...)
+	state.Triples = append(kept, desired...)
 	if err := s.failAfterMutation[entityID]; err != nil {
 		delete(s.failAfterMutation, entityID)
 		return nil, err
@@ -184,9 +182,9 @@ func TestEffectorStage_ClassifiesPartialCommitAndConvergesTransientFailures(t *t
 				failAfterMutation: make(map[string]error),
 				writes:            make(map[string]int),
 			}
-			mergeErr := semerrs.WrapTransient(errors.New("merge refusal"), "test", "MergeTriples", "commit target")
+			mergeErr := semerrs.WrapTransient(errors.New("reconcile refusal"), "test", "Reconcile", "commit target")
 			if tc.permanent {
-				mergeErr = semerrs.WrapInvalid(errors.New("contract refusal"), "test", "MergeTriples", "commit target")
+				mergeErr = semerrs.WrapInvalid(errors.New("contract refusal"), "test", "Reconcile", "commit target")
 			}
 			if tc.failAfterMutation {
 				world.failAfterMutation[applyItemID] = mergeErr

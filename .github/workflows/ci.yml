@@ -53,7 +53,9 @@ jobs:
           cache: true
 
       - name: go vet
-        run: go vet ./...
+        run: |
+          go vet ./...
+          go vet -tags=integration,acceptance,e2e ./...
 
       - name: gofmt
         # `gofmt -l` REPORTS; `go fmt` rewrites. A gate that fixes the thing it
@@ -98,6 +100,14 @@ jobs:
         # `go test -json` streams, including the package-with-no-test-files
         # shape that must NOT be a false positive. Fast — no Docker, no build.
         run: bash scripts/check-no-skips_fixture_test.sh
+
+      - name: Prove the test-tier gate can fail
+        # The split is safe only while every real-infrastructure source is in
+        # exactly one checked tier and no Docker-starting TestMain is untagged.
+        run: |
+          bash scripts/check-test-tiers_fixture_test.sh
+          bash scripts/check-test-tiers.sh
+          bash scripts/check-test-union_fixture_test.sh
 
   build:
     name: Build
@@ -155,17 +165,14 @@ jobs:
           path: semmachina-linux-amd64
           retention-days: 7
 
-  test:
-    name: Test (race, full module)
+  go_test:
+    name: Go test (${{ matrix.lane }})
     runs-on: ubuntu-latest
-    # Measured on this tree (Apple Silicon, -race, -p 2): 528s of summed package
-    # time, ~5 minutes of wall clock, dominated by four packages —
-    # internal/e2e 228s, internal/stage 116s, internal/boot 83s,
-    # internal/resume 53s. A 4-vCPU ubuntu-latest runner with a cold Docker
-    # cache will be several times slower. 60 minutes is a ceiling that catches a
-    # wedge, not a target; report-test-json.sh prints the real distribution
-    # every run so this comment can be corrected from data rather than guessed.
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [unit, integration, pipeline, recovery, acceptance, e2e]
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -176,78 +183,53 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Docker is required, and is not optional
-        # The integration tests do not skip without Docker — they fail (that is
-        # the whole point of internal/testinfra's opt-out polarity). Asserting
-        # it up front turns "the runner image changed" into a one-line failure
-        # instead of a twenty-minute one.
+      - name: Docker is required for real-infrastructure lanes
+        if: matrix.lane != 'unit'
         run: |
           docker info >/dev/null
           echo "OK: docker daemon reachable"
 
-      # No image pre-pull step. The NATS image tag comes from the pinned
-      # semstreams test client's default, not from anything in this repo, so
-      # naming a tag here would be a guess that silently warms the wrong layer.
-      # testcontainers pulls what it needs inside its own 180s start budget.
-
-      - name: go test -race ./... and the zero-skip gate
-        # ONE run over ./..., deliberately, and it is worth stating why since
-        # splitting it would halve the wall clock:
-        #
-        #   - `./...` is the only selector that cannot silently omit a package.
-        #     A split into "e2e" and "everything else" makes the union a thing
-        #     someone has to keep true, and a package that falls out of both
-        #     lists produces a green run with less coverage — precisely the
-        #     failure class this gate exists to catch.
-        #   - The zero-skip assertion is a claim about the MODULE. One run
-        #     produces one JSON stream, and the count in it is the count.
-        #   - Attribution does not need job splitting: the JSON names the
-        #     package and test for every failure, and report-test-json.sh
-        #     prints failing output plus the per-package wall clock, so the
-        #     expensive packages are visible every run rather than guessed at.
-        #
-        # -p 2 caps concurrent test PACKAGES, so at most two NATS containers
-        # boot at once. Unbounded package parallelism (default GOMAXPROCS, 4 on
-        # ubuntu-latest) CPU/IO-starves the shared Docker host until
-        # contention-sensitive tests exhaust their wait windows — upstream
-        # measured exactly this and settled on the same number.
-        #
-        # -timeout is PER PACKAGE, so 20m does not mean the job may run 20m.
-        # -count=1 keeps this an uncached run: a cached `ok` proves nothing
-        # about today's tree.
-        #
-        # The test run and the gate are in ONE step on purpose. Any env scoping
-        # that reached `go test` also reaches the checker, so a step-level
-        # SEMMACHINA_SKIP_INTEGRATION cannot hide from it.
+      - name: Run the checked ${{ matrix.lane }} lane
+        # Unit tests run with -race and no Docker. Integration keeps package
+        # concurrency at two. Pipeline, recovery, acceptance, and E2E run on
+        # isolated hosts with serial package/container lifecycles. The selector,
+        # JSON reporter, and no-skip gate are shared with Taskfile.yml.
         run: |
-          json="${RUNNER_TEMP}/gotest.json"
-          go test -json -race -p 2 -timeout=20m -count=1 ./... >"$json" && status=0 || status=$?
+          bash scripts/run-go-test-lane.sh \
+            "${{ matrix.lane }}" \
+            "${RUNNER_TEMP}/gotest-${{ matrix.lane }}.json"
 
-          # Rendering only, and deliberately not a gate — its status is dropped
-          # so a formatting problem can never mask a test result. The raw JSON
-          # is uploaded as an artifact either way. Everything that DOES gate is
-          # below, and neither branch is reachable without evaluating both.
-          bash scripts/report-test-json.sh "$json" \
-            || echo "(could not render the test report; see the gotest-json artifact)"
-
-          # The gate runs even when the suite failed: a run that both failed and
-          # skipped has two problems, and hiding the second behind the first is
-          # how the skip comes back.
-          bash scripts/check-no-skips.sh "$json" && gate=0 || gate=$?
-
-          if [ "$status" -ne 0 ]; then
-            echo "go test exited $status"
-            exit "$status"
-          fi
-          exit "$gate"
-
-      - name: Upload the raw test JSON
+      - name: Upload the lane's raw test JSON
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: gotest-json
-          path: ${{ runner.temp }}/gotest.json
+          name: gotest-${{ matrix.lane }}-json
+          path: ${{ runner.temp }}/gotest-${{ matrix.lane }}.json
           retention-days: 7
+
+  test_union:
+    name: Go test union
+    runs-on: ubuntu-latest
+    needs: [go_test]
+    if: always()
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Download every lane result
+        uses: actions/download-artifact@v7
+        with:
+          pattern: gotest-*-json
+          path: ${{ runner.temp }}/gotest-lanes
+          merge-multiple: true
+
+      - name: Prove the split's union is complete and unskipped
+        run: |
+          bash scripts/check-test-tiers.sh
+          bash scripts/check-test-union.sh \
+            "${RUNNER_TEMP}/gotest-lanes" \
+            "${RUNNER_TEMP}/gotest-union.json"
 
   spec:
     name: OpenSpec
@@ -273,7 +255,7 @@ jobs:
         run: bash scripts/check-openspec.sh
 
   frontend:
-    name: Frontend
+    name: Frontend static and server unit
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -293,16 +275,13 @@ jobs:
       - name: Install lockfile dependencies
         run: npm ci
 
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
-
       - name: Frontend lint and type checks
         run: |
           npm run lint
           npm run check
 
-      - name: Frontend unit, component, and browser tests
-        run: npm test
+      - name: Frontend server unit tests
+        run: npm run test:unit:server
 
       - name: Frontend build
         run: npm run build
@@ -310,10 +289,73 @@ jobs:
       - name: Surface deployment isolation
         run: node tests/deployment-isolation/run.mjs
 
+  frontend_browser:
+    name: Frontend browser components
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install lockfile dependencies and Chromium
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Browser component tests
+        run: npm run test:component:browser
+
+  ui_journey:
+    name: Playwright UI journeys
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install lockfile dependencies and Chromium
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run deterministic UI journeys
+        run: npm run test:journey:ui
+
+      - name: Upload Playwright reports and failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-ui-journey
+          path: |
+            web/playwright-report
+            web/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
   status-check:
     name: CI Status Check
     runs-on: ubuntu-latest
-    needs: [lint, build, test, spec, frontend]
+    needs: [lint, build, go_test, test_union, spec, frontend, frontend_browser, ui_journey]
     if: always()
     steps:
       - name: Every job must have succeeded
@@ -326,9 +368,12 @@ jobs:
           for result in \
             "lint=${{ needs.lint.result }}" \
             "build=${{ needs.build.result }}" \
-            "test=${{ needs.test.result }}" \
+            "go_test=${{ needs.go_test.result }}" \
+            "test_union=${{ needs.test_union.result }}" \
             "spec=${{ needs.spec.result }}" \
-            "frontend=${{ needs.frontend.result }}"; do
+            "frontend=${{ needs.frontend.result }}" \
+            "frontend_browser=${{ needs.frontend_browser.result }}" \
+            "ui_journey=${{ needs.ui_journey.result }}"; do
             echo "$result"
             if [ "${result#*=}" != "success" ]; then
               failed=1

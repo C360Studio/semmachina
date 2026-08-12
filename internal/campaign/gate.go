@@ -11,6 +11,7 @@ import (
 
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -19,13 +20,11 @@ const InstantiationSource = "campaign-instantiation"
 
 // EntityMessageType is the provenance envelope stamped on the campaign entity.
 //
-// It is stamped explicitly because an entity with a zero envelope is
-// indistinguishable from a referential stub to graph.EntityState.IsStub, and
-// the campaign entity is precisely the thing boot-readiness checks ask about.
-// No message of this type is ever published — the campaign entity is created
-// through the atomic mutation lane, not the fact lane — so it is deliberately
-// absent from the payload registry: it is entity provenance, not a decodable
-// wire type.
+// beta.160 atomic create validates the complete birth envelope, and the campaign
+// entity is precisely the thing boot-readiness checks ask about. No message of
+// this type is ever published — the campaign entity is created through the
+// atomic mutation lane, not the fact lane — so it is deliberately absent from
+// the payload registry: it is entity provenance, not a decodable wire type.
 //
 // The category is payload's constant rather than a literal here, so it shares a
 // namespace with the registered categories and a future collision is something
@@ -46,14 +45,9 @@ var EntityMessageType = message.Type{
 // completion instants and, on the day somebody re-used this surface for the
 // seed, two seeds.
 type EntityStore interface {
-	CreateEntity(ctx context.Context, entity *graph.EntityState) (graphio.CreateResult, error)
+	CreateEntity(ctx context.Context, contract string, entity *graph.EntityState) (graphio.CreateResult, error)
 	GetEntity(ctx context.Context, id string) (*graph.EntityState, error)
-	MergeTriples(
-		ctx context.Context,
-		entityID string,
-		triples []message.Triple,
-		opts ...graphio.MergeOption,
-	) (*graph.EntityState, error)
+	Reconcile(context.Context, projectioncontract.Target, string, []message.Triple) (*graph.EntityState, error)
 }
 
 // The claim above, enforced by the compiler rather than by a doc comment.
@@ -211,16 +205,9 @@ func (g *Gate) Claim(ctx context.Context, requested Experience) (Instantiation, 
 		return Instantiation{}, errors.New("campaign seed source produced the zero seed")
 	}
 
-	result, err := g.store.CreateEntity(ctx, g.entity(seed, requested))
+	result, err := g.store.CreateEntity(ctx, projectioncontract.CampaignBirthContract, g.entity(seed, requested))
 	switch {
 	case err == nil:
-		// Degraded means the write COMMITTED and only the read-back failed;
-		// retrying would return entity_already_exists and a caller reading that
-		// as "someone else instantiated it" would draw the opposite of the
-		// truth. The minted seed is authoritative — this call wrote it.
-		if result.Degraded {
-			return newInstantiation(g.campaignID, seed, requested, true), nil
-		}
 		if err := g.confirmStoredInstantiation(result.Entity, seed, requested); err != nil {
 			return Instantiation{}, err
 		}
@@ -354,11 +341,6 @@ func instantiationFromEntity(state *graph.EntityState, campaignID string) (Seed,
 func validateCampaignEntity(state *graph.EntityState, campaignID string) error {
 	if state == nil {
 		return fmt.Errorf("campaign entity %s read back as nil", campaignID)
-	}
-	if state.IsStub() {
-		return fmt.Errorf(
-			"campaign entity %s is a referential stub: something referenced it before it was created, so it holds "+
-				"no instantiation provenance", campaignID)
 	}
 	return nil
 }

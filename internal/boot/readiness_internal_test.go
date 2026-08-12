@@ -2,7 +2,6 @@ package boot
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/message"
 	"github.com/nats-io/nats.go/jetstream"
 
@@ -23,10 +22,11 @@ import (
 
 // These are the two gates that decide whether this engine serves play from a
 // whole world, and both of their failure modes are SILENT against a real broker:
-// a referential stub is queryable and factless, and a mid-build index answers
-// with a SHORTER list rather than an error. Neither state can be produced on
-// demand — they are windows a broker passes through on its own schedule — so the
-// gates are driven here against a graph that can be asked to sit in one.
+// an import can still have missing authority entries after its publishes are
+// acknowledged, and a mid-build index answers with a SHORTER list rather than
+// an error. Neither state can be produced on demand — they are windows a broker
+// passes through on its own schedule — so the gates are driven here against a
+// graph that can be asked to sit in one.
 
 // testWindow polls fast and gives up fast; nothing here waits on real work.
 func testWindow() readinessWindow {
@@ -89,14 +89,6 @@ func born(ids ...string) graphio.BatchResult {
 	return out
 }
 
-// stubbed returns a batch whose entity carries the referential-stub envelope:
-// queryable, and none of its own facts.
-func stubbed(id string) graphio.BatchResult {
-	return graphio.BatchResult{
-		Entities: []graph.EntityState{{ID: id, MessageType: graph.StubMessageType}},
-	}
-}
-
 func TestAwaitEntitiesBorn_ReturnsOnceEveryEntityIsBorn(t *testing.T) {
 	g := &scriptedGraph{batches: []graphio.BatchResult{
 		{Missing: []graph.MissingEntity{{ID: "a", Reason: graph.MissingNotFound}}},
@@ -110,23 +102,6 @@ func TestAwaitEntitiesBorn_ReturnsOnceEveryEntityIsBorn(t *testing.T) {
 	}
 }
 
-// The half that gets forgotten. graph-ingest materialises a referenced entity as
-// a STUB the moment the REFERENCING entity lands, so an existence poll alone
-// succeeds against a half-world — and the context assembler then reads a scene
-// that is quietly smaller rather than an error.
-func TestAwaitEntitiesBorn_RefusesAnEntityThatIsStillAReferentialStub(t *testing.T) {
-	g := &scriptedGraph{batches: []graphio.BatchResult{stubbed("a")}}
-
-	err := awaitEntitiesBorn(t.Context(), g, []string{"a"}, testWindow())
-	if err == nil {
-		t.Fatal("the readiness gate accepted a referential stub as a loaded entity; \"the id resolves\" is not " +
-			"\"the entity is loaded\", and the difference is a world the assembler reads as smaller")
-	}
-	if !strings.Contains(err.Error(), "referential stub") {
-		t.Errorf("the refusal does not name the stub: %v", err)
-	}
-}
-
 func TestAwaitEntitiesBorn_RefusesAnEntityThatNeverArrives(t *testing.T) {
 	g := &scriptedGraph{batches: []graphio.BatchResult{
 		{Missing: []graph.MissingEntity{{ID: "a", Reason: graph.MissingNotFound}}},
@@ -135,7 +110,7 @@ func TestAwaitEntitiesBorn_RefusesAnEntityThatNeverArrives(t *testing.T) {
 	if err == nil {
 		t.Fatal("the readiness gate accepted a world with a missing entity")
 	}
-	if !strings.Contains(err.Error(), "unborn") {
+	if !strings.Contains(err.Error(), "not queryable") {
 		t.Errorf("the refusal does not say what is wrong: %v", err)
 	}
 }
@@ -263,95 +238,74 @@ func TestAwaitMembershipIndexed_IgnoresEdgesThatAreNotMembership(t *testing.T) {
 	}
 }
 
-// The rule-processor started check, driven against every shape its reader can
-// return.
-//
-// The important case is the STALE one. The status key survives a restart, so a
-// check that merely found a status passes on every boot after the first — for a
-// processor this process never started, which is the state that would let the
-// stranded-turn pass end live turns. The engine closes it by DELETING the key
-// before starting the processor, so what this exercises is the predicate that
-// deletion makes meaningful: a key that is absent stays a refusal for as long as
-// it is absent, and no timestamp is consulted at all.
-func TestAwaitReportedStatus_RefusesUntilTheStatusReappears(t *testing.T) {
-	status := func(stage string, at time.Time) []byte {
-		data, err := json.Marshal(component.Status{
-			Component: "rule-processor", Stage: stage, StageStartedAt: at,
-		})
-		if err != nil {
-			t.Fatalf("encode status: %v", err)
-		}
-		return data
-	}
-
+func TestAwaitRuleReadiness_FailsClosedOnEveryIncompleteShape(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		read  func(context.Context) ([]byte, error)
-		wants string
+		name    string
+		reading readiness.Reading
+		want    string
 	}{
-		{
-			name:  "the key never reappears",
-			read:  func(context.Context) ([]byte, error) { return nil, errors.New("nats: key not found") },
-			wants: "key not found",
-		},
-		{
-			name:  "a status carrying no stage",
-			read:  func(context.Context) ([]byte, error) { return status("", time.Now()), nil },
-			wants: "no stage at all",
-		},
-		{
-			name:  "an undecodable status",
-			read:  func(context.Context) ([]byte, error) { return []byte("{"), nil },
-			wants: "undecodable",
-		},
+		{name: "unknown", reading: readiness.Reading{}, want: "unknown"},
+		{name: "watch error", reading: readiness.Reading{Known: true, Fresh: true, Err: errors.New("watch lost")}, want: "watch lost"},
+		{name: "stale", reading: readiness.Reading{Known: true, Age: time.Minute}, want: "stale"},
+		{name: "building", reading: readiness.Reading{Known: true, Fresh: true,
+			Status: graph.IndexStatusResponse{State: graph.IndexStateBuilding}}, want: "building"},
+		{name: "not ready", reading: readiness.Reading{Known: true, Fresh: true,
+			Status: graph.IndexStatusResponse{State: graph.IndexStateReady, BootstrapComplete: true}}, want: "ready is false"},
+		{name: "bootstrap incomplete", reading: readiness.Reading{Known: true, Fresh: true,
+			Status: graph.IndexStatusResponse{State: graph.IndexStateReady, Ready: true}}, want: "bootstrap is incomplete"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := awaitReportedStatus(t.Context(), tc.read, testWindow())
-			if err == nil {
-				t.Fatal("the check accepted a status the processor had not written; the stranded-turn pass would " +
-					"then run against a processor nobody confirmed started")
-			}
-			if !strings.Contains(err.Error(), tc.wants) {
-				t.Errorf("the refusal does not say %q: %v", tc.wants, err)
+			err := awaitRuleReadiness(t.Context(), 0, func() ruleReadinessGeneration {
+				return ruleReadinessGeneration{revision: 1, reading: tc.reading}
+			}, testWindow())
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("readiness refusal = %v, want %q", err, tc.want)
 			}
 		})
-	}
-
-	// The positive controls, without which every case above is satisfied by a
-	// check that always fails. BOTH stages the processor can be in when this
-	// reads are accepted: `idle` is what Start writes last, and `evaluating` is
-	// what its already-live entity watcher can overwrite it with — the processor
-	// has no path back to idle, so pinning the value would hang the boot.
-	for _, stage := range []string{"idle", "evaluating"} {
-		read := func(context.Context) ([]byte, error) { return status(stage, time.Now()), nil }
-		if err := awaitReportedStatus(t.Context(), read, testWindow()); err != nil {
-			t.Fatalf("the check refused a processor reporting %q: %v", stage, err)
-		}
 	}
 }
 
-// A clock that stepped BACKWARDS must not turn a refusal into a pass.
-//
-// This is the hole the delete-then-await shape closes. The reported stamp
-// round-trips through JSON without its monotonic reading, so any comparison
-// against it is wall-clock on both sides — and a status written an hour in the
-// PAST is exactly what an NTP correction, a VM snapshot restore or a container
-// host resync leaves behind. Existence after deletion cannot be forged that way,
-// and the assertion here is that the stamp is not consulted at all.
-func TestAwaitReportedStatus_DoesNotConsultTheReportedClock(t *testing.T) {
-	ancient, err := json.Marshal(component.Status{
-		Component:      "rule-processor",
-		Stage:          "idle",
-		StageStartedAt: time.Now().Add(-time.Hour),
-	})
-	if err != nil {
-		t.Fatalf("encode status: %v", err)
+func TestAwaitRuleReadiness_WaitsForFreshReadyBootstrap(t *testing.T) {
+	var calls atomic.Int64
+	read := func() ruleReadinessGeneration {
+		if calls.Add(1) == 1 {
+			return ruleReadinessGeneration{revision: 1, reading: readiness.Reading{Known: true, Fresh: true,
+				Status: graph.IndexStatusResponse{State: graph.IndexStateBuilding}}}
+		}
+		return ruleReadinessGeneration{revision: 2, reading: readiness.Reading{Known: true, Fresh: true, Status: graph.IndexStatusResponse{
+			State: graph.IndexStateReady, Ready: true, BootstrapComplete: true,
+		}}}
 	}
-	read := func(context.Context) ([]byte, error) { return ancient, nil }
+	if err := awaitRuleReadiness(t.Context(), 0, read, testWindow()); err != nil {
+		t.Fatalf("awaitRuleReadiness: %v", err)
+	}
+	if calls.Load() < 2 {
+		t.Fatal("readiness gate did not observe the transition")
+	}
+}
 
-	if err := awaitReportedStatus(t.Context(), read, testWindow()); err != nil {
-		t.Fatalf("the check refused a status stamped in the past: %v. The stamp is not the predicate — the key's "+
-			"reappearance after this boot deleted it is, precisely so a backwards clock step cannot decide it", err)
+func TestAwaitRuleReadiness_RejectsFreshReadyStatusFromPriorActivation(t *testing.T) {
+	const baseline = 41
+	var calls atomic.Int64
+	read := func() ruleReadinessGeneration {
+		if calls.Add(1) == 1 {
+			return ruleReadinessGeneration{revision: baseline, reading: readiness.Reading{
+				Known: true, Fresh: true, Status: graph.IndexStatusResponse{
+					State: graph.IndexStateReady, Ready: true, BootstrapComplete: true,
+				},
+			}}
+		}
+		return ruleReadinessGeneration{revision: baseline + 1, reading: readiness.Reading{
+			Known: true, Fresh: true, Status: graph.IndexStatusResponse{
+				State: graph.IndexStateReady, Ready: true, BootstrapComplete: true,
+			},
+		}}
+	}
+	if err := awaitRuleReadiness(t.Context(), baseline, read, testWindow()); err != nil {
+		t.Fatalf("awaitRuleReadiness: %v", err)
+	}
+	if calls.Load() < 2 {
+		t.Fatal("fresh ready status from the prior activation satisfied the restart gate")
 	}
 }
 

@@ -39,8 +39,8 @@ func id(t *testing.T, kind, instance string) string {
 }
 
 // fakeGraph is an in-memory graph that keeps the two properties this component
-// actually depends on: a stub is an entity with a zero envelope, and the
-// incoming index answers the reverse direction a triple cannot be read from.
+// actually depends on: absent IDs stay absent, and the incoming index answers
+// the reverse direction a triple cannot be read from.
 //
 // Everything about whether a REAL graph behaves that way is proved in
 // scene_integration_test.go against real graph-ingest and real graph-index; this
@@ -102,28 +102,6 @@ func (g *fakeGraph) put(entityID string, triples ...message.Triple) {
 		state.Triples = append(state.Triples, triple)
 	}
 	g.entities[entityID] = state
-}
-
-// putStub stores a referential stub in the shape graph-ingest actually mints:
-// the stub ENVELOPE plus the marker triples, and none of the entity's own facts.
-//
-// The envelope is the load-bearing part. IsStub keys on it and not on the
-// marker, because the marker persists after the entity's real birth — so a
-// fixture that faked a stub with a marker alone would be testing a check nobody
-// should be making.
-func (g *fakeGraph) putStub(entityID string) {
-	g.entities[entityID] = &graph.EntityState{
-		ID:          entityID,
-		MessageType: graph.StubMessageType,
-		Triples: []message.Triple{{
-			Subject:    entityID,
-			Predicate:  graph.PredStubMarker,
-			Object:     true,
-			Source:     "graph-ingest",
-			Timestamp:  testTime,
-			Confidence: 1,
-		}},
-	}
 }
 
 func (g *fakeGraph) GetEntity(_ context.Context, entityID string) (*graph.EntityState, error) {
@@ -438,7 +416,7 @@ func TestAssemble_ReportsAnUnverifiableActorRatherThanPassingSilently(t *testing
 		"the player entity was never delivered": {
 			arrange: func(t *testing.T, g *fakeGraph) {
 				t.Helper()
-				g.putStub(id(t, "player", "p1"))
+				delete(g.entities, id(t, "player", "p1"))
 			},
 			want: scene.ActorPlayerAbsent,
 		},
@@ -573,105 +551,61 @@ func TestAssemble_DoesNotMistakePastTurnsForPeopleInTheRoom(t *testing.T) {
 	}
 }
 
-// ------------------------------------------------------------------ stubs
+// -------------------------------------------------------- missing neighbours
 
 // F11, and the reason this test exists at all: a referenced-but-undelivered
-// entity answers a read successfully while carrying none of its own facts.
-// Handing one to a persona is a silent context hole — the room quietly has one
-// fewer thing in it and nothing errors.
-func TestAssemble_ExcludesAStubNeighbourAndSaysSo(t *testing.T) {
+// target is missing from beta.160 authority. Handing it to a persona is a silent
+// context hole — the room quietly has one fewer thing in it and nothing errors.
+func TestAssemble_ExcludesAMissingNeighbourAndSaysSo(t *testing.T) {
 	g := gatehouse(t)
 	rook := id(t, "character", "rook")
 	lantern := id(t, "item", "lantern")
 
-	// Rook carries a lantern that was never imported: the reference alone mints
-	// a queryable, factless entity at that key.
+	// Rook carries a lantern that was never imported. Beta.160 leaves the target
+	// absent until its own authority record exists.
 	g.entities[rook].Triples = append(g.entities[rook].Triples, message.Triple{
 		Subject: rook, Predicate: vocabulary.WorldRelationCarries.String(), Object: lantern,
 		Source: "test", Timestamp: testTime, Confidence: 1,
 	})
-	g.putStub(lantern)
 
 	view := assemble(t, g)
 
 	for _, entity := range view.Neighbours {
 		if entity.ID == lantern {
-			t.Fatal("a referential stub was handed to a persona as a thing in the world")
+			t.Fatal("an absent relationship target was handed to a persona as a thing in the world")
 		}
 	}
 	found := false
 	for _, excluded := range view.Excluded {
 		if excluded.ID == lantern {
 			found = true
-			if excluded.Reason != scene.ExcludedStub {
-				t.Fatalf("the stub was excluded as %q, want %q", excluded.Reason, scene.ExcludedStub)
+			if excluded.Reason != scene.ExcludedMissing {
+				t.Fatalf("the missing target was excluded as %q, want %q", excluded.Reason, scene.ExcludedMissing)
 			}
 		}
 	}
 	if !found {
-		t.Fatal("the stub was dropped without being reported; a half-loaded room and a small room look " +
+		t.Fatal("the missing target was dropped without being reported; a half-loaded room and a small room look " +
 			"identical to every caller")
 	}
 }
 
-// The marker triple a stub carries PERSISTS after the entity's real facts land,
-// so a marker-based check reports a fully-loaded entity as a stub forever. Only
-// the envelope distinguishes them, which is why IsStub is the discriminator and
-// why this test builds a real entity that still carries the marker.
-func TestAssemble_UsesTheEnvelopeNotTheMarkerToRecognizeAStub(t *testing.T) {
+func TestAssemble_RefusesAMissingScene(t *testing.T) {
 	g := gatehouse(t)
-	rook := id(t, "character", "rook")
-
-	// Rook was referenced before being delivered, so he carries the stub marker
-	// AND his own facts, with a real envelope. Nothing removes the marker at
-	// birth; only the envelope flips.
-	g.entities[rook].Triples = append(g.entities[rook].Triples, message.Triple{
-		Subject: rook, Predicate: graph.PredStubMarker, Object: true,
-		Source: "graph-ingest", Timestamp: testTime, Confidence: 1,
-	})
-	if g.entities[rook].IsStub() {
-		t.Fatal("the fixture entity reads as a stub; this test would pass vacuously")
-	}
-
-	view := assemble(t, g)
-	if !slicesContain(ids(view.Members), rook) {
-		t.Fatal("a fully-loaded entity that still carries its birth marker was excluded as a stub; a " +
-			"marker-based check reports every referenced-then-delivered entity as missing forever")
-	}
-	// And the marker itself does not reach the persona: it is not registered
-	// vocabulary, so the projection drops it.
-	for _, entity := range view.Members {
-		if entity.ID != rook {
-			continue
-		}
-		for _, triple := range entity.Triples {
-			if triple.Predicate == graph.PredStubMarker {
-				t.Fatal("a framework identity marker reached a persona's context")
-			}
-		}
-	}
-}
-
-// A stub at the SCENE is fatal rather than an exclusion: a persona cannot be
-// asked to judge what happens in a room with no name. This is the shape a
-// half-imported world actually produces, since every member references the scene
-// and the scene's own facts may not have landed yet.
-func TestAssemble_RefusesAStubScene(t *testing.T) {
-	g := gatehouse(t)
-	g.putStub(id(t, "scene", "gatehouse"))
+	delete(g.entities, id(t, "scene", "gatehouse"))
 
 	_, err := newAssembler(t, g).Assemble(t.Context(), testTurnID, testTurnEntityID)
 	if err == nil {
 		t.Fatal("a context was assembled from a scene that holds none of its own facts")
 	}
-	if !strings.Contains(err.Error(), "stub") {
-		t.Fatalf("refusal %q does not name the stub", err)
+	if !errors.Is(err, graphio.ErrEntityNotFound) {
+		t.Fatalf("refusal %q does not preserve ErrEntityNotFound", err)
 	}
 }
 
-func TestAssemble_RefusesAStubTurn(t *testing.T) {
+func TestAssemble_RefusesAMissingTurn(t *testing.T) {
 	g := gatehouse(t)
-	g.putStub(testTurnEntityID)
+	delete(g.entities, testTurnEntityID)
 
 	if _, err := newAssembler(t, g).Assemble(t.Context(), testTurnID, testTurnEntityID); err == nil {
 		t.Fatal("a context was assembled for a turn that holds none of its own facts")

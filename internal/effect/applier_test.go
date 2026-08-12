@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semmachina/internal/effect"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -36,13 +37,14 @@ var applyTime = time.Date(2026, 7, 28, 14, 0, 0, 0, time.UTC)
 
 // mergeCall is one per-entity write the applier issued.
 type mergeCall struct {
+	target   projectioncontract.Target
 	entityID string
 	triples  []message.Triple
 	cleared  []string
 }
 
 // fakeStore is the graph surface, scripted. It exists for the shapes a healthy
-// broker will not produce on demand — a missing entity, a stub, a merge that
+// broker will not produce on demand — a missing entity or a reconcile that
 // fails after its predecessors committed. The success paths are proven against
 // real graph-ingest in the integration suite.
 type fakeStore struct {
@@ -61,28 +63,43 @@ func (s *fakeStore) GetEntity(_ context.Context, id string) (*graph.EntityState,
 	return state, nil
 }
 
-func (s *fakeStore) MergeTriples(
+func (s *fakeStore) Reconcile(
 	_ context.Context,
+	target projectioncontract.Target,
 	entityID string,
-	triples []message.Triple,
-	opts ...graphio.MergeOption,
+	desired []message.Triple,
 ) (*graph.EntityState, error) {
-	// The real option type, applied to the real request struct, so the fake
-	// records what graph-ingest would have received rather than a paraphrase.
-	request := graph.UpdateEntityWithTriplesRequest{
-		Entity:     &graph.EntityState{ID: entityID},
-		AddTriples: triples,
+	allowed := projectioncontract.Predicates(target)
+	if len(allowed) == 0 {
+		return nil, errors.New("unexpected effect projection target")
 	}
-	for _, opt := range opts {
-		opt(&request)
+	wanted := make(map[string]bool, len(desired))
+	for _, triple := range desired {
+		wanted[triple.Predicate] = true
+	}
+	var cleared []string
+	for _, predicate := range allowed {
+		if !wanted[predicate] {
+			cleared = append(cleared, predicate)
+		}
 	}
 	s.merges = append(s.merges, mergeCall{
-		entityID: entityID, triples: request.AddTriples, cleared: request.RemoveTriples,
+		target: target, entityID: entityID, triples: desired, cleared: cleared,
 	})
 	if err := s.failOn[entityID]; err != nil {
 		return nil, err
 	}
 	return s.entities[entityID], nil
+}
+
+func (s *fakeStore) objectsFor(entityID string, predicate vocabulary.Predicate) []any {
+	var out []any
+	for _, call := range s.merges {
+		if call.entityID == entityID {
+			out = append(out, objectsOf(call, predicate)...)
+		}
+	}
+	return out
 }
 
 func (s *fakeStore) mergeFor(entityID string) (mergeCall, bool) {
@@ -135,6 +152,8 @@ func starterWorld() *fakeStore {
 			turnEntityID: turnEntity(),
 			rook: entityState(rook, vocabulary.EntityKindCharacter,
 				fact(rook, vocabulary.CharacterAttributeHealth, 8),
+				fact(rook, vocabulary.CharacterAttributeStamina, 6),
+				fact(rook, vocabulary.CharacterAttributeResolve, 7),
 				fact(rook, vocabulary.CharacterStatusCurrent, string(vocabulary.StatusHealthy)),
 				fact(rook, vocabulary.WorldLocationCurrent, gatehouse),
 				fact(rook, vocabulary.WorldRelationCarries, crowbar),
@@ -338,37 +357,6 @@ func TestApply_RejectsEachFailureClassWithItsOwnReason(t *testing.T) {
 	}
 }
 
-// A referential stub is queryable and carries none of the entity's own facts.
-// Treating "the ID resolves" as "the entity is there" is how a turn commits a
-// change to something that was never born — and the stub marker triple persists
-// after real birth, so only the envelope answers the question.
-func TestApply_RefusesAStubTargetEvenThoughItIsQueryable(t *testing.T) {
-	store := starterWorld()
-	store.entities[rations] = &graph.EntityState{
-		ID:          rations,
-		MessageType: graph.StubMessageType,
-		Triples: []message.Triple{
-			{Subject: rations, Predicate: graph.PredStubMarker, Object: true, Confidence: 1.0},
-			{Subject: rations, Predicate: graph.PredStubReferencedBy, Object: rook, Confidence: 1.0},
-		},
-	}
-
-	_, err := newApplier(t, store).Apply(t.Context(), batchOf(payload.EffectIntent{
-		Type: vocabulary.EffectSetAttribute, Target: rations,
-		Attribute: vocabulary.AttributeQuantity, Value: intPtr(2),
-	}), turnEntityID, batchRef)
-
-	if err == nil {
-		t.Fatal("an effect was applied to a referential stub")
-	}
-	if reason, _ := effect.FailureReasonFor(err); reason != vocabulary.FailureEffectEntityMissing {
-		t.Fatalf("stub rejection reason = %q, want %q", reason, vocabulary.FailureEffectEntityMissing)
-	}
-	if len(store.merges) != 0 {
-		t.Fatal("the applier wrote to a stub")
-	}
-}
-
 // The all-or-nothing this lane can actually offer: every intent is checked
 // before any write is issued, so a batch that fails validation at its last
 // intent leaves nothing behind.
@@ -492,14 +480,10 @@ func TestApply_AllowsSeveralDistinctFactsOnOneTarget(t *testing.T) {
 		t.Fatal("the batch reported nothing applied")
 	}
 
-	call, ok := store.mergeFor(rook)
-	if !ok {
-		t.Fatal("no write reached the target")
-	}
-	if got := objectsOf(call, vocabulary.CharacterAttributeHealth); len(got) != 1 || got[0] != 4 {
+	if got := store.objectsFor(rook, vocabulary.CharacterAttributeHealth); len(got) != 1 || got[0] != 4 {
 		t.Fatalf("health written as %v, want [4]", got)
 	}
-	if got := objectsOf(call, vocabulary.CharacterStatusCurrent); len(got) != 1 ||
+	if got := store.objectsFor(rook, vocabulary.CharacterStatusCurrent); len(got) != 1 ||
 		got[0] != string(vocabulary.StatusWounded) {
 		t.Fatalf("status written as %v", got)
 	}
@@ -507,7 +491,49 @@ func TestApply_AllowsSeveralDistinctFactsOnOneTarget(t *testing.T) {
 
 // ------------------------------------------------------------ commit shaping
 
-// The merge lane replaces a predicate's WHOLE value set. So adding one carried
+func TestApply_HealthOnlyReconcilesTheAttributeFamilyAndPreservesItsSiblings(t *testing.T) {
+	store := starterWorld()
+
+	if _, err := newApplier(t, store).Apply(t.Context(), batchOf(payload.EffectIntent{
+		Type: vocabulary.EffectSetAttribute, Target: rook,
+		Attribute: vocabulary.AttributeHealth, Value: intPtr(4),
+	}), turnEntityID, batchRef); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	if len(store.merges) != 2 {
+		t.Fatalf("health-only effect issued %d reconciles, want attributes plus marker: %+v",
+			len(store.merges), store.merges)
+	}
+	attributes := store.merges[0]
+	if attributes.target != projectioncontract.EffectTargetAttributes {
+		t.Fatalf("health reconcile target = %+v, want %+v", attributes.target,
+			projectioncontract.EffectTargetAttributes)
+	}
+	for predicate, want := range map[vocabulary.Predicate]any{
+		vocabulary.CharacterAttributeHealth:  4,
+		vocabulary.CharacterAttributeStamina: 6,
+		vocabulary.CharacterAttributeResolve: 7,
+	} {
+		got := objectsOf(attributes, predicate)
+		if len(got) != 1 || got[0] != want {
+			t.Errorf("%s desired values = %v, want [%v]", predicate, got, want)
+		}
+	}
+	for _, untouched := range []projectioncontract.Target{
+		projectioncontract.EffectTargetStatus,
+		projectioncontract.EffectTargetLocation,
+		projectioncontract.EffectTargetRelationships,
+	} {
+		for _, call := range store.merges {
+			if call.target == untouched {
+				t.Errorf("health-only effect reconciled unrelated family %+v", untouched)
+			}
+		}
+	}
+}
+
+// Reconciliation replaces a predicate's WHOLE value set. So adding one carried
 // item means publishing every carried item, and a writer that sends only the
 // new one deletes the rest with a success response. This is F14 wearing its
 // second hat, and it is invisible to any test that starts from an empty entity.
@@ -531,24 +557,23 @@ func TestApply_AddingARelationshipPreservesTheSiblingsTheMergeLaneWouldReplace(t
 	}
 	for _, want := range []string{crowbar, lantern, rations} {
 		if !carried[want] {
-			t.Fatalf("the write carries %v; %q was dropped — the merge lane replaces the whole set",
+			t.Fatalf("the write carries %v; %q was dropped — reconciliation replaces the whole set",
 				objectsOf(call, vocabulary.WorldRelationCarries), want)
 		}
 	}
 	if len(carried) != 3 {
 		t.Fatalf("the write carries %v, want exactly the three items", carried)
 	}
-	// The untouched relationship must not be rewritten at all: a predicate
-	// absent from the request is left alone, and touching it would put this
-	// writer in charge of a fact it has no intent for.
-	if got := objectsOf(call, vocabulary.WorldRelationKnows); len(got) != 0 {
-		t.Fatalf("the write touched an untouched predicate: %v", got)
+	// Relationships are one complete mutable family. Untouched values in that
+	// touched family ride in Desired and must survive unchanged.
+	if got := objectsOf(call, vocabulary.WorldRelationKnows); len(got) != 1 || got[0] != wren {
+		t.Fatalf("the reconstructed state changed an untouched relationship: %v", got)
 	}
 }
 
-// Completing the set is a lane constraint; RESTAMPING it is not. The merge
-// lane forces every sibling of a multi-valued predicate back onto the wire, and
-// graph.MergeTriples copies what it is given verbatim — so per-triple
+// Completing the set is a lane constraint; RESTAMPING it is not. Reconciliation
+// forces every sibling of a multi-valued predicate back onto the wire and stores
+// the desired triples verbatim — so per-triple
 // provenance is entirely the caller's to keep or destroy. A writer that rebuilt
 // the siblings from their objects alone would answer "when did Rook pick up the
 // crowbar?" with the turn he picked up the rations, and the chronicler and the
@@ -695,11 +720,11 @@ func TestApply_RemovingTheLastValueClearsThePredicate(t *testing.T) {
 	}
 }
 
-// A batch touching N entities is N merge calls, one per target, and each
+// A batch touching N mutable families issues one reconcile per family and each
 // request carries only its own subject. graph-ingest splits a foreign subject
 // off onto the APPENDING lane and logs the failure without returning it, so a
 // mixed request would silently accumulate values on the entity it strayed onto.
-func TestApply_IssuesOneMergePerTargetAndNeverSendsAForeignSubject(t *testing.T) {
+func TestApply_IssuesOneReconcilePerTouchedFamilyAndNeverSendsAForeignSubject(t *testing.T) {
 	store := starterWorld()
 
 	outcome, err := newApplier(t, store).Apply(t.Context(), batchOf(
@@ -717,9 +742,9 @@ func TestApply_IssuesOneMergePerTargetAndNeverSendsAForeignSubject(t *testing.T)
 		t.Fatalf("Apply: %v", err)
 	}
 
-	// Two targets plus the turn entity's batch marker.
-	if len(store.merges) != 3 {
-		t.Fatalf("issued %d merges, want one per target plus the turn marker: %+v", len(store.merges), store.merges)
+	// Rook's attributes and status, the crowbar's attributes, plus the marker.
+	if len(store.merges) != 4 {
+		t.Fatalf("issued %d reconciles, want one per touched family plus the turn marker: %+v", len(store.merges), store.merges)
 	}
 	for _, call := range store.merges {
 		for _, triple := range call.triples {
@@ -909,18 +934,9 @@ func TestApply_RefusesAHalfWrittenMarker(t *testing.T) {
 	}
 }
 
-func TestApply_RefusesAStubTurnEntity(t *testing.T) {
-	store := starterWorld()
-	store.entities[turnEntityID] = &graph.EntityState{ID: turnEntityID, MessageType: graph.StubMessageType}
-
-	if _, err := newApplier(t, store).Apply(t.Context(), batchOf(), turnEntityID, batchRef); err == nil {
-		t.Fatal("a stub turn was read for its batch state; 'no batch recorded' would be a false negative")
-	}
-}
-
 // ------------------------------------------------------------ partial commit
 
-// The merge lane is per-entity and has no failed-subject list, so a multi-target
+// Reconciliation is per-entity and has no failed-subject list, so a multi-target
 // batch is not atomic at the transport. A write that fails after its
 // predecessors committed must fail the TURN, naming the target that did not
 // land — never be reported as applied.
@@ -1012,9 +1028,6 @@ func TestFailureReasonFor_LeavesTheAnomalyAndTransportClassesUnclassified(t *tes
 				fact(turnEntityID, vocabulary.TurnEffectsBatch, "batch-turn-act-9"),
 				fact(turnEntityID, vocabulary.TurnEffectsRef, batchRef),
 			)
-		},
-		"a stub turn entity": func(s *fakeStore) {
-			s.entities[turnEntityID] = &graph.EntityState{ID: turnEntityID, MessageType: graph.StubMessageType}
 		},
 		"an unreadable turn entity": func(s *fakeStore) {
 			delete(s.entities, turnEntityID)
@@ -1293,8 +1306,7 @@ func TestApply_ReadsEachNamedEntityOnce(t *testing.T) {
 	}
 
 	// And the accumulation still came out right across four intents on one target.
-	call, _ := store.mergeFor(rook)
-	carried := objectsOf(call, vocabulary.WorldRelationCarries)
+	carried := store.objectsFor(rook, vocabulary.WorldRelationCarries)
 	if len(carried) != 2 {
 		t.Fatalf("after picking one item up and putting another down the character carries %v", carried)
 	}

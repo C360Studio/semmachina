@@ -39,30 +39,45 @@ func awaitGraphQL(ctx context.Context, endpoint, prefix, locationID string) erro
 }
 
 func probeGraphQL(ctx context.Context, endpoint, prefix, locationID string) error {
-	var prefixResponse struct {
-		Data struct {
-			Entities []struct {
-				ID string `json:"id"`
-			} `json:"entitiesByPrefix"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-	if err := postGraphQL(ctx, endpoint,
-		`query($prefix:String!){entitiesByPrefix(prefix:$prefix,limit:999){id}}`,
-		map[string]any{"prefix": prefix}, &prefixResponse); err != nil {
-		return err
-	}
-	if len(prefixResponse.Errors) != 0 {
-		return errors.New("entitiesByPrefix returned a GraphQL error")
-	}
 	found := false
-	for _, entity := range prefixResponse.Data.Entities {
-		if entity.ID == locationID {
-			found = true
+	cursor := ""
+	seenCursors := make(map[string]bool)
+	for page := 0; page < 16; page++ {
+		var prefixResponse struct {
+			Data struct {
+				Page struct {
+					Entities []struct {
+						ID string `json:"id"`
+					} `json:"entities"`
+					NextCursor string `json:"next_cursor"`
+				} `json:"entitiesByPrefix"`
+			} `json:"data"`
+			Errors []struct {
+				Message string `json:"message"`
+			} `json:"errors"`
+		}
+		if err := postGraphQL(ctx, endpoint,
+			`query($prefix:String!,$cursor:String){entitiesByPrefix(prefix:$prefix,limit:999,cursor:$cursor){entities{id} next_cursor}}`,
+			map[string]any{"prefix": prefix, "cursor": cursor}, &prefixResponse); err != nil {
+			return err
+		}
+		if len(prefixResponse.Errors) != 0 {
+			return errors.New("entitiesByPrefix returned a GraphQL error")
+		}
+		for _, entity := range prefixResponse.Data.Page.Entities {
+			if entity.ID == locationID {
+				found = true
+				break
+			}
+		}
+		if found || prefixResponse.Data.Page.NextCursor == "" {
 			break
 		}
+		cursor = prefixResponse.Data.Page.NextCursor
+		if seenCursors[cursor] {
+			return errors.New("entitiesByPrefix repeated a cursor")
+		}
+		seenCursors[cursor] = true
 	}
 	if !found {
 		return errors.New("known Bellweather location is absent")
@@ -92,19 +107,17 @@ func probeGraphQL(ctx context.Context, endpoint, prefix, locationID string) erro
 		return errors.New("relationships result is not an array")
 	}
 	for _, candidate := range relationships {
+		for _, retired := range []string{"from_entity_id", "to_entity_id", "edge_type"} {
+			if _, present := candidate[retired]; present {
+				return errors.New("relationships result contains a retired beta.159 member")
+			}
+		}
 		corrected, correctedPresent, err := readRelationshipRepresentation(candidate, [3]string{"from", "to", "predicate"})
 		if err != nil {
 			return err
 		}
-		beta159, beta159Present, err := readRelationshipRepresentation(candidate, [3]string{"from_entity_id", "to_entity_id", "edge_type"})
-		if err != nil {
-			return err
-		}
-		if !correctedPresent && !beta159Present {
-			return errors.New("relationships result contains no supported representation")
-		}
-		if correctedPresent && beta159Present && corrected != beta159 {
-			return errors.New("relationships result contains conflicting representations")
+		if !correctedPresent || corrected.From == "" {
+			return errors.New("relationships result contains no canonical representation")
 		}
 	}
 	return nil

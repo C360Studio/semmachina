@@ -173,8 +173,8 @@ func NewIntake(
 // their own:
 //
 //   - the turn already exists, and reading its phase fails as a RecordError:
-//     the entity holds two phase values, none, or is a referential stub. The
-//     record is corrupt and the next redelivery reads the same corrupt record.
+//     the entity holds two phase values or none. The record is corrupt and the
+//     next redelivery reads the same corrupt record.
 //   - graph-ingest deterministically refuses the create — an unregistered
 //     predicate, a rejected envelope. Accept's default branch wraps that as an
 //     ordinary error, because from here a refusal is indistinguishable from the

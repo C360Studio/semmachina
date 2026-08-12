@@ -11,6 +11,7 @@ import (
 
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -29,14 +30,7 @@ type Store interface {
 	// GetEntity reads one entity, reporting an absent one as
 	// graphio.ErrEntityNotFound rather than as an empty state.
 	GetEntity(ctx context.Context, id string) (*graph.EntityState, error)
-	// MergeTriples writes one entity's triples with replace-by-predicate
-	// semantics. It is per-entity: every triple must target entityID.
-	MergeTriples(
-		ctx context.Context,
-		entityID string,
-		triples []message.Triple,
-		opts ...graphio.MergeOption,
-	) (*graph.EntityState, error)
+	Reconcile(context.Context, projectioncontract.Target, string, []message.Triple) (*graph.EntityState, error)
 }
 
 // The claim above, enforced by the compiler rather than by a doc comment.
@@ -182,16 +176,16 @@ func (a *Applier) commit(
 	written := make([]string, 0, len(committed.order))
 
 	for _, entityID := range committed.order {
-		triples, cleared := committed.targets[entityID].triples(Source, batch.TurnID, at)
-		if _, err := a.store.MergeTriples(ctx, entityID, triples,
-			graphio.WithClearedPredicates(cleared...)); err != nil {
-			// The merge lane is per-entity and its response carries no
-			// failed-subject list, so this is where a multi-entity batch stops
-			// being atomic. A response error cannot say whether this target
-			// mutated before the reply failed, so written is only the confirmed
-			// response prefix and recovery re-applies this target too.
-			return Outcome{}, &CommitError{
-				BatchID: batch.BatchID, Target: entityID, Committed: written, Err: err,
+		for _, write := range committed.targets[entityID].projections(Source, batch.TurnID, at) {
+			if _, err := a.store.Reconcile(ctx, write.target, entityID, write.triples); err != nil {
+				// The merge lane is per-entity and its response carries no
+				// failed-subject list, so this is where a multi-entity batch stops
+				// being atomic. A response error cannot say whether this target
+				// mutated before the reply failed, so written is only the confirmed
+				// response prefix and recovery re-applies this target too.
+				return Outcome{}, &CommitError{
+					BatchID: batch.BatchID, Target: entityID, Committed: written, Err: err,
+				}
 			}
 		}
 		written = append(written, entityID)
@@ -203,7 +197,7 @@ func (a *Applier) commit(
 			BatchID: batch.BatchID, Target: turnEntityID, Committed: written, Err: err,
 		}
 	}
-	if _, err := a.store.MergeTriples(ctx, turnEntityID, marker); err != nil {
+	if _, err := a.store.Reconcile(ctx, projectioncontract.TurnEffectMarker, turnEntityID, marker); err != nil {
 		return Outcome{}, &CommitError{
 			BatchID: batch.BatchID, Target: turnEntityID, Committed: written, Err: err,
 		}
@@ -236,14 +230,9 @@ func (a *Applier) alreadyApplied(
 	if err != nil {
 		return false, fmt.Errorf("read turn entity %s: %w", turnEntityID, err)
 	}
-	// A stub is queryable and factless, so "no batch recorded" read off one
-	// would be a false negative — and this component's answer to that question
-	// decides whether the world is changed a second time.
-	if state.IsStub() {
-		return false, fmt.Errorf(
-			"turn entity %s is a referential stub: it holds no facts, so its applied-batch state is unknown",
-			turnEntityID)
-	}
+	// GetEntity reports a missing authority entry as an error. Treating a missing
+	// turn as "no batch recorded" would let this component change the world for
+	// paperwork that was never created.
 
 	identities := objectsFor(state, vocabulary.TurnEffectsBatch)
 	references := objectsFor(state, vocabulary.TurnEffectsRef)

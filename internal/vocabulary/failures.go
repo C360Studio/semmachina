@@ -25,10 +25,9 @@ const (
 	// predicate, one relationship asserted twice) that have no single-intent
 	// culprit.
 	FailureEffectInvalid FailureReason = "effect-invalid"
-	// FailureEffectEntityMissing reports an intent naming an entity that does
-	// not exist, or that exists only as a referential stub. A stub is queryable
-	// and factless, so treating it as present is how a turn commits a change to
-	// an entity that was never born.
+	// FailureEffectEntityMissing reports an intent naming an entity with no
+	// authority entry. Treating that target as present would let a turn commit a
+	// change to an entity the world never declared.
 	FailureEffectEntityMissing FailureReason = "effect-entity-missing"
 	// FailureEffectEntityKind reports an intent whose predicate cannot be
 	// carried by the entity it names — health on a scene, a character stored

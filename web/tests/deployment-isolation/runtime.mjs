@@ -46,25 +46,27 @@ const graph = http.createServer(async (request, response) => {
 		let data;
 		if (query.includes('entitiesByPrefix')) {
 			data = {
-				entitiesByPrefix: [
-					{
-						id: CANARY_ID,
-						triples: [
-							{
-								subject: CANARY_ID,
-								predicate: 'world.entity.kind',
-								object: 'location',
-								datatype: 'xsd:string'
-							},
-							{
-								subject: CANARY_ID,
-								predicate: 'world.entity.name',
-								object: canaryLabel,
-								datatype: 'xsd:string'
-							}
-						]
-					}
-				]
+				entitiesByPrefix: {
+					entities: [
+						{
+							id: CANARY_ID,
+							triples: [
+								{
+									subject: CANARY_ID,
+									predicate: 'world.entity.kind',
+									object: 'location',
+									datatype: 'xsd:string'
+								},
+								{
+									subject: CANARY_ID,
+									predicate: 'world.entity.name',
+									object: canaryLabel,
+									datatype: 'xsd:string'
+								}
+							]
+						}
+					]
+				}
 			};
 		} else if (query.includes('relationships')) {
 			data = { relationships: [] };

@@ -19,6 +19,7 @@ import (
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -32,9 +33,9 @@ var (
 
 // GraphStore is the create-or-verify and final turn-witness surface.
 type GraphStore interface {
-	CreateEntity(context.Context, *graph.EntityState) (graphio.CreateResult, error)
+	CreateEntity(context.Context, string, *graph.EntityState) (graphio.CreateResult, error)
 	GetEntity(context.Context, string) (*graph.EntityState, error)
-	MergeTriples(context.Context, string, []message.Triple, ...graphio.MergeOption) (*graph.EntityState, error)
+	Reconcile(context.Context, projectioncontract.Target, string, []message.Triple) (*graph.EntityState, error)
 }
 
 // ArtifactStore keeps prose and aggregate receipts out of the graph.
@@ -192,11 +193,12 @@ func (g *Granter) commit(
 }
 
 func (g *Granter) createOrVerify(ctx context.Context, wanted *graph.EntityState) error {
-	result, err := g.graph.CreateEntity(ctx, wanted)
+	contract := projectioncontract.KnowledgeBirthContract
+	if wanted.MessageType.Equal(revelationEntityType) {
+		contract = projectioncontract.RevelationBirthContract
+	}
+	result, err := g.graph.CreateEntity(ctx, contract, wanted)
 	if err == nil {
-		if result.Degraded {
-			return nil
-		}
 		if result.Entity == nil {
 			return fmt.Errorf("create entity %s returned no read-back", wanted.ID)
 		}
@@ -261,19 +263,16 @@ func exactEntitySemantics(got, want *graph.EntityState) error {
 }
 
 func frameworkManagedPredicate(predicate string) bool {
-	switch predicate {
-	case graph.PredStubMarker, graph.PredStubReferencedBy, graph.PredStubOwner,
-		ssvocab.EntityIndexingProfile:
-		return true
-	default:
-		return false
-	}
+	return predicate == ssvocab.EntityIndexingProfile
 }
 
 func (g *Granter) writeTurnRef(ctx context.Context, turnEntityID string, ref content.Ref) error {
 	at := g.now().UTC()
-	_, err := g.graph.MergeTriples(ctx, turnEntityID,
-		[]message.Triple{fact(turnEntityID, vocabulary.TurnKnowledgeRef, ref.String(), at)})
+	desired := []message.Triple{fact(turnEntityID, vocabulary.TurnKnowledgeRef, ref.String(), at)}
+	err := graphio.RetryRevisionConflict(ctx, func() error {
+		_, reconcileErr := g.graph.Reconcile(ctx, projectioncontract.TurnKnowledge, turnEntityID, desired)
+		return reconcileErr
+	})
 	if err != nil {
 		return fmt.Errorf("record knowledge receipt on turn: %w", err)
 	}

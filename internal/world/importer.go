@@ -79,9 +79,9 @@ var _ Publisher = (*natsclient.Client)(nil)
 // It publishes each entity as a Graphable payload and does not write
 // ENTITY_STATES. That is not a stylistic preference: graph-ingest is the sole
 // writer, and everything it does on the way in — the predicate contract, the
-// indexing-profile stamp, hierarchy inference, referential stubs for
-// cross-entity references, and the newer-wins merge that makes re-import
-// converge — is invisible to a component that writes the KV bucket directly.
+// indexing-profile stamp, hierarchy inference, and the newer-wins merge that
+// makes re-import converge — is invisible to a component that writes the KV
+// bucket directly.
 // An importer that took the shortcut would produce a world that looks right
 // and behaves differently from every other write in the system.
 type Importer struct {
@@ -153,14 +153,9 @@ type ImportResult struct {
 // surface, and inventing one here would put a second graph client in the
 // importer purely to make an asynchronous pipeline look synchronous.
 //
-// Such a poll MUST exclude referential stubs via graph.EntityState.IsStub().
-// When one imported entity references another, graph-ingest materializes a
-// referential-integrity STUB at the referenced ID the moment the REFERENCING
-// entity lands — before the referenced entity's own message is applied. So an
-// existence poll can succeed against an entity carrying only core.identity.*
-// stub markers and none of its own facts, and report a world loaded when it is
-// half-written. IsStub keys on the envelope, which the fact lane re-stamps at
-// true birth, so it is the signal that actually flips.
+// Such a poll must account for every planned ID. Beta.160 does not synthesize
+// referential stubs: a relationship target whose own fact has not landed is an
+// absent authority entry and appears in the batch read's Missing list.
 //
 // One timestamp is minted for the whole import and stamped on every triple, so
 // an imported world has a single coherent birth time rather than a spread that

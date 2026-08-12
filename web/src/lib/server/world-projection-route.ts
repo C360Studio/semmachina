@@ -49,7 +49,8 @@ export function createWorldProjectionRoute(dependencies: RouteDependencies) {
 			return response(200, '', await dependencies.projectWorld(principal));
 		} catch (error) {
 			if (error instanceof ProjectionError) {
-				const status = error.code === 'unauthorized' ? 401 : 502;
+				const status =
+					error.code === 'unauthorized' ? 401 : error.code === 'index_not_ready' ? 503 : 502;
 				return response(status, error.code);
 			}
 			return response(500, 'projection_failed');

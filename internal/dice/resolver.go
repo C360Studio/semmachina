@@ -116,13 +116,6 @@ func (r *Resolver) Resolve(
 	if err != nil {
 		return Resolution{}, fmt.Errorf("read turn entity %s: %w", turnEntityID, err)
 	}
-	// A referential stub is queryable and carries none of the entity's own
-	// facts, so "no roll recorded" read off one would be a false negative — the
-	// component would roll a second time for a turn that already had one.
-	if state.IsStub() {
-		return Resolution{}, fmt.Errorf(
-			"turn entity %s is a referential stub: it holds no facts, so its roll state is unknown", turnEntityID)
-	}
 
 	roll, err := r.roller.Roll(r.seed, r.campaignID, verdict.TurnID, verdict.Modifiers)
 	if err != nil {

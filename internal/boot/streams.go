@@ -21,7 +21,7 @@ const (
 )
 
 // streamDeclarations is the one declarative inventory for every ordinary
-// stream this composition owns. beta.159 requires ordinary work streams to
+// stream this composition owns. beta.160 requires ordinary work streams to
 // state finite age and byte bounds, and requires a named archival declaration
 // when permanence is the contract.
 //

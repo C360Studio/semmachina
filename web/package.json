@@ -13,13 +13,17 @@
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"lint": "prettier --check . && eslint .",
 		"format": "prettier --write .",
-		"test:unit": "vitest run --project server",
-		"test:unit:watch": "vitest --project server",
-		"test:component": "vitest run --project client --passWithNoTests",
-		"test:browser": "playwright test --pass-with-no-tests",
+		"test:unit:server": "vitest run --project server",
+		"test:unit:server:watch": "vitest --project server",
+		"test:unit": "npm run test:unit:server",
+		"test:unit:watch": "npm run test:unit:server:watch",
+		"test:component:browser": "vitest run --project client --passWithNoTests",
+		"test:component": "npm run test:component:browser",
+		"test:journey:ui": "playwright test --pass-with-no-tests",
+		"test:browser": "npm run test:journey:ui",
 		"test:browser:real:surface": "node tests/run-bellweather-surface.mjs",
 		"test:browser:real:surface:preflight": "node tests/run-bellweather-surface.mjs --preflight",
-		"test": "npm run test:unit && npm run test:component && npm run test:browser"
+		"test": "npm run test:unit:server && npm run test:component:browser && npm run test:journey:ui"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",

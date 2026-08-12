@@ -1,3 +1,5 @@
+//go:build integration
+
 package stage_test
 
 import (
@@ -6,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -39,6 +42,7 @@ import (
 	"github.com/c360studio/semmachina/internal/testinfra"
 	"github.com/c360studio/semmachina/internal/turn"
 	"github.com/c360studio/semmachina/internal/vocabulary"
+	"github.com/c360studio/semmachina/internal/world"
 )
 
 // The turn loop is a claim about two things a fake cannot be wrong about
@@ -234,21 +238,27 @@ func (l *loop) seedWorld(t *testing.T) {
 func (l *loop) createEntity(t *testing.T, id string, facts map[string]any) {
 	t.Helper()
 	at := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
-	triples := make([]message.Triple, 0, len(facts))
-	for predicate, object := range facts {
-		triples = append(triples, message.Triple{
-			Subject: id, Predicate: predicate, Object: object,
-			Source: "test", Timestamp: at, Confidence: 1.0,
-		})
+	kind, ok := facts[vocabulary.WorldEntityKind.String()].(string)
+	if !ok {
+		t.Fatalf("create %s requires a world entity kind", id)
 	}
-	if _, err := l.graph.CreateEntity(t.Context(), &graph.EntityState{
-		ID: id,
-		MessageType: message.Type{
-			Domain: payload.Domain, Category: payload.CategoryWorldEntity, Version: payload.SchemaVersion,
-		},
-		Version: 1, UpdatedAt: at, Triples: triples,
-	}); err != nil {
-		t.Fatalf("create %s: %v", id, err)
+	worldFacts := make([]payload.WorldFact, 0, len(facts)-1)
+	for predicate, object := range facts {
+		if predicate != vocabulary.WorldEntityKind.String() {
+			value, reference := object.(string)
+			worldFacts = append(worldFacts, payload.WorldFact{Predicate: vocabulary.Predicate(predicate), Object: object,
+				Reference: reference && message.IsValidEntityID(value)})
+		}
+	}
+	parts := strings.Split(id, ".")
+	entity := &payload.WorldEntity{ID: id, Kind: vocabulary.EntityKind(kind),
+		Template: payload.TemplateRef{ID: parts[3], Version: "test", LocalID: parts[5]}, Facts: worldFacts, RecordedAt: at}
+	wire, err := json.Marshal(message.NewBaseMessage(entity.Schema(), entity, "test", message.WithTime(at)))
+	if err != nil {
+		t.Fatalf("encode %s: %v", id, err)
+	}
+	if _, err := l.harness.Client.PublishToStreamWithAck(t.Context(), world.DefaultImportSubject, wire); err != nil {
+		t.Fatalf("publish %s: %v", id, err)
 	}
 }
 
@@ -712,7 +722,7 @@ func (l *loop) awaitPhase(t *testing.T, entityID string, want vocabulary.TurnPha
 	var last string
 	for time.Now().Before(deadline) {
 		state, err := l.harness.QueryEntity(t.Context(), entityID)
-		if err == nil && !state.IsStub() {
+		if err == nil && state != nil {
 			if object := testinfra.FirstObject(state, vocabulary.TurnPhaseCurrent.String()); object != nil {
 				last = fmt.Sprint(object)
 				if last == string(want) {
@@ -1091,7 +1101,7 @@ func (s *transientCommitStage) Run(_ context.Context, trigger stage.Trigger) err
 			Target:    trigger.TurnEntityID,
 			Committed: nil,
 			Err: semerrs.WrapTransient(
-				fmt.Errorf("response lost"), "test", "MergeTriples", "commit target"),
+				fmt.Errorf("response lost"), "test", "Reconcile", "commit target"),
 		}
 	case 2:
 		close(s.second)

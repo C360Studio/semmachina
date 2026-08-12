@@ -467,15 +467,19 @@ func TestAgentStreamConfig_CapturesEveryPortTheAgenticComponentsDeclare(t *testi
 			{"output", ports.Outputs},
 		} {
 			for _, port := range group.ports {
-				if port.StreamName != stage.TaskStream {
+				stream, ok := port.Config.(component.JetStreamPort)
+				if !ok || stream.StreamName != stage.TaskStream {
 					continue
 				}
-				checked++
-				if !streamCaptures(port.Subject, subjects) {
+				for _, subject := range stream.Subjects {
+					checked++
+					if streamCaptures(subject, subjects) {
+						continue
+					}
 					t.Errorf("the %s stream's subjects %v do not capture %s's %s port %q (%s); a publish onto an "+
 						"uncaptured subject reaches no consumer and a consumer filtered on one is accepted by the "+
 						"server and never delivered anything — both silent",
-						stage.TaskStream, subjects, name, group.direction, port.Name, port.Subject)
+						stage.TaskStream, subjects, name, group.direction, port.Name, subject)
 				}
 			}
 		}

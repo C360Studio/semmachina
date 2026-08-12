@@ -234,15 +234,11 @@ func TestImportCompletion_DistinguishesAbsentFromUnmarked(t *testing.T) {
 	}
 }
 
-func TestImportCompletion_RefusesAStubAndAnUnreadableInstant(t *testing.T) {
+func TestImportCompletion_RefusesAnUnreadableInstant(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		entity *graph.EntityState
 	}{
-		{
-			name:   "referential stub",
-			entity: &graph.EntityState{ID: testCampaignID, MessageType: graph.StubMessageType},
-		},
 		{
 			name: "non-string object",
 			entity: &graph.EntityState{
@@ -443,18 +439,5 @@ func TestMarkImported_RefusesAnInstantiationThatDidNotComeFromClaim(t *testing.T
 	}
 	if _, err := gate.MarkImported(t.Context(), fresh); err != nil {
 		t.Fatalf("an untouched genuine fresh claim was refused: %v", err)
-	}
-}
-
-func TestMarkImported_AcceptsAnUntouchedDegradedClaim(t *testing.T) {
-	store := newFakeStore()
-	store.degrade = true
-	gate := newTestGate(t, store)
-	claim, err := gate.Claim(t.Context(), testExperience)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
-	if _, err := gate.MarkImported(t.Context(), claim); err != nil {
-		t.Fatalf("MarkImported refused a genuine degraded claim: %v", err)
 	}
 }

@@ -18,7 +18,7 @@ operator-authorized production smoke and uses Gemini 3.5 Flash-Lite.
 - Do not expose the loopback player, GraphQL, diagnostic, or surface HTTP listeners to the browser.
 
 The managed runner builds the web application, starts a fresh Bellweather engine and NATS state,
-starts the beta.159 GraphQL read surface, starts the loopback Node server, adds the test HTTPS/WSS
+starts the beta.160 GraphQL read surface, starts the loopback Node server, adds the test HTTPS/WSS
 proxy, runs Playwright, and tears down every owned process group.
 
 ## Safe local startup
@@ -176,6 +176,18 @@ Configure the projection server with:
 surface-only reachability. `auth_proxy` requires HTTPS and its dedicated token. The token is invalid
 under either other posture. Redirects are not followed, raw GraphQL documents are not accepted from
 the browser, and complete upstream responses are validated before closed browser DTOs are created.
+
+The projection consumes only beta.160 envelopes. Prefix reads follow opaque
+`EntityPage { entities, next_cursor }` cursors with a page size of 200, at most 10 pages, fewer than
+1,000 aggregate entities, at most 999 relationships per place, 2,048 triples per entity, and a
+1 MiB cap per GraphQL response. Exact clock reads require
+`ExactEntity { entity, kvRevision }`. Relationships require canonical `from`, `to`, and `predicate`
+fields; retired beta.159 aliases fail closed. A repeated cursor, malformed or out-of-scope later
+page, or any cap breach returns no partial browser DTO.
+
+An upstream `index_not_ready` response is retryable. The creator surface announces the failure in
+its live status region, exposes an explicit retry control, and restores focus and controls for the
+next attempt. Other projection failures remain closed rather than being silently retried.
 
 The configured organization, namespace, and template derive one exact scope prefix. Player identity,
 locations, relationships, and an optional clock entity must remain inside it. The UI exposes no

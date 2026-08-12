@@ -228,17 +228,6 @@ func TestResolve_RefusesAnUnreadableOrDamagedTurnEntity(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name: "a referential stub, which holds no facts at all",
-			entity: &graph.EntityState{
-				ID:          testTurnEntity,
-				MessageType: graph.StubMessageType,
-				Triples: []message.Triple{
-					tripleFor(vocabulary.TurnPhaseCurrent, string(vocabulary.PhaseResolving)),
-				},
-			},
-			wantErr: "referential stub",
-		},
-		{
 			// The signature of a write that took the APPEND lane. A reader
 			// that took the first value would pick one band at random.
 			name: "two bands, from an append-lane write",

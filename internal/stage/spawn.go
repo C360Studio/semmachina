@@ -13,6 +13,7 @@ import (
 	"github.com/c360studio/semmachina/internal/epistemic"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/persona"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -287,7 +288,7 @@ func (s *Spawner) commitNotApplicable(ctx context.Context, trigger Trigger) erro
 	if err != nil {
 		return fmt.Errorf("project non-mystery interpretation for turn %s: %w", trigger.TurnEntityID, err)
 	}
-	if _, err := s.caseWriter.MergeTriples(ctx, trigger.TurnEntityID, triples); err != nil {
+	if _, err := s.caseWriter.Reconcile(ctx, projectioncontract.TurnCaseDecision, trigger.TurnEntityID, triples); err != nil {
 		return fmt.Errorf("record non-mystery interpretation for turn %s: %w", trigger.TurnEntityID, err)
 	}
 	return nil

@@ -1,3 +1,5 @@
+//go:build e2e
+
 package e2e_test
 
 import (
@@ -172,7 +174,7 @@ func awaitCasePhase(t *testing.T, caseID string, want vocabulary.CasePhase) voca
 	last := vocabulary.CasePhase("")
 	for time.Now().Before(deadline) {
 		state, err := graphStore(t).GetEntity(t.Context(), caseID)
-		if err == nil && !state.IsStub() {
+		if err == nil && state != nil {
 			last = vocabulary.CasePhase(stringObject(t, state, vocabulary.CaseLifecyclePhase))
 			if last == want {
 				return last

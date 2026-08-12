@@ -10,7 +10,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 
 	"github.com/c360studio/semmachina/internal/content"
-	"github.com/c360studio/semmachina/internal/graphio"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/turn"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
@@ -349,16 +349,16 @@ type playerMergeFailingStore struct {
 	fail bool
 }
 
-func (s *playerMergeFailingStore) MergeTriples(
+func (s *playerMergeFailingStore) Reconcile(
 	ctx context.Context,
+	target projectioncontract.Target,
 	entityID string,
 	triples []message.Triple,
-	opts ...graphio.MergeOption,
 ) (*graph.EntityState, error) {
 	if s.fail && entityID == testPlayerID {
 		return nil, errors.New("the player lane is unreachable")
 	}
-	return s.fakeStore.MergeTriples(ctx, entityID, triples, opts...)
+	return s.fakeStore.Reconcile(ctx, target, entityID, triples)
 }
 
 // stripPredicate removes a fact from a stored entity, which is how a corrupt

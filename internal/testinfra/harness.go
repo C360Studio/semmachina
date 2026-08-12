@@ -13,6 +13,7 @@ package testinfra
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -28,6 +29,8 @@ import (
 	"github.com/c360studio/semstreams/payloadregistry"
 	graphindex "github.com/c360studio/semstreams/processor/graph-index"
 	graphingest "github.com/c360studio/semstreams/processor/graph-ingest"
+	"github.com/c360studio/semstreams/service"
+	"github.com/c360studio/semstreams/types"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/testcontainers/testcontainers-go"
 
@@ -75,15 +78,17 @@ type Harness struct {
 	// the same RegisterPayloads a binary bootstrap calls.
 	Registry *payloadregistry.Registry
 
-	indexOnce sync.Once
-	index     component.LifecycleComponent
-	indexErr  error
+	graphClient *natsclient.Client
+	ingest      *service.ComponentManager
+	indexOnce   sync.Once
+	index       *service.ComponentManager
+	indexErr    error
 
 	stop func()
 }
 
 // EnsureArchivalStream provisions a stream whose contract is permanence through
-// beta.159's declarative seam and returns the live stream. Programmatic
+// beta.160's declarative seam and returns the live stream. Programmatic
 // EnsureStream intentionally cannot classify an archive and therefore refuses
 // to create one without finite bounds.
 func (h *Harness) EnsureArchivalStream(
@@ -179,6 +184,7 @@ func start() (*Harness, error) {
 
 	client, err := natsclient.NewSharedTestClient(
 		natsclient.WithJetStream(),
+		natsclient.WithNATSVersion("2.14.4"),
 		natsclient.WithStreams(natsclient.TestStreamConfig{
 			Name:     EntityStream,
 			Subjects: []string{entityStreamSubject},
@@ -198,18 +204,39 @@ func start() (*Harness, error) {
 		return nil, fmt.Errorf("register semmachina payloads: %w", err)
 	}
 
-	ingest, err := startGraphIngest(ctx, client.Client, registry)
+	// Graph components own a dedicated connection. Package tests deliberately
+	// stop their own consumers between worlds; sharing the client would also
+	// erase graph-ingest's beta.160 consumer binding while leaving its component
+	// marked running and permanently unready.
+	graphClient, err := natsclient.NewClient(client.URL)
 	if err != nil {
+		client.Terminate() //nolint:errcheck
+		return nil, fmt.Errorf("build graph substrate NATS client: %w", err)
+	}
+	if err := graphClient.Connect(ctx); err != nil {
+		client.Terminate() //nolint:errcheck
+		return nil, fmt.Errorf("connect graph substrate NATS client: %w", err)
+	}
+
+	ingest, err := startGraphIngest(ctx, graphClient, registry)
+	if err != nil {
+		_ = graphClient.Close(context.Background())
 		client.Terminate() //nolint:errcheck
 		return nil, err
 	}
 
-	harness := &Harness{Client: client.Client, Registry: registry}
+	harness := &Harness{
+		Client: client.Client, Registry: registry,
+		graphClient: graphClient, ingest: ingest,
+	}
 	harness.stop = func() {
 		if harness.index != nil {
 			_ = harness.index.Stop(5 * time.Second)
 		}
-		_ = ingest.Stop(5 * time.Second)
+		_ = harness.ingest.Stop(5 * time.Second)
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = harness.graphClient.Close(closeCtx)
+		cancel()
 		_ = client.Terminate()
 	}
 	return harness, nil
@@ -231,7 +258,7 @@ func start() (*Harness, error) {
 func (h *Harness) RequireIndex(t *testing.T) {
 	t.Helper()
 	h.indexOnce.Do(func() {
-		h.index, h.indexErr = startGraphIndex(context.Background(), h.Client, h.Registry)
+		h.index, h.indexErr = startGraphIndex(context.Background(), h.graphClient, h.Registry)
 	})
 	if h.indexErr != nil {
 		t.Fatalf("real graph-index is required and did not start: %v", h.indexErr)
@@ -243,28 +270,8 @@ func startGraphIndex(
 	ctx context.Context,
 	client *natsclient.Client,
 	registry *payloadregistry.Registry,
-) (component.LifecycleComponent, error) {
-	deps := component.Dependencies{
-		NATSClient:      client,
-		PayloadRegistry: registry,
-		Logger:          slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})),
-	}
-
-	created, err := graphindex.CreateGraphIndex(nil, deps)
-	if err != nil {
-		return nil, fmt.Errorf("create graph-index: %w", err)
-	}
-	index, ok := created.(component.LifecycleComponent)
-	if !ok {
-		return nil, fmt.Errorf("graph-index is a %T, not a LifecycleComponent", created)
-	}
-	if err := index.Initialize(); err != nil {
-		return nil, fmt.Errorf("initialize graph-index: %w", err)
-	}
-	if err := index.Start(ctx); err != nil {
-		return nil, fmt.Errorf("start graph-index: %w", err)
-	}
-	return index, nil
+) (*service.ComponentManager, error) {
+	return startGraphManager(ctx, client, registry, "graph-index", graphindex.DefaultConfig(), graphindex.Register)
 }
 
 // startGraphIngest boots the real graph-ingest component against the real
@@ -278,30 +285,65 @@ func startGraphIngest(
 	ctx context.Context,
 	client *natsclient.Client,
 	registry *payloadregistry.Registry,
-) (component.LifecycleComponent, error) {
-	deps := component.Dependencies{
-		NATSClient:      client,
-		PayloadRegistry: registry,
-		// Warn level: graph-ingest is chatty at info, and a test that drowns
-		// its own failure message in setup logs is a test nobody reads.
-		Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})),
-	}
+) (*service.ComponentManager, error) {
+	return startGraphManager(ctx, client, registry, "graph-ingest", graphingest.DefaultConfig(), graphingest.Register)
+}
 
-	created, err := graphingest.CreateGraphIngest(nil, deps)
+func startGraphManager(
+	ctx context.Context,
+	client *natsclient.Client,
+	registry *payloadregistry.Registry,
+	name string,
+	defaults any,
+	register func(*component.Registry) error,
+) (*service.ComponentManager, error) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	raw, err := json.Marshal(defaults)
 	if err != nil {
-		return nil, fmt.Errorf("create graph-ingest: %w", err)
+		return nil, fmt.Errorf("encode %s default configuration: %w", name, err)
 	}
-	ingest, ok := created.(component.LifecycleComponent)
+	componentRegistry := component.NewRegistry(component.WithLogger(logger))
+	if err := register(componentRegistry); err != nil {
+		return nil, fmt.Errorf("register %s: %w", name, err)
+	}
+	managerConfig, err := ssconfig.NewConfigManager(&ssconfig.Config{
+		Version: "1.1.0",
+		Platform: ssconfig.PlatformConfig{
+			Org: "c360", ID: "semmachina-testinfra-" + name, Type: "application", Environment: "test",
+		},
+		Components: ssconfig.ComponentConfigs{
+			name: {Type: types.ComponentTypeProcessor, Name: name, Enabled: true, Config: raw},
+		},
+	}, client, logger)
+	if err != nil {
+		return nil, fmt.Errorf("build %s config manager: %w", name, err)
+	}
+	constructed, err := service.NewComponentManager(json.RawMessage(`{"watch_config":false}`), &service.Dependencies{
+		NATSClient: client, Logger: logger,
+		Platform: types.PlatformMeta{Org: "c360", Platform: "semmachina-testinfra-" + name},
+		Manager:  managerConfig, ComponentRegistry: componentRegistry, PayloadRegistry: registry,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build %s component manager: %w", name, err)
+	}
+	manager, ok := constructed.(*service.ComponentManager)
 	if !ok {
-		return nil, fmt.Errorf("graph-ingest is a %T, not a LifecycleComponent", created)
+		return nil, fmt.Errorf("build %s component manager: constructor returned %T", name, constructed)
 	}
-	if err := ingest.Initialize(); err != nil {
-		return nil, fmt.Errorf("initialize graph-ingest: %w", err)
+	managed := manager.GetManagedComponents()[name]
+	if managed == nil || managed.State != component.StateInitialized {
+		return nil, fmt.Errorf("build %s component manager: component was not initialized", name)
 	}
-	if err := ingest.Start(ctx); err != nil {
-		return nil, fmt.Errorf("start graph-ingest: %w", err)
+	if err := manager.Start(ctx); err != nil {
+		_ = manager.Stop(5 * time.Second)
+		return nil, fmt.Errorf("start %s component manager: %w", name, err)
 	}
-	return ingest, nil
+	managed = manager.GetManagedComponents()[name]
+	if managed == nil || managed.State != component.StateStarted {
+		_ = manager.Stop(5 * time.Second)
+		return nil, fmt.Errorf("start %s component manager: component did not reach started", name)
+	}
+	return manager, nil
 }
 
 // QueryEntity reads one entity through graph-ingest's NATS query surface.
@@ -318,21 +360,18 @@ func (h *Harness) QueryEntity(ctx context.Context, id string) (*graph.EntityStat
 	if err != nil {
 		return nil, err
 	}
-	var state graph.EntityState
-	if err := json.Unmarshal(response, &state); err != nil {
-		return nil, fmt.Errorf("decode entity state: %w", err)
+	var exact graph.ExactEntity
+	if err := json.Unmarshal(response, &exact); err != nil {
+		return nil, fmt.Errorf("decode exact entity state: %w", err)
 	}
-	return &state, nil
+	if exact.Entity == nil || exact.KVRevision == 0 {
+		return nil, errors.New("exact entity response has no entity or revision")
+	}
+	return exact.Entity.Clone(), nil
 }
 
-// AwaitEntity polls until the entity is queryable AND is no longer a bare
-// referential stub.
-//
-// Both conditions are load-bearing, and the second was found the hard way: an
-// existence poll alone succeeds against a referential stub carrying none of the
-// entity's own facts. Anything that treats "the ID resolves" as "the entity is
-// loaded" is exposed to the same half-entity, including boot-readiness checks
-// that will never open this file.
+// AwaitEntity polls until the entity has an exact authoritative value. Missing
+// relationship targets remain absent in beta.160; no stub filtering is needed.
 func (h *Harness) AwaitEntity(t *testing.T, id string) *graph.EntityState {
 	t.Helper()
 	ctx := t.Context()
@@ -344,8 +383,6 @@ func (h *Harness) AwaitEntity(t *testing.T, id string) *graph.EntityState {
 		switch {
 		case err != nil:
 			lastErr = err
-		case state.IsStub():
-			lastErr = fmt.Errorf("entity %s is still a referential stub (envelope %v)", id, state.MessageType)
 		default:
 			return state
 		}
@@ -362,7 +399,7 @@ func (h *Harness) AwaitEntity(t *testing.T, id string) *graph.EntityState {
 // ObjectsFor returns every object recorded for a predicate on an entity.
 //
 // A slice rather than a single value on purpose: "how many values does this
-// predicate hold?" is the question that distinguishes a replace-lane write from
+// predicate hold?" is the question that distinguishes a reconcile-group write from
 // an append-lane one, and a helper that returned only the first would answer it
 // wrong every time.
 func ObjectsFor(state *graph.EntityState, predicate string) []any {

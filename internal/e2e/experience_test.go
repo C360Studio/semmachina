@@ -1,3 +1,5 @@
+//go:build e2e
+
 package e2e_test
 
 import (
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	upstreamgraph "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/model/wire"
 	"github.com/nats-io/nats.go/jetstream"
 
@@ -109,7 +112,7 @@ func TestE2E_StarterExperienceSelectionIsIsolatedSealedAndRestartSafe(t *testing
 	// their shared stores. Revisions make the ordering claim observable.
 	beforeMismatchEntities := entityRevisions(t, tracked...)
 	personaBefore := kvRevision(t, "PERSONAS", starterNarratorPersonaKey)
-	ruleBefore := kvRevision(t, "COMPONENT_STATUS", "rule-processor")
+	ruleBefore := kvRevision(t, readiness.BucketGraphStatus, readiness.KeyRule)
 	mismatch := newWorldUnstarted(t, w.ns, experienceScenario, withExperience("default", "default"))
 	engine, err := boot.New(mismatch.cfg)
 	if err != nil {
@@ -128,7 +131,7 @@ func TestE2E_StarterExperienceSelectionIsIsolatedSealedAndRestartSafe(t *testing
 	if after := kvRevision(t, "PERSONAS", starterNarratorPersonaKey); after != personaBefore {
 		t.Errorf("mismatched boot changed narrator revision from %d to %d before World refused it", personaBefore, after)
 	}
-	if after := kvRevision(t, "COMPONENT_STATUS", "rule-processor"); after != ruleBefore {
+	if after := kvRevision(t, readiness.BucketGraphStatus, readiness.KeyRule); after != ruleBefore {
 		t.Errorf("mismatched boot changed rule status revision from %d to %d before World refused it", ruleBefore, after)
 	}
 	for id, before := range beforeMismatchEntities {

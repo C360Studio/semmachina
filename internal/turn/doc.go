@@ -57,20 +57,17 @@
 //
 // The guard is CONVERGENT, not mutually exclusive. Advance reads the recorded
 // phase and then writes one, and two writers that read the same phase both pass.
-// Closing that window needs a compare-and-swap on the read revision, and the
-// entity query surface does not return a revision to swap on (graph-ingest reads
-// entry.Revision for its own validation and discards it), so the primitive is
-// not available to a caller. That is an engine ask, not a local retry loop.
+// Closing that window needs a compare-and-swap on an exact authority revision.
+// Beta.160's projection mutation client performs that fenced reconciliation;
+// a revision conflict remains caller-visible for bounded reread/recomputation.
 //
 // Nothing here works around it because nothing here needs to: this slice runs
 // one player, one turn at a time, and every stage under the guard is idempotent
 // by construction — the dice are seeded from the turn id, the effect batch is
 // keyed by the turn id, and every write replaces. That is the same posture
 // upstream takes for the identical problem shape in its gated-dag claim marker,
-// including the CAS-upgrade point: if cross-writer exclusion is ever needed, the
-// change is to pass the read revision into
-// graph.UpdateEntityWithTriplesRequest.ExpectedRevision, and the rest of this
-// package is unaffected.
+// including the CAS discipline. Cross-writer exclusion therefore belongs in
+// the contract-bound mutation path rather than a local unguarded retry loop.
 //
 // # No interactive pacing
 //

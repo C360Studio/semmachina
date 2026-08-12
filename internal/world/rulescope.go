@@ -261,7 +261,7 @@ func checkActionScope(
 
 	switch action.Type {
 	case rule.ActionTypeAddTriple, rule.ActionTypeRemoveTriple,
-		rule.ActionTypeUpdateTriple, rule.ActionTypeReplaceOwned:
+		rule.ActionTypeUpdateTriple, rule.ActionTypeReconcilePredicates:
 		return checkGraphActionScope(ruleID, where, action, hasRelatedPattern, domains)
 
 	case rule.ActionTypeDeny:
@@ -358,9 +358,9 @@ func checkGraphActionScope(
 	if action.Type == rule.ActionTypeRemoveTriple {
 		return nil
 	}
-	// Empty replace_owned is the explicit "clear this owned group" operation,
+	// Empty reconcile_predicates is the explicit "clear this group" operation,
 	// so it creates no entity link and is safe.
-	if action.Type == rule.ActionTypeReplaceOwned && action.Object == "" {
+	if action.Type == rule.ActionTypeReconcilePredicates && action.Object == "" {
 		return nil
 	}
 	switch action.Object {

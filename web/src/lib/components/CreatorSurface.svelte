@@ -141,6 +141,8 @@
 	);
 
 	async function startWorldLoad(): Promise<void> {
+		if (worldLoading) return;
+		worldError = false;
 		worldLoading = true;
 		try {
 			const projection = await worldLoader();
@@ -151,6 +153,10 @@
 		} finally {
 			if (active) worldLoading = false;
 		}
+	}
+
+	function retryWorldLoad(): void {
+		void startWorldLoad();
 	}
 
 	function observeState(next: SessionState): void {
@@ -234,10 +240,15 @@
 			<div class="shell-grid surface-layout">
 				<div class="story-column">
 					{#if worldLoading}
-						<p class="status-line">Loading world.</p>
+						<p class="status-line" role="status" aria-live="polite">Loading world.</p>
 					{/if}
 					{#if worldError}
-						<p role="alert">World projection unavailable. Session controls are disabled.</p>
+						<div class="callout" role="alert">
+							<p>World projection unavailable. Session controls are disabled.</p>
+							<button type="button" disabled={worldLoading} onclick={retryWorldLoad}
+								>Retry world projection</button
+							>
+						</div>
 					{/if}
 
 					{#each pastHistory as entry (entry.resolution.turn_id + ':' + entry.resolution.action_id)}

@@ -273,7 +273,7 @@ func (p *Projector) caseState(ctx context.Context) (graph.EntityState, error) {
 		return graph.EntityState{}, err
 	}
 	if len(states) != 1 {
-		return graph.EntityState{}, fmt.Errorf("scoped case %s is missing or a referential stub", p.scope.caseID)
+		return graph.EntityState{}, fmt.Errorf("scoped case %s is missing from the graph", p.scope.caseID)
 	}
 	if err := requireEntityKind(states[0], vocabulary.EntityKindCase); err != nil {
 		return graph.EntityState{}, fmt.Errorf("scoped case: %w", err)

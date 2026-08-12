@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 
 	"github.com/c360studio/semmachina/internal/content"
@@ -150,25 +149,6 @@ func TestGuard_RefusesEveryShapeItCannotReadHonestly(t *testing.T) {
 				t.Fatalf("the refusal is %q, want it to mention %q", err, testCase.want)
 			}
 		})
-	}
-}
-
-// A referential stub is queryable and factless, so "no artifact recorded" read
-// off one is a false negative — and this false negative buys a second billed
-// model call every single attempt.
-func TestGuard_RefusesAReferentialStub(t *testing.T) {
-	store := newFakeGraph(&journal{})
-	store.entities[testTurnEntityID] = &graph.EntityState{
-		ID:          testTurnEntityID,
-		MessageType: graph.StubMessageType,
-	}
-
-	_, err := newGuard(t, store).Check(t.Context(), persona.Adjudicator(), testTurnID, testTurnEntityID)
-	if err == nil {
-		t.Fatal("a referential stub was read as a stage that has produced nothing")
-	}
-	if !strings.Contains(err.Error(), "stub") {
-		t.Fatalf("the refusal is %q", err)
 	}
 }
 

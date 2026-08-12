@@ -14,6 +14,7 @@ import (
 
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/graphio"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/turn"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
@@ -45,8 +46,8 @@ func (loggingTurnStore) EntitiesWithPrefix(
 	return graphio.PrefixPage{}, nil
 }
 
-func (loggingTurnStore) MergeTriples(
-	context.Context, string, []message.Triple, ...graphio.MergeOption,
+func (loggingTurnStore) Reconcile(
+	context.Context, projectioncontract.Target, string, []message.Triple,
 ) (*graph.EntityState, error) {
 	return &graph.EntityState{}, nil
 }

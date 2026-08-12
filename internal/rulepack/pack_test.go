@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 	ssvocab "github.com/c360studio/semstreams/vocabulary"
@@ -476,7 +477,13 @@ func TestProcessorConfig_DeclaresEveryStageSubjectAsAJetStreamPort(t *testing.T)
 
 	declared := map[string]string{}
 	for _, port := range config.Ports.Outputs {
-		declared[port.Subject] = port.Type
+		stream, ok := port.Config.(component.JetStreamPort)
+		if !ok {
+			continue
+		}
+		for _, subject := range stream.Subjects {
+			declared[subject] = string(component.PortKindJetStream)
+		}
 	}
 	for _, definition := range config.InlineRules {
 		for _, action := range definition.OnEnter {

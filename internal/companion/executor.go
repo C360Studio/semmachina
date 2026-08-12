@@ -16,6 +16,7 @@ import (
 	"github.com/c360studio/semmachina/internal/epistemic"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/persona"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -194,7 +195,7 @@ func (e *Executor) executeTransaction(
 		Object: ref.String(), Source: "persona-companion", Timestamp: e.now().UTC(), Confidence: 1,
 		Context: identity.TurnEntityID,
 	})
-	if _, err := e.graph.MergeTriples(ctx, identity.TurnEntityID, triples); err != nil {
+	if _, err := e.graph.Reconcile(ctx, projectioncontract.TurnCompanionResult, identity.TurnEntityID, triples); err != nil {
 		return transient(call, "record companion decision and stage references", err)
 	}
 	body, err := json.Marshal(decision)
@@ -260,7 +261,7 @@ func (e *Executor) exhaustTransaction(ctx context.Context, identity persona.Iden
 	triples = append(triples, message.Triple{Subject: identity.TurnEntityID,
 		Predicate: vocabulary.TurnCompanionDecisionRef.String(), Object: decisionRef.String(),
 		Source: "persona-companion-exhausted", Timestamp: e.now().UTC(), Confidence: 1, Context: identity.TurnEntityID})
-	_, err = e.graph.MergeTriples(ctx, identity.TurnEntityID, triples)
+	_, err = e.graph.Reconcile(ctx, projectioncontract.TurnCompanionResult, identity.TurnEntityID, triples)
 	return err
 }
 

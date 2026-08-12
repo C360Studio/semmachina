@@ -1,27 +1,29 @@
+//go:build integration
+
 package dice_test
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
-	graphingest "github.com/c360studio/semstreams/processor/graph-ingest"
+	"github.com/c360studio/semstreams/pkg/projection"
 
 	"github.com/c360studio/semmachina/internal/campaign"
 	"github.com/c360studio/semmachina/internal/dice"
 	"github.com/c360studio/semmachina/internal/graphio"
+	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/testinfra"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
 // "Exactly one roll-result triple per turn" is a claim about the GRAPH, and the
 // graph is where it can be false. The mutation API offers two lanes that both
-// accept the same triples: one merges by (subject, predicate) and one appends.
+// accept the same triples: one reconciles a complete predicate group and one appends.
 // Picking the wrong one leaves a turn holding two bands, both stored, with no
 // error raised anywhere — so the property is proven against real graph-ingest
 // rather than against a fake that has one lane.
@@ -44,21 +46,37 @@ func realStore(t *testing.T) (*graphio.Store, *testinfra.Harness) {
 // turn-loop's phase management will.
 func createTurnEntity(t *testing.T, store *graphio.Store, id string) {
 	t.Helper()
-	if _, err := store.CreateEntity(t.Context(), &graph.EntityState{
+	parts := strings.Split(id, ".")
+	turnID := parts[len(parts)-1]
+	prefix := strings.Join(parts[:4], ".")
+	birth := &payload.TurnState{
+		TurnID: turnID, Phase: vocabulary.PhaseAccepted,
+		PlayerID: prefix + ".player.test", SceneID: prefix + ".scene.test",
+		ActionRef: "obj://TEST/turn/" + turnID + "/action",
+	}
+	birthTriples, err := birth.Triples(id, dice.Source, resolveTime)
+	if err != nil {
+		t.Fatalf("turn birth triples: %v", err)
+	}
+	if _, err := store.CreateEntity(t.Context(), projectioncontract.TurnBirthContract, &graph.EntityState{
 		ID:          id,
-		MessageType: turnEntity().MessageType,
+		MessageType: birth.Schema(),
 		Version:     1,
 		UpdatedAt:   resolveTime,
-		Triples: []message.Triple{{
-			Subject:    id,
-			Predicate:  vocabulary.TurnPhaseCurrent.String(),
-			Object:     string(vocabulary.PhaseResolving),
-			Source:     dice.Source,
-			Timestamp:  resolveTime,
-			Confidence: 1.0,
-		}},
+		Triples:     birthTriples,
 	}); err != nil {
 		t.Fatalf("create turn entity: %v", err)
+	}
+	if _, err := store.Reconcile(t.Context(), projectioncontract.TurnPhaseState, id, []message.Triple{{
+		Subject:    id,
+		Predicate:  vocabulary.TurnPhaseCurrent.String(),
+		Object:     string(vocabulary.PhaseResolving),
+		Source:     dice.Source,
+		Timestamp:  resolveTime,
+		Confidence: 1.0,
+	}},
+	); err != nil {
+		t.Fatalf("advance turn to resolving: %v", err)
 	}
 }
 
@@ -98,7 +116,7 @@ func TestIntegration_ARollTriggerDeliveredTwiceLeavesExactlyOneRoll(t *testing.T
 	}
 
 	// And a caller that wrote anyway must still converge: single-valued
-	// predicates replace on the merge lane.
+	// predicates replace through their complete reconcile group.
 	writeRoll(t, store, second)
 
 	state := harness.AwaitEntity(t, integrationTurnEntity)
@@ -173,7 +191,7 @@ func TestIntegration_OnlyTheRuleMatchedScalarsAndTheReferenceReachTheGraph(t *te
 				triple.Predicate)
 		}
 	}
-	// The phase predicate written at turn creation must survive the merge —
+	// The phase predicate written at turn creation must survive the reconcile —
 	// the roll replaces its OWN predicates, not the entity's other facts.
 	if got := testinfra.FirstObject(state, vocabulary.TurnPhaseCurrent.String()); got != string(vocabulary.PhaseResolving) {
 		t.Fatalf("the roll write clobbered the turn phase: %v", got)
@@ -184,9 +202,9 @@ func TestIntegration_OnlyTheRuleMatchedScalarsAndTheReferenceReachTheGraph(t *te
 // APPEND lane really does leave a turn holding two bands, with a success
 // response and no error anywhere. Choosing between the two lanes is therefore a
 // correctness decision, not a performance one — and if a future semstreams
-// version changes this, the reason MergeTriples exists changes with it and this
+// version changes this, the reason the reconcile group exists changes with it and this
 // test says so.
-func TestIntegration_TheAppendLaneLeavesTwoBandsWhichIsWhyTheMergeLaneIsUsed(t *testing.T) {
+func TestIntegration_TheAppendLaneLeavesTwoBandsWhichIsWhyReconcileIsUsed(t *testing.T) {
 	const turnID = "c360.semmachina.diceworld4.starter.turn.turn-act-1"
 	store, harness := realStore(t)
 	createTurnEntity(t, store, turnID)
@@ -205,42 +223,25 @@ func TestIntegration_TheAppendLaneLeavesTwoBandsWhichIsWhyTheMergeLaneIsUsed(t *
 	}
 
 	for attempt := range 2 {
-		// beta.159 deduplicates an identical six-field tuple on the add lane.
+		// The append lane deduplicates an identical six-field tuple.
 		// Give these occurrences distinct correlation contexts while keeping
 		// source and the single-valued predicate/object identical: that is the anomaly the
-		// merge lane prevents, not byte-identical redelivery.
+		// reconcile lane prevents, not byte-identical redelivery.
 		for idx := range triples {
 			triples[idx].Context = fmt.Sprintf("append-control-%d", attempt)
 		}
-		request, err := json.Marshal(graph.AddTriplesBatchRequest{Triples: triples})
-		if err != nil {
-			t.Fatalf("encode add_batch: %v", err)
-		}
-		reply, err := harness.Client.RequestClassified(
-			t.Context(), graphingest.SubjectTripleAddBatch, request, 5*time.Second)
-		if err != nil {
-			t.Fatalf("add_batch attempt %d: %v", attempt+1, err)
-		}
-		var response graph.AddTriplesBatchResponse
-		if err := json.Unmarshal(reply, &response); err != nil {
-			t.Fatalf("decode add_batch response: %v", err)
-		}
-		if response.WrittenCount != len(triples) || response.Deduplicated != 0 ||
-			len(response.FailedSubjects) != 0 {
-			t.Fatalf("distinct-context add response = %+v, want written=%d deduplicated=0 and no failures",
-				response, len(triples))
-		}
+		appendRollTriples(t, harness, turnID, fmt.Sprintf("append-control-%d", attempt), triples)
 	}
 
 	state := harness.AwaitEntity(t, turnID)
 	bands := testinfra.ObjectsFor(state, vocabulary.TurnRollBand.String())
 	if len(bands) < 2 {
 		t.Fatalf("two append-lane writes left %d band(s) (%v); if the append lane now replaces, "+
-			"MergeTriples is no longer load-bearing and its doc comment is stale", len(bands), bands)
+			"the reconcile group is no longer load-bearing and its documentation is stale", len(bands), bands)
 	}
 }
 
-// beta.159 turns a byte-identical add into an explicit successful no-op. The
+// The append lane turns a byte-identical add into an explicit successful no-op. The
 // response signal is load-bearing: without it a caller cannot distinguish an
 // already-present occurrence from an empty or silently ignored request.
 func TestIntegration_TheAddLaneReportsAnIdenticalOccurrenceAsDeduplicated(t *testing.T) {
@@ -252,32 +253,56 @@ func TestIntegration_TheAddLaneReportsAnIdenticalOccurrenceAsDeduplicated(t *tes
 		Subject: turnID, Predicate: vocabulary.TurnRollBand.String(), Object: string(vocabulary.BandPartial),
 		Source: dice.Source, Timestamp: resolveTime, Confidence: 1, Context: "one-roll-occurrence",
 	}
-	add := func() graph.AddTriplesBatchResponse {
+	add := func() projection.MutationReceipt {
 		t.Helper()
-		request, err := json.Marshal(graph.AddTriplesBatchRequest{Triples: []message.Triple{triple}})
-		if err != nil {
-			t.Fatalf("encode add_batch: %v", err)
-		}
-		reply, err := harness.Client.RequestClassified(
-			t.Context(), graphingest.SubjectTripleAddBatch, request, 5*time.Second)
-		if err != nil {
-			t.Fatalf("add_batch: %v", err)
-		}
-		var response graph.AddTriplesBatchResponse
-		if err := json.Unmarshal(reply, &response); err != nil {
-			t.Fatalf("decode add_batch response: %v", err)
-		}
-		return response
+		return appendRollTriples(t, harness, turnID, "one-roll-occurrence", []message.Triple{triple})
 	}
 
 	first := add()
-	if first.WrittenCount != 1 || first.Deduplicated != 0 || len(first.FailedSubjects) != 0 {
-		t.Fatalf("first add response = %+v, want one committed occurrence", first)
+	if first.Commit != projection.CommitVerified || first.KVRevision == 0 {
+		t.Fatalf("first append receipt = %+v, want a verified revision", first)
 	}
 	second := add()
-	if second.WrittenCount != 0 || second.Deduplicated != 1 || len(second.FailedSubjects) != 0 {
-		t.Fatalf("identical add response = %+v, want written=0 deduplicated=1 and no failures", second)
+	if second.Commit != projection.CommitVerified || second.KVRevision != first.KVRevision {
+		t.Fatalf("identical append advanced revision from %d to %d; want an unchanged verified occurrence",
+			first.KVRevision, second.KVRevision)
 	}
+}
+
+// appendRollTriples deliberately exercises the wrong lane through beta.160's
+// contract-validating client. It is a negative control for the production
+// TurnRoll reconciliation group, not an alternate application write path.
+func appendRollTriples(
+	t *testing.T,
+	harness *testinfra.Harness,
+	entityID, requestID string,
+	triples []message.Triple,
+) projection.MutationReceipt {
+	t.Helper()
+	client, err := projection.NewMutationClient(projection.MutationClientConfig{
+		NATS: harness.Client,
+		Contracts: []projection.Contract{{
+			Name:          "test-turn-roll-append",
+			MessageType:   payload.Domain + "." + payload.CategoryTurnState + "." + payload.SchemaVersion,
+			EntityPattern: "*.semmachina.*.*.turn.*",
+			Groups: []projection.PredicateGroup{{
+				Name: "roll", Mode: projection.ModeAppend,
+				Predicates: projectioncontract.Predicates(projectioncontract.TurnRoll),
+			}},
+		}},
+		Timeout: graphio.DefaultTimeout,
+	})
+	if err != nil {
+		t.Fatalf("build append control client: %v", err)
+	}
+	receipt, err := client.Append(t.Context(), projection.AppendMutation{
+		Contract: "test-turn-roll-append", Group: "roll", EntityID: entityID, Triples: triples,
+		Metadata: projection.MutationMetadata{RequestID: requestID, Source: dice.Source, Timestamp: resolveTime},
+	})
+	if err != nil {
+		t.Fatalf("append roll control %s: %v", requestID, err)
+	}
+	return receipt
 }
 
 func instantiationFor(seed campaign.Seed) campaign.Instantiation {
@@ -297,7 +322,7 @@ func writeRollTo(t *testing.T, store *graphio.Store, turnEntityID string, resolu
 	if err != nil {
 		t.Fatalf("Triples: %v", err)
 	}
-	if _, err := store.MergeTriples(t.Context(), turnEntityID, triples); err != nil {
-		t.Fatalf("MergeTriples: %v", err)
+	if _, err := store.Reconcile(t.Context(), projectioncontract.TurnRoll, turnEntityID, triples); err != nil {
+		t.Fatalf("Reconcile %s/%s: %v", projectioncontract.TurnRoll.Contract, projectioncontract.TurnRoll.Group, err)
 	}
 }

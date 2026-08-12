@@ -55,15 +55,8 @@ type ExclusionReason string
 
 // The ways a candidate entity is left out.
 const (
-	// ExcludedStub is a referenced-but-undelivered entity: queryable, carrying
-	// only identity markers and none of its own facts.
-	//
-	// This is the exclusion that matters. A stub answers a read successfully, so
-	// anything treating "the id resolves" as "the entity is loaded" hands a
-	// persona a character with no name, no state, and no description — and
-	// nothing errors. The scene quietly has three of seven members.
-	ExcludedStub ExclusionReason = "stub"
-	// ExcludedMissing is a referenced id the graph did not return at all.
+	// ExcludedMissing is a referenced ID for which the graph returned no
+	// authority entry.
 	ExcludedMissing ExclusionReason = "missing"
 )
 
@@ -118,10 +111,10 @@ type ActorDoubt string
 
 // The ways the acting character cannot be established.
 const (
-	// ActorPlayerAbsent is a player entity the view does not carry — a
-	// referential stub, an id the graph did not return (both of which Excluded
-	// also names), or a reference that is not entity-shaped and never became a
-	// candidate at all. This is what any of them MEANS for the turn.
+	// ActorPlayerAbsent is a player entity the view does not carry — either an ID
+	// the graph reported missing (which Excluded also names), or a reference that
+	// is not entity-shaped and never became a candidate. This is what either
+	// shape MEANS for the turn.
 	ActorPlayerAbsent ActorDoubt = "player-absent"
 	// ActorBindingAbsent is a hydrated player carrying no
 	// player.character.current. Instance configuration writes that binding, so

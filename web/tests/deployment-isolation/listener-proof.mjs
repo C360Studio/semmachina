@@ -5,7 +5,7 @@ import os from 'node:os';
 const nonce = process.env.SEMMACHINA_ISOLATION_NONCE;
 const CANARY = `Isolation Canary ${nonce}`;
 const QUERY =
-	'query SemMachinaLocations($prefix: String!, $limit: Int!) { entitiesByPrefix(prefix: $prefix, limit: $limit) { id triples { subject predicate object datatype } } }';
+	'query SemMachinaLocations($prefix: String!, $limit: Int!, $cursor: String) { entitiesByPrefix(prefix: $prefix, limit: $limit, cursor: $cursor) { entities { id triples { subject predicate object datatype } } next_cursor } }';
 
 function connect(host) {
 	return new Promise((resolve, reject) => {
@@ -30,7 +30,11 @@ function queryCanary() {
 	return new Promise((resolve, reject) => {
 		const body = JSON.stringify({
 			query: QUERY,
-			variables: { prefix: 'c360.semmachina.isolation.isolation-world.location', limit: 1000 }
+			variables: {
+				prefix: 'c360.semmachina.isolation.isolation-world.location',
+				limit: 200,
+				cursor: null
+			}
 		});
 		const request = http.request(
 			{
@@ -52,7 +56,7 @@ function queryCanary() {
 				response.on('end', () => {
 					try {
 						const document = JSON.parse(text);
-						const triples = document?.data?.entitiesByPrefix?.[0]?.triples;
+						const triples = document?.data?.entitiesByPrefix?.entities?.[0]?.triples;
 						if (
 							response.statusCode !== 200 ||
 							!Array.isArray(triples) ||

@@ -2,6 +2,7 @@ package stage_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -11,8 +12,8 @@ import (
 	"github.com/c360studio/semmachina/internal/campaign"
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/dice"
-	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/stage"
 	"github.com/c360studio/semmachina/internal/turn"
 	"github.com/c360studio/semmachina/internal/vocabulary"
@@ -44,9 +45,12 @@ func (f *fakeRolls) PutRoll(_ context.Context, _ string, _ *payload.RollResult) 
 
 type fakeWriter struct{ merges int }
 
-func (f *fakeWriter) MergeTriples(
-	_ context.Context, _ string, _ []message.Triple, _ ...graphio.MergeOption,
+func (f *fakeWriter) Reconcile(
+	_ context.Context, target projectioncontract.Target, _ string, _ []message.Triple,
 ) (*graph.EntityState, error) {
+	if target != projectioncontract.TurnRoll {
+		return nil, errors.New("unexpected turn roll projection target")
+	}
 	f.merges++
 	return nil, nil
 }

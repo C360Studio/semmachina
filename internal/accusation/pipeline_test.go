@@ -13,8 +13,8 @@ import (
 	"github.com/c360studio/semmachina/internal/accusation"
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/epistemic"
-	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -34,9 +34,12 @@ func (g *accusationGraph) GetEntity(_ context.Context, id string) (*graph.Entity
 	}
 	return state, nil
 }
-func (g *accusationGraph) MergeTriples(_ context.Context, id string, triples []message.Triple, _ ...graphio.MergeOption) (*graph.EntityState, error) {
+func (g *accusationGraph) Reconcile(_ context.Context, target projectioncontract.Target, id string, triples []message.Triple) (*graph.EntityState, error) {
 	if g.mergeErr != nil {
 		return nil, g.mergeErr
+	}
+	if target != projectioncontract.TurnAccusation {
+		return nil, errors.New("unexpected accusation projection target")
 	}
 	g.writes = append(g.writes, append([]message.Triple(nil), triples...))
 	return g.entities[id], nil

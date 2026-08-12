@@ -1,3 +1,5 @@
+//go:build integration
+
 package world_test
 
 import (
@@ -154,9 +156,8 @@ func TestIntegration_ReimportConvergesToTheSameGraphState(t *testing.T) {
 	}
 
 	// Draining BEFORE the baseline is read is what makes this a convergence
-	// test rather than a race. Without it the baseline can be captured from a
-	// referential stub — an entity that exists because something referenced it,
-	// carrying none of its own facts — and the second import would then "change"
+	// test rather than a race. Without it the baseline can be captured before an
+	// entity's own fact has landed, and the second import would then "change"
 	// state that the first import had simply not finished writing.
 	awaitStreamDrained(t, harness)
 

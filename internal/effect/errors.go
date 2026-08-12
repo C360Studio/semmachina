@@ -104,12 +104,11 @@ func (e *CommitError) Reason() vocabulary.FailureReason {
 // here:
 //
 //   - Turn-record anomalies: a turn holding two batch identities, a half-written
-//     marker, a record naming a foreign batch or a foreign payload reference, a
-//     turn entity that is only a referential stub. These say the turn's own
-//     record is not trustworthy — and recording a failure reason is a WRITE to
-//     that same record. Marking it `failed` would state a game outcome on
-//     evidence that the paperwork is corrupt, and could contradict a world the
-//     batch may already have changed.
+//     marker, or a record naming a foreign batch or a foreign payload reference.
+//     These say the turn's own record is not trustworthy — and recording a
+//     failure reason is a WRITE to that same record. Marking it `failed` would
+//     state a game outcome on evidence that the paperwork is corrupt, and could
+//     contradict a world the batch may already have changed.
 //   - Transport failures reading the turn. A NATS timeout is retryable and says
 //     nothing about the turn; coding it would burn a player's turn for a broken
 //     connection.

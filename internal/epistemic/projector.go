@@ -373,7 +373,7 @@ func (p *Projector) hydrate(ctx context.Context, ids []string) ([]graph.EntitySt
 			return nil, fmt.Errorf("supplemental hydration returned entity %s more than once", state.ID)
 		}
 		seen[state.ID] = true
-		if state.ID == "" || state.IsStub() {
+		if state.ID == "" {
 			continue
 		}
 		states = append(states, state)

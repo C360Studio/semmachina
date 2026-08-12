@@ -10,7 +10,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 
 	"github.com/c360studio/semmachina/internal/caseflow"
-	"github.com/c360studio/semmachina/internal/graphio"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -24,7 +24,10 @@ type receiptStore struct {
 func (s *receiptStore) GetEntity(context.Context, string) (*graph.EntityState, error) {
 	return s.state, nil
 }
-func (s *receiptStore) MergeTriples(_ context.Context, _ string, triples []message.Triple, _ ...graphio.MergeOption) (*graph.EntityState, error) {
+func (s *receiptStore) Reconcile(_ context.Context, target projectioncontract.Target, _ string, triples []message.Triple) (*graph.EntityState, error) {
+	if target != projectioncontract.CaseLifecycleReceipt {
+		return nil, errors.New("unexpected lifecycle receipt projection target")
+	}
 	s.writes = append(s.writes, triples)
 	for _, incoming := range triples {
 		kept := s.state.Triples[:0]

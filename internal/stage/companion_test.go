@@ -16,6 +16,7 @@ import (
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/persona"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/turn"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 	"github.com/c360studio/semmachina/internal/world"
@@ -83,9 +84,14 @@ func (g *companionGraph) EntitiesByPredicateValue(_ context.Context, predicate, 
 	}
 	return ids, nil
 }
-func (g *companionGraph) MergeTriples(_ context.Context, id string, triples []message.Triple, _ ...graphio.MergeOption) (*graph.EntityState, error) {
+func (g *companionGraph) Reconcile(_ context.Context, target projectioncontract.Target, id string, triples []message.Triple) (*graph.EntityState, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if target != projectioncontract.TurnCompanionTrigger && target != projectioncontract.TurnCompanionResult {
+		if target != projectioncontract.CompanionBondHint {
+			return nil, errors.New("unexpected companion projection target")
+		}
+	}
 	g.mergeCalls++
 	if g.mergeCalls == g.failMergeAt {
 		return nil, errors.New("injected companion graph merge failure")

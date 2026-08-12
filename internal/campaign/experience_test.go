@@ -246,19 +246,6 @@ func TestGateClaim_ConcurrentClaimsRespectExperienceProvenance(t *testing.T) {
 	}
 }
 
-func TestGateClaim_DegradedCreateReturnsRequestedExperienceWithoutRetry(t *testing.T) {
-	store := newFakeStore()
-	store.degrade = true
-	gate := newTestGate(t, store)
-	claim, err := gate.Claim(t.Context(), testExperience)
-	if err != nil {
-		t.Fatalf("Claim: %v", err)
-	}
-	if !claim.Fresh || claim.Experience != testExperience || store.createCall != 1 {
-		t.Fatalf("degraded claim = %+v, creates=%d", claim, store.createCall)
-	}
-}
-
 func triplesFor(state *graph.EntityState, predicate string) []message.Triple {
 	var triples []message.Triple
 	for _, triple := range state.Triples {

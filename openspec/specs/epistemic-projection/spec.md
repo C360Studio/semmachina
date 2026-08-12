@@ -32,8 +32,9 @@ an authenticated audience and closed purpose. The projector SHALL expose only:
 - denouement narrator: canonical solution only after correct verification; and
 - operator reads: the full graph through authorized operator surfaces.
 
-Unauthorized entities and their identifiers SHALL be omitted rather than rendered as
-excluded or stub records.
+Unauthorized entities and their identifiers SHALL be omitted rather than rendered as excluded
+records. A missing relationship target remains absent; projection SHALL NOT materialize a
+referential entity for it.
 
 #### Scenario: Hidden canaries do not cross a persona boundary
 - **WHEN** culprit and unrevealed-clue canaries whose entity IDs and text values are all

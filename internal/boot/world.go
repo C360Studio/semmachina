@@ -147,15 +147,15 @@ func localIDs(entities []world.PlannedEntity) []string {
 //     world another process is writing; marking would certify a world this boot
 //     never read.
 //
-// # Per-entity create-not-put is the wrong granularity, and it is a trap
+// # Per-entity create-not-put is the wrong granularity
 //
 // The obvious generalisation of the seeding idiom — create each template entity
-// and treat key-exists as a no-op — is wrong here for a reason that only shows up
-// against a real broker: graph-ingest materialises a referential STUB at a
-// referenced id as soon as the REFERENCING entity lands. So an entity that is
-// pointed at gets its key occupied first, its own create returns key-exists, the
-// no-op policy swallows it, and it stays a permanent factless stub. The stream
-// path works precisely because it merges.
+// and treat key-exists as a no-op — would make boot a second graph authority and
+// bypass graph-ingest's predicate contracts and merge behavior. In beta.160 a
+// relationship target without its own birth record stays missing, so a
+// reference neither reserves its key nor establishes creation. The stream path
+// gives every planned entity its own birth record through the sole writer and
+// lets a repeated import converge through that writer's merge.
 func (e *Engine) instantiate(ctx context.Context) error {
 	claim, err := e.gate.Claim(ctx, campaign.Experience{
 		PersonaPack: e.plan.Experience.PersonaPack, MechanicsPack: e.plan.Experience.MechanicsPack,
@@ -202,8 +202,8 @@ func (e *Engine) instantiate(ctx context.Context) error {
 // The order is the content of this method. The importer acknowledges a PUBLISH,
 // which is a durability claim and not a materialisation claim — graph-ingest
 // applies the messages asynchronously on its own consumer — so "the import
-// finished" means every planned entity is queryable and NON-STUB, not merely
-// durably queued. The marker is written last, after both readbacks, because the
+// finished" means every planned entity is queryable, not merely durably queued.
+// The marker is written last, after both readbacks, because the
 // whole point of the marker is that a later boot may trust it without repeating
 // them.
 func (e *Engine) importWorld(ctx context.Context) error {
@@ -228,16 +228,11 @@ func (e *Engine) importWorld(ctx context.Context) error {
 	return nil
 }
 
-// awaitEntitiesBorn polls until every planned entity is queryable AND is no
-// longer a bare referential stub.
+// awaitEntitiesBorn polls until every planned entity is queryable.
 //
-// Both halves are load-bearing and the second is the one that gets forgotten.
-// graph-ingest creates a referenced entity as a STUB — queryable, carrying only
-// core.identity markers and none of its own facts — the moment the entity that
-// REFERENCES it lands. So an existence poll alone succeeds against a half-world,
-// and anything that treats "the id resolves" as "the entity is loaded" reads
-// half-entities. IsStub keys on the envelope, which the fact lane re-stamps at
-// true birth, so it is the signal that actually flips.
+// beta.160 no longer materializes relationship targets as referential stubs.
+// The remaining asynchronous boundary is between the importer's durable publish
+// acknowledgement and graph-ingest making each entity available to queries.
 func (e *Engine) awaitEntitiesBorn(ctx context.Context) error {
 	return awaitEntitiesBorn(ctx, e.graph, e.plan.IDs(), e.window())
 }
@@ -250,8 +245,8 @@ func (e *Engine) window() readinessWindow {
 // readinessGraph is the read surface the two boot readbacks need.
 //
 // An interface rather than the concrete store because the states these gates
-// exist to refuse — a referential stub, an index that answers SHORT, an index
-// that says it is not ready — are states a real broker produces on its own
+// exist to refuse — a missing entity, an index that answers SHORT, an index that
+// says it is not ready — are states a real broker produces on its own
 // schedule and never on demand. A gate whose refusals were only ever exercised
 // by luck is a gate nobody has checked.
 type readinessGraph interface {
@@ -282,18 +277,13 @@ func awaitEntitiesBorn(ctx context.Context, g readinessGraph, ids []string, w re
 		for _, missing := range batch.Missing {
 			pending = append(pending, fmt.Sprintf("%s (%s)", missing.ID, missing.Reason))
 		}
-		for idx := range batch.Entities {
-			if batch.Entities[idx].IsStub() {
-				pending = append(pending, batch.Entities[idx].ID+" (referential stub)")
-			}
-		}
 		if len(pending) == 0 {
 			return nil
 		}
 		if time.Now().After(deadline) {
 			slices.Sort(pending)
 			return fmt.Errorf(
-				"after %s, %d of %d imported entities are still unborn: %s. The importer acknowledges a PUBLISH "+
+				"after %s, %d of %d imported entities are still not queryable: %s. The importer acknowledges a PUBLISH "+
 					"and graph-ingest applies it asynchronously, so this is the gap between \"durably queued\" "+
 					"and \"queryable\" — a boot that marked the import complete here would certify a world the "+
 					"context assembler reads as quietly smaller",
