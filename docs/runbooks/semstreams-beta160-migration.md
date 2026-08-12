@@ -183,7 +183,7 @@ isolated deployment target.
 | Go recovery lane | Passed race-enabled, zero-skip; 59 outcomes |
 | Go acceptance lane | Passed zero-skip; 134 outcomes |
 | Go E2E lane | Passed 28 outcomes in 508.657 seconds against exact NATS `2.14.4` |
-| Six-lane union | Passed 4,722 outcomes across 33 packages, zero-skip |
+| Six-lane union | Passed 4,722 outcomes across 32 packages, zero-skip |
 | Frontend server unit | Passed 532 tests |
 | Frontend browser component | Passed 30 tests |
 | Frontend UI journey | Passed 6 Playwright tests |
@@ -208,19 +208,19 @@ SemStreams issue #424 can emit benign invalid-subscription `ERROR` noise when th
 stopped twice. This is a known upstream diagnostic artifact, not evidence of a local lifecycle
 defect. SemMachina's ComponentManager shutdown ordering has formal review and test coverage.
 
-The operator must still prove and record the concrete blue/green identities, green-storage
-freshness, cutover/rollback posture, and deployment reverse-stop evidence. Paid acceptance remains
-separately authorized and the migration change remains unarchived.
+The token-free workstation operator rehearsal is recorded in the migration evidence:
+[2026-08-12 SemStreams beta.160 workstation](../migration-evidence/2026-08-12-semstreams-beta160-workstation.md).
+It proves concrete blue/green identities, green-storage freshness, restart convergence,
+application-before-broker teardown, and whole-unit beta.159 rollback without a model call. Paid
+acceptance remains separately authorized and the migration change remains unarchived. This closes
+the migration's workstation acceptance scope; a future production deployment must create its own
+preboot freshness, storage-identity, cutover, and rollback record.
 
 ## Remaining release evidence
 
 The following evidence and actions are still required before this change can be archived:
 
-1. The operator record containing distinct blue and green broker/account/volume identities, proof
-   that green began without retained deployed state, reverse-stop evidence, and the approved
-   rollback posture.
-2. Separate authorization and evidence for paid acceptance, if the release owner elects to run it.
-3. Final technical-writer release sign-off and archive only after the remaining operator gates pass.
+1. Separate authorization and evidence for paid acceptance, if the release owner elects to run it.
+2. Final technical-writer release sign-off and archive only after paid acceptance passes.
 
-Item 1 requires deployment/operator evidence; it cannot be closed by source review or test-harness
-storage. Item 2 must never be inferred from a token-free gate.
+Paid authorization must never be inferred from the token-free operator rehearsal.

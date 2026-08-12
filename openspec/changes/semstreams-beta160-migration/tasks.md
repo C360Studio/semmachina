@@ -1,7 +1,12 @@
 ## 1. Adoption Contract and Architecture
 
-- [ ] 1.1 Record the exact beta.160 tag and commit, prove the intended green NATS storage is newly
+- [x] 1.1 Record the exact beta.160 tag and commit, prove the intended green NATS storage is newly
   provisioned, and stop for separate review if retained state is found
+  - The 2026-08-12 workstation operator record resolves beta.160 to upstream commit
+    `8403a2218000e45a31c5132fbfe01af42ed04f14` and records the newly created green volume,
+    exact NATS `2.14.4` server/container/account identities, and zero preboot streams, KV buckets,
+    object stores, consumers, and storage bytes. This closes the approved workstation scope; a
+    production deployment requires its own preboot evidence.
 - [x] 1.2 Add failing tests for cross-barrier manifest validation, ordered start, reverse stop, and
   immutable barrier membership before implementing the composition-root coordinator
 - [x] 1.3 Define one registered upstream `ComponentManager` per activation barrier and obtain
@@ -55,7 +60,7 @@
   predicate outside its contract
 - [x] 4.6 Obtain Go reviewer sign-off for every production writer and the complete integration suite
   - Formal Go approval and all six zero-skip lanes are complete; their union records 4,722 outcomes
-    across 33 packages.
+    across 32 packages.
 
 ## 5. GraphQL and Creator Surface
 
@@ -76,7 +81,7 @@
 - [x] 6.1 Run strict OpenSpec, lint, builds, unit tests, race tests, and the zero-skip full Go suite
   - Green: strict OpenSpec 19/19, lint, build, unit/race 3,025 outcomes, integration/race 1,394,
     pipeline/race 82, recovery/race 59, acceptance 134, and E2E 28. The six-lane union contains
-    4,722 outcomes across 33 packages with zero skips.
+    4,722 outcomes across 32 packages with zero skips.
 - [x] 6.2 Run fresh-NATS integration and restart proofs for world import, graph readiness, rule
   readiness, agentic trajectory evidence, storage resolution, turn completion, resume, and ledger
   - The complete E2E lane passed against fresh exact NATS `2.14.4` in 508.657 seconds, including
@@ -95,12 +100,13 @@
     negative fixture, and explicit beta.160 no-stub statements.
 - [x] 6.5 Update active specs, world-authoring guidance, configuration examples, manifests, README,
   runbooks, and the now-partially-unblocked mystery companion change
-- [ ] 6.6 Record exact tag/commit, green storage identity, config version, test results, reviewer
+- [x] 6.6 Record exact tag/commit, green storage identity, config version, test results, reviewer
   approvals, reverse-stop/teardown proof, and rollback posture
-  - Recorded: exact tag/commit, NATS and component-config versions, implementation test results,
-    and Go/Svelte reviewer approvals.
-  - Pending: concrete blue/green storage identities, green freshness proof, deployment reverse-stop
-    evidence, and operator-approved rollback posture.
+  - The dated workstation evidence records immutable blue/green application, broker, account,
+    volume, configuration, and content-bucket identities; preboot freshness; first boot and restart
+    convergence; graceful application-before-broker teardown; whole-unit beta.159 rollback; retained
+    volumes; test results; and Go/Svelte reviewer approvals. It does not authorize or evidence a
+    future production cutover.
 - [ ] 6.7 After separate operator authorization, run paid acceptance with 30–60 second authoritative
   state polling and abort immediately when a wedge is proved
 - [ ] 6.8 Obtain technical-writer sign-off and archive this change only after all implementation and
