@@ -211,16 +211,24 @@ defect. SemMachina's ComponentManager shutdown ordering has formal review and te
 The token-free workstation operator rehearsal is recorded in the migration evidence:
 [2026-08-12 SemStreams beta.160 workstation](../migration-evidence/2026-08-12-semstreams-beta160-workstation.md).
 It proves concrete blue/green identities, green-storage freshness, restart convergence,
-application-before-broker teardown, and whole-unit beta.159 rollback without a model call. Paid
-acceptance remains separately authorized and the migration change remains unarchived. This closes
-the migration's workstation acceptance scope; a future production deployment must create its own
-preboot freshness, storage-identity, cutover, and rollback record.
+application-before-broker teardown, and whole-unit beta.159 rollback without a model call. This
+closes the migration's workstation acceptance scope.
 
-## Remaining release evidence
+The separately authorized paid acceptance is recorded in the
+[2026-08-12 Gemini 3.5 Flash-Lite beta.160 acceptance][beta160-paid].
+Exactly one invocation ran, both fixed provider chains passed, and no retry was authorized or run.
+The paid result does not authorize a future production cutover. Such a deployment must create its
+own preboot freshness, storage-identity, cutover, and rollback record.
 
-The following evidence and actions are still required before this change can be archived:
+## Release status
 
-1. Separate authorization and evidence for paid acceptance, if the release owner elects to run it.
-2. Final technical-writer release sign-off and archive only after paid acceptance passes.
+All implementation, reviewer, deterministic acceptance, workstation migration, and separately
+authorized paid-acceptance gates are complete. The OpenSpec change was archived on 2026-08-12 as
+[`2026-08-12-semstreams-beta160-migration`][beta160-archive], and the post-archive pinned OpenSpec
+1.7.0 gate passed all 20 current specs and changes. Only the repository's normal pull-request
+ready, green-check, and merge actions remain.
 
-Paid authorization must never be inferred from the token-free operator rehearsal.
+Archive does not convert this workstation evidence into production authorization or evidence.
+
+[beta160-archive]: ../../openspec/changes/archive/2026-08-12-semstreams-beta160-migration/
+[beta160-paid]: ../smoke-results/2026-08-12-bellweather-gemini35-flash-lite-beta160.md

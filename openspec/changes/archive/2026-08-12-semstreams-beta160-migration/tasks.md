@@ -107,7 +107,15 @@
     convergence; graceful application-before-broker teardown; whole-unit beta.159 rollback; retained
     volumes; test results; and Go/Svelte reviewer approvals. It does not authorize or evidence a
     future production cutover.
-- [ ] 6.7 After separate operator authorization, run paid acceptance with 30–60 second authoritative
+- [x] 6.7 After separate operator authorization, run paid acceptance with 30–60 second authoritative
   state polling and abort immediately when a wedge is proved
-- [ ] 6.8 Obtain technical-writer sign-off and archive this change only after all implementation and
+  - The separately authorized 2026-08-12 Gemini 3.5 Flash-Lite run passed both fixed provider chains
+    in 8.118 seconds with exit status zero. Both turns completed before the first 30-second poll;
+    exact terminal, discovery, and persisted Kit-route reads supplied authoritative evidence, and no
+    cap or abort fired. The dated secret-safe result records teardown and retained broker evidence.
+- [x] 6.8 Obtain technical-writer sign-off and archive this change only after all implementation and
   reviewer gates pass
+  - Technical-writer sign-off was granted after every implementation, reviewer, token-free,
+    workstation, and separately authorized paid-acceptance gate completed. The change was archived
+    on 2026-08-12, and the post-archive pinned OpenSpec 1.7.0 gate passed all 20 current specs and
+    changes. Only normal pull-request ready, green-check, and merge actions remain.
