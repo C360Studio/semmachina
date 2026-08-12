@@ -132,11 +132,11 @@ func soleRef(state *graph.EntityState, predicate vocabulary.Predicate) (content.
 	return ref, nil
 }
 
-// readTurn reads a turn entity and refuses a referential stub.
+// readTurn reads the turn entity required by a stage.
 //
-// A stub is queryable and factless, so every "is this predicate present?"
-// question answered off one comes back a false negative — which for a stage
-// means re-running work the turn already recorded.
+// A missing turn is a read failure, not an entity with an empty predicate set.
+// The nil check also refuses a malformed reader result that reports success
+// without returning the required state.
 func readTurn(ctx context.Context, reader TurnReader, turnEntityID string) (*graph.EntityState, error) {
 	state, err := reader.GetEntity(ctx, turnEntityID)
 	if err != nil {
@@ -144,11 +144,6 @@ func readTurn(ctx context.Context, reader TurnReader, turnEntityID string) (*gra
 	}
 	if state == nil {
 		return nil, fmt.Errorf("read turn entity %s: the graph returned nothing", turnEntityID)
-	}
-	if state.IsStub() {
-		return nil, fmt.Errorf(
-			"turn entity %s is a referential stub: it holds no facts, so every artifact this stage looks for "+
-				"reads as absent", turnEntityID)
 	}
 	return state, nil
 }

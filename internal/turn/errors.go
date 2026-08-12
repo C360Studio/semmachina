@@ -126,10 +126,10 @@ func (e *IllegalTransitionError) Error() string {
 // It is UNCODED on purpose, and for the same reason the effect applier's
 // anomalies are: recording a failure reason is a write to the very record this
 // error says is unreadable. A turn holding two phase values, a turn holding
-// none, a turn that is only a referential stub — each says the paperwork is
-// corrupt, and marking it `failed` would state a game outcome on that evidence
-// while possibly contradicting a world the turn already changed. The caller
-// escalates; it does not burn the player's turn.
+// none — either says the paperwork is corrupt, and marking it `failed` would
+// state a game outcome on that evidence while possibly contradicting a world the
+// turn already changed. The caller escalates; it does not burn the player's
+// turn.
 type RecordError struct {
 	// TurnEntityID names the turn.
 	TurnEntityID string

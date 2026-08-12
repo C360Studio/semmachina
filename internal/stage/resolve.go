@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semmachina/internal/dice"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -37,12 +38,7 @@ type RollStore interface {
 // one leaves a turn holding two bands with a success response and no error
 // anywhere (F14).
 type TurnWriter interface {
-	MergeTriples(
-		ctx context.Context,
-		entityID string,
-		triples []message.Triple,
-		opts ...graphio.MergeOption,
-	) (*graph.EntityState, error)
+	Reconcile(context.Context, projectioncontract.Target, string, []message.Triple) (*graph.EntityState, error)
 }
 
 // The claims above, enforced by the compiler rather than by doc comments.
@@ -176,7 +172,7 @@ func (r *Resolver) Run(ctx context.Context, trigger Trigger) error {
 	if err != nil {
 		return err
 	}
-	if _, err := r.writer.MergeTriples(ctx, trigger.TurnEntityID, triples); err != nil {
+	if _, err := r.writer.Reconcile(ctx, projectioncontract.TurnRoll, trigger.TurnEntityID, triples); err != nil {
 		return fmt.Errorf("record the roll on turn %s: %w", trigger.TurnEntityID, err)
 	}
 	return nil

@@ -1,3 +1,5 @@
+//go:build integration
+
 package ledger_test
 
 import (
@@ -6,12 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
-	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/nats-io/nats.go/jetstream"
 
@@ -28,6 +30,7 @@ import (
 	"github.com/c360studio/semmachina/internal/testinfra"
 	"github.com/c360studio/semmachina/internal/turn"
 	"github.com/c360studio/semmachina/internal/vocabulary"
+	"github.com/c360studio/semmachina/internal/world"
 )
 
 // The archive is a claim about durable infrastructure, and every substitute for
@@ -179,21 +182,27 @@ func (w *archiveWorld) seedWorld(t *testing.T) {
 func (w *archiveWorld) createEntity(t *testing.T, id string, facts map[string]any) {
 	t.Helper()
 	at := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
-	triples := make([]message.Triple, 0, len(facts))
-	for predicate, object := range facts {
-		triples = append(triples, message.Triple{
-			Subject: id, Predicate: predicate, Object: object,
-			Source: "test", Timestamp: at, Confidence: 1.0,
-		})
+	kind, ok := facts[vocabulary.WorldEntityKind.String()].(string)
+	if !ok {
+		t.Fatalf("create %s requires a world entity kind", id)
 	}
-	if _, err := w.graph.CreateEntity(t.Context(), &graph.EntityState{
-		ID: id,
-		MessageType: message.Type{
-			Domain: payload.Domain, Category: payload.CategoryWorldEntity, Version: payload.SchemaVersion,
-		},
-		Version: 1, UpdatedAt: at, Triples: triples,
-	}); err != nil {
-		t.Fatalf("create %s: %v", id, err)
+	worldFacts := make([]payload.WorldFact, 0, len(facts)-1)
+	for predicate, object := range facts {
+		if predicate != vocabulary.WorldEntityKind.String() {
+			value, reference := object.(string)
+			worldFacts = append(worldFacts, payload.WorldFact{Predicate: vocabulary.Predicate(predicate), Object: object,
+				Reference: reference && message.IsValidEntityID(value)})
+		}
+	}
+	parts := strings.Split(id, ".")
+	entity := &payload.WorldEntity{ID: id, Kind: vocabulary.EntityKind(kind),
+		Template: payload.TemplateRef{ID: parts[3], Version: "test", LocalID: parts[5]}, Facts: worldFacts, RecordedAt: at}
+	wire, err := json.Marshal(message.NewBaseMessage(entity.Schema(), entity, "test", message.WithTime(at)))
+	if err != nil {
+		t.Fatalf("encode %s: %v", id, err)
+	}
+	if _, err := w.harness.Client.PublishToStreamWithAck(t.Context(), world.DefaultImportSubject, wire); err != nil {
+		t.Fatalf("publish %s: %v", id, err)
 	}
 }
 

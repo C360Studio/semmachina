@@ -27,7 +27,7 @@ per-action `when` guards, and graph-action predicates SHALL NOT read or write re
 Every action in `on_enter`, `on_exit`, `while_true`, `on_recovery`, and `actions` SHALL be checked.
 
 Downloaded rules SHALL be limited categorically to `add_triple`, `remove_triple`, `update_triple`,
-`replace_owned`, and `deny`. The loader SHALL refuse `publish`, `publish_agent`, `approve`,
+`reconcile_predicates`, and `deny`. The loader SHALL refuse `publish`, `publish_agent`, `approve`,
 `update_kv`, `lifecycle_transition`, `lifecycle_complete`, `lifecycle_fail`, and every unclassified
 action regardless of its subject or bucket.
 
@@ -38,8 +38,9 @@ and related entity patterns to the selected organization, world, and template. A
 predicate SHALL be literal and outside reserved namespaces. Its subject SHALL be omitted or exactly
 `$entity.id`. An entity-reference object SHALL be `$entity.id`, or `$related.id` when the rule
 declares a related pattern. Foreign entity IDs and unprovable substitutions SHALL be refused.
-Scalar literals SHALL remain valid; `remove_triple` SHALL ignore its object, and an empty
-`replace_owned` object SHALL clear the owned group.
+Scalar literals SHALL remain valid; `remove_triple` SHALL ignore its object. Every
+`reconcile_predicates` action SHALL name an admitted projection contract and group, and an empty
+desired value set SHALL clear that complete owned group.
 
 #### Scenario: Reserved engine state is refused
 - **WHEN** a package rule condition, per-action guard, or graph mutation reads or writes a reserved

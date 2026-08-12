@@ -13,6 +13,7 @@ import (
 
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 	"github.com/c360studio/semmachina/internal/world"
 )
@@ -56,9 +57,12 @@ func (g *authorityGraph) EntitiesByPredicateValue(_ context.Context, predicate, 
 	}
 	return ids, nil
 }
-func (g *authorityGraph) MergeTriples(_ context.Context, id string, triples []message.Triple, _ ...graphio.MergeOption) (*graph.EntityState, error) {
+func (g *authorityGraph) Reconcile(_ context.Context, target projectioncontract.Target, id string, triples []message.Triple) (*graph.EntityState, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	if target != projectioncontract.CompanionBondHint {
+		return nil, errors.New("unexpected companion bond projection target")
+	}
 	state := g.states[id]
 	if state == nil {
 		return nil, graphio.ErrEntityNotFound

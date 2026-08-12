@@ -86,8 +86,8 @@ func TestAssemble_RefusesInvalidSceneLocation(t *testing.T) {
 			g.entities[sceneID].Triples = append(g.entities[sceneID].Triples,
 				fact(vocabulary.SceneLocationCurrent, id(t, "location", "north-road")))
 		},
-		"stub": func(t *testing.T, g *fakeGraph) {
-			g.putStub(id(t, "location", "gatehouse-place"))
+		"absent": func(t *testing.T, g *fakeGraph) {
+			delete(g.entities, id(t, "location", "gatehouse-place"))
 		},
 		"wrong kind": func(t *testing.T, g *fakeGraph) {
 			locationID := id(t, "location", "gatehouse-place")

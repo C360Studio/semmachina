@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -34,12 +35,7 @@ import (
 // tool that could be asked to check its own work, and the executor's job is to
 // record a judgment, not to re-open it.
 type TurnWriter interface {
-	MergeTriples(
-		ctx context.Context,
-		entityID string,
-		triples []message.Triple,
-		opts ...graphio.MergeOption,
-	) (*graph.EntityState, error)
+	Reconcile(context.Context, projectioncontract.Target, string, []message.Triple) (*graph.EntityState, error)
 }
 
 // The claim above, enforced by the compiler rather than by a doc comment.
@@ -168,7 +164,7 @@ func (e *VerdictExecutor) Execute(ctx context.Context, call agentic.ToolCall) (a
 		// something the model said.
 		return internalFailure(call, "project the verdict onto the turn", err)
 	}
-	if _, err := e.graph.MergeTriples(ctx, identity.TurnEntityID, triples); err != nil {
+	if _, err := e.graph.Reconcile(ctx, projectioncontract.TurnVerdict, identity.TurnEntityID, triples); err != nil {
 		return transientFailure(call, "record the verdict on the turn", err)
 	}
 

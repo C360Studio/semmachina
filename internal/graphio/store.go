@@ -8,14 +8,12 @@
 //     the machine-readable reason lives on *errs.ClassifiedError.Code — not in
 //     the message text. Sniffing the string is how a create-conflict becomes an
 //     unhandled failure.
-//   - `entity.create` is atomic create-or-fail. That is what closes the
+//   - typed create is atomic create-or-fail. That is what closes the
 //     exists-check-then-write TOCTOU, and it is the whole mechanism behind the
 //     world-instantiation gate.
-//   - `triple.add` / `triple.add_batch` APPEND; only the entity update lane
-//     MERGES by (subject, predicate). Every single-valued predicate the engine
-//     writes — turn phase, roll band, roll total — must travel the merge lane,
-//     or a duplicate delivery leaves an entity holding two values for a
-//     single-valued fact and no error anywhere.
+//   - every update names a projection contract and complete predicate group.
+//     Reconciliation can therefore clear an empty group without touching
+//     sibling groups and is revision-fenced by the authoritative reader.
 //
 // graph-ingest remains the sole ENTITY_STATES writer: everything here is a
 // request to it, never a write around it.
@@ -26,12 +24,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/pkg/projection"
+	ssvocab "github.com/c360studio/semstreams/vocabulary"
+
+	"github.com/c360studio/semmachina/internal/projectioncontract"
+	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
 // The subjects this client speaks to graph-ingest on.
@@ -47,10 +52,6 @@ import (
 // graph-ingest registers it as a literal — so it is pinned by an integration
 // test that actually reads an entity through it.
 const (
-	// SubjectEntityCreate is the atomic create-or-fail mutation.
-	SubjectEntityCreate = "graph.mutation.entity.create"
-	// SubjectEntityUpdateWithTriples is the must-exist merge lane.
-	SubjectEntityUpdateWithTriples = "graph.mutation.entity.update_with_triples"
 	// SubjectQueryEntity is the single-entity read.
 	SubjectQueryEntity = "graph.ingest.query.entity"
 	// SubjectQueryBatch is the many-entities read. One round trip for a set of
@@ -126,7 +127,15 @@ var _ Requester = (*natsclient.Client)(nil)
 // Store issues graph mutations and reads over NATS request/reply.
 type Store struct {
 	requester Requester
+	mutations MutationClient
 	timeout   time.Duration
+}
+
+// MutationClient is the canonical contract-bound mutation surface used by Store.
+type MutationClient interface {
+	Create(context.Context, projection.CreateMutation) (projection.MutationReceipt, error)
+	Reconcile(context.Context, projection.ReconcileMutation) (projection.MutationReceipt, error)
+	ReadAuthoritative(context.Context, string) (*graph.ExactEntity, error)
 }
 
 // Option configures a Store.
@@ -135,6 +144,20 @@ type Option func(*Store)
 // WithTimeout overrides the per-request timeout.
 func WithTimeout(d time.Duration) Option {
 	return func(s *Store) { s.timeout = d }
+}
+
+// WithMutationClient supplies the canonical mutation surface. Production
+// callers normally omit it; it exists for focused tests and alternate wiring.
+func WithMutationClient(client MutationClient) Option {
+	return func(s *Store) { s.mutations = client }
+}
+
+// NewStoreWithMutationClient builds a Store around the narrow canonical
+// mutation surface. It is primarily useful to test mutation behavior without
+// requiring a concrete NATS client.
+func NewStoreWithMutationClient(requester Requester, mutations MutationClient, opts ...Option) (*Store, error) {
+	opts = append(opts, WithMutationClient(mutations))
+	return NewStore(requester, opts...)
 }
 
 // NewStore builds a store over a classified requester.
@@ -149,25 +172,29 @@ func NewStore(requester Requester, opts ...Option) (*Store, error) {
 	if store.timeout <= 0 {
 		return nil, errors.New("graph store requires a positive timeout")
 	}
+	if err := vocabulary.RegisterPredicates(); err != nil {
+		return nil, fmt.Errorf("register graph projection vocabulary: %w", err)
+	}
+	if store.mutations == nil {
+		client, ok := requester.(*natsclient.Client)
+		if !ok {
+			return nil, errors.New("graph store requires a canonical mutation client for a non-NATS requester")
+		}
+		mutations, err := projection.NewMutationClient(projection.MutationClientConfig{
+			NATS: client, Contracts: projectioncontract.Contracts(), Timeout: store.timeout,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("build graph mutation client: %w", err)
+		}
+		store.mutations = mutations
+	}
 	return store, nil
 }
 
-// CreateResult is a successful atomic create.
-//
-// Degraded is not an error and must not be retried: the write COMMITTED and
-// only the post-write read-back failed (#120). A retry would come back as
-// entity_already_exists and a caller treating that as "somebody else got here
-// first" would draw exactly the wrong conclusion about a world it just created.
+// CreateResult is a verified successful atomic create.
 type CreateResult struct {
-	// Entity is the stored entity as graph-ingest read it back, including any
-	// framework-injected triples. Nil when Degraded.
-	Entity *graph.EntityState
-	// Revision is the KV revision after the write. Zero when Degraded.
+	Entity   *graph.EntityState
 	Revision uint64
-	// Degraded reports a committed write whose read-back failed.
-	Degraded bool
-	// DegradedReason carries the read-back failure.
-	DegradedReason string
 }
 
 // CreateEntity performs an ATOMIC create-or-fail.
@@ -178,14 +205,10 @@ type CreateResult struct {
 // it. Concurrent creates of one ID have exactly one winner; every loser gets
 // ErrEntityExists.
 //
-// It deliberately uses `entity.create` rather than `entity.create_with_triples`,
-// which carries the same shape plus a stub re-stamp path: a create_with_triples
-// landing on a referential stub SUCCEEDS by merging into it. That is right for
-// an entity being born late, and wrong for a sentinel — the gate must report
-// "already there" for any resident at that key, so the caller can look and
-// decide, rather than being told the world is fresh because the resident was
-// only half real.
-func (s *Store) CreateEntity(ctx context.Context, entity *graph.EntityState) (CreateResult, error) {
+// The canonical create request carries an empty entity envelope and the birth
+// facts separately. Contract validation proves every birth predicate belongs
+// to the named projection before the atomic request is sent.
+func (s *Store) CreateEntity(ctx context.Context, contract string, entity *graph.EntityState) (CreateResult, error) {
 	if entity == nil {
 		return CreateResult{}, errors.New("create requires an entity")
 	}
@@ -196,27 +219,49 @@ func (s *Store) CreateEntity(ctx context.Context, entity *graph.EntityState) (Cr
 		return CreateResult{}, fmt.Errorf("create entity %s: %w", entity.ID, err)
 	}
 
-	request, err := json.Marshal(graph.CreateEntityRequest{Entity: entity})
-	if err != nil {
-		return CreateResult{}, fmt.Errorf("encode create request for %s: %w", entity.ID, err)
+	if contract == "" {
+		return CreateResult{}, errors.New("create requires a projection contract")
 	}
-
-	reply, err := s.requester.RequestClassified(ctx, SubjectEntityCreate, request, s.timeout)
+	bare := entity.Clone()
+	triples := append([]message.Triple(nil), bare.Triples...)
+	bare.Triples = nil
+	// beta.160 reserves Triple.Context for mutation correlation: any explicit
+	// context must equal Metadata.RequestID. Birth producers predate that
+	// contract and used Context for domain provenance (for example a logical
+	// turn ID or template@version), so normalize the request-owned COPY here.
+	// The entity ID is the only stable per-entity create identity; deriving it
+	// from producer context would let two entity births share one request ID.
+	for index := range triples {
+		triples[index].Context = entity.ID
+	}
+	metadata := createMetadata(entity.ID, triples)
+	receipt, err := s.mutations.Create(ctx, projection.CreateMutation{
+		Contract: contract, Entity: bare, Triples: triples, Metadata: metadata,
+	})
 	if err != nil {
-		if codeOf(err) == graph.ErrorCodeEntityExists {
+		var mutationErr *projection.MutationError
+		if errors.As(err, &mutationErr) && mutationErr.Kind == projection.MutationConflict {
 			return CreateResult{}, fmt.Errorf("create entity %s: %w: %w", entity.ID, ErrEntityExists, err)
+		}
+		if errors.As(err, &mutationErr) && mutationErr.Kind == projection.MutationCommitUnknown {
+			if exact, readErr := s.mutations.ReadAuthoritative(ctx, entity.ID); readErr == nil && exact != nil &&
+				birthMatches(exact.Entity, bare, triples, projectioncontract.BirthPredicates(contract)) {
+				return CreateResult{Entity: exact.Entity.Clone(), Revision: exact.KVRevision}, nil
+			}
 		}
 		return CreateResult{}, fmt.Errorf("create entity %s: %w", entity.ID, err)
 	}
+	return CreateResult{Entity: receipt.Entity, Revision: receipt.KVRevision}, nil
+}
 
-	var response graph.CreateEntityResponse
-	if err := json.Unmarshal(reply, &response); err != nil {
-		return CreateResult{}, fmt.Errorf("decode create response for %s: %w", entity.ID, err)
+func createMetadata(entityID string, triples []message.Triple) projection.MutationMetadata {
+	metadata := projection.MutationMetadata{RequestID: entityID, Source: "semmachina-create"}
+	if len(triples) == 0 {
+		return metadata
 	}
-	if response.Degraded {
-		return CreateResult{Degraded: true, DegradedReason: response.DegradedReason}, nil
-	}
-	return CreateResult{Entity: response.Entity, Revision: response.KVRevision}, nil
+	metadata.Source = triples[0].Source
+	metadata.Timestamp = triples[0].Timestamp
+	return metadata
 }
 
 // GetEntity reads one entity through graph-ingest's query surface.
@@ -225,40 +270,25 @@ func (s *Store) CreateEntity(ctx context.Context, entity *graph.EntityState) (Cr
 // "there is nothing there" and "here is nothing" must not be the same value at
 // a call site that decides whether a world exists.
 //
-// The returned entity may be a referential STUB — queryable, carrying only
-// core.identity.* markers and none of its own facts — so a caller asking "is
-// this loaded?" must check graph.EntityState.IsStub() and not merely that the
-// read succeeded.
+// Missing relationship targets are absent authority entries in beta.160; they
+// are returned as ErrEntityNotFound rather than synthesized entities.
 func (s *Store) GetEntity(ctx context.Context, id string) (*graph.EntityState, error) {
 	if id == "" {
 		return nil, errors.New("get requires an entity id")
 	}
-	request, err := json.Marshal(struct {
-		ID string `json:"id"`
-	}{ID: id})
+	exact, err := s.mutations.ReadAuthoritative(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("encode query for %s: %w", id, err)
-	}
-
-	reply, err := s.requester.RequestClassified(ctx, SubjectQueryEntity, request, s.timeout)
-	if err != nil {
-		if codeOf(err) == graph.ErrorCodeEntityNotFound {
+		var mutationErr *projection.MutationError
+		if (errors.As(err, &mutationErr) && mutationErr.Kind == projection.MutationNotFound) ||
+			codeOf(err) == graph.ErrorCodeEntityNotFound {
 			return nil, fmt.Errorf("get entity %s: %w: %w", id, ErrEntityNotFound, err)
 		}
 		return nil, fmt.Errorf("get entity %s: %w", id, err)
 	}
-
-	var state graph.EntityState
-	if err := json.Unmarshal(reply, &state); err != nil {
-		return nil, fmt.Errorf("decode entity %s: %w", id, err)
+	if exact == nil || exact.Entity == nil || exact.KVRevision == 0 {
+		return nil, fmt.Errorf("get entity %s: invalid exact authority response", id)
 	}
-	// The authoritative-state contract applies to anything decoding an
-	// EntityState off the wire: poisoned stored bytes become a typed refusal
-	// here rather than half-usable state downstream.
-	if err := graph.ValidateDecodedEntityState(&state); err != nil {
-		return nil, fmt.Errorf("entity %s: %w", id, err)
-	}
-	return &state, nil
+	return exact.Entity.Clone(), nil
 }
 
 // BatchResult is a many-entity read.
@@ -473,106 +503,135 @@ func (s *Store) EntitiesByPredicateValue(
 	return response.Data.Entities, nil
 }
 
-// MergeOption adjusts one merge request.
-type MergeOption func(*graph.UpdateEntityWithTriplesRequest)
-
-// WithClearedPredicates deletes every value of the named predicates before the
-// merge applies.
-//
-// It exists for the one thing the merge lane cannot otherwise express: an EMPTY
-// value set. AddTriples replaces a predicate's values with the ones it carries,
-// so carrying none leaves the predicate exactly as it was — which means "the
-// character put down the last thing they were carrying" would silently commit
-// as "the character is still carrying it", with a success response. Upstream
-// applies removals BEFORE the merge, so clearing and re-adding in one request is
-// well defined.
-func WithClearedPredicates(predicates ...string) MergeOption {
-	return func(request *graph.UpdateEntityWithTriplesRequest) {
-		request.RemoveTriples = append(request.RemoveTriples, predicates...)
+// Reconcile makes one declared predicate group equal the complete desired set.
+// An empty desired slice is an intentional clear. Revision conflicts and
+// commit-unknown errors are returned unchanged for caller-level reread and
+// recomputation; Store never retries a mutation blindly.
+func (s *Store) Reconcile(ctx context.Context, target projectioncontract.Target, entityID string, desired []message.Triple) (*graph.EntityState, error) {
+	if entityID == "" {
+		return nil, errors.New("reconcile requires an entity id")
 	}
+	if target.Contract == "" || target.Group == "" {
+		return nil, errors.New("reconcile requires a projection contract and group")
+	}
+	receipt, err := s.mutations.Reconcile(ctx, projection.ReconcileMutation{
+		Contract: target.Contract, Group: target.Group, EntityID: entityID, Desired: desired,
+	})
+	if err != nil {
+		var mutationErr *projection.MutationError
+		if errors.As(err, &mutationErr) && mutationErr.Kind == projection.MutationNotFound {
+			return nil, fmt.Errorf("reconcile %s/%s into %s: %w: %w", target.Contract, target.Group, entityID, ErrEntityNotFound, err)
+		}
+		if errors.As(err, &mutationErr) && mutationErr.Kind == projection.MutationCommitUnknown {
+			if exact, readErr := s.mutations.ReadAuthoritative(ctx, entityID); readErr == nil && exact != nil &&
+				groupMatches(exact.Entity, desired, projectioncontract.Predicates(target)) {
+				return exact.Entity.Clone(), nil
+			}
+		}
+		return nil, fmt.Errorf("reconcile %s/%s into %s: %w", target.Contract, target.Group, entityID, err)
+	}
+	if receipt.Entity == nil {
+		return nil, fmt.Errorf("reconcile %s/%s into %s returned no entity", target.Contract, target.Group, entityID)
+	}
+	return receipt.Entity.Clone(), nil
 }
 
-// MergeTriples writes triples with REPLACE-by-(subject, predicate) semantics on
-// an entity that must already exist.
-//
-// This is the lane every single-valued engine predicate takes. The alternative,
-// triple.add_batch, APPENDS: writing turn.roll.band twice through it leaves the
-// turn holding two bands, both "correct", with no error raised — the exact
-// silent divergence at-most-one-roll-per-turn exists to prevent. Choosing
-// between the two lanes is not a performance decision.
-//
-// Replace is per (subject, predicate), which makes it a trap for a MULTI-valued
-// predicate as surely as it is the right lane for a single-valued one. Upstream
-// states it plainly (graph.UpdateEntityWithTriplesRequest.AddTriples): "For a
-// MULTI-valued predicate, send the FULL desired set — a partial set drops the
-// omitted siblings." So adding one carried item while sending only the new one
-// deletes every other carried item and returns success. This client is
-// deliberately vocabulary-agnostic — it cannot know which of a caller's
-// predicates are multi-valued — so knowing the difference is the caller's job,
-// and WithClearedPredicates is the only way to say "this set is now empty".
-//
-// The request carries a bare EntityState{ID}: MessageType, Version, and
-// StorageRef are preserve-when-zero upstream, so sending zeroes keeps the stored
-// envelope instead of erasing the entity's provenance and its indexing profile.
-//
-// Every triple must target entityID. A foreign subject would not fail — it would
-// be split off and routed onto its own entity, on the APPENDING lane, with the
-// failure logged and not returned — so a typo would file a turn's roll on some
-// other entity and report success. The merge lane is per-entity: a write
-// touching N entities is N calls, each with its own classified error.
-func (s *Store) MergeTriples(
-	ctx context.Context,
-	entityID string,
-	triples []message.Triple,
-	opts ...MergeOption,
-) (*graph.EntityState, error) {
-	if entityID == "" {
-		return nil, errors.New("merge requires an entity id")
+func birthMatches(got, want *graph.EntityState, desired []message.Triple, predicates []string) bool {
+	if !createEnvelopeMatches(got, want) {
+		return false
 	}
-
-	body := graph.UpdateEntityWithTriplesRequest{
-		Entity:     &graph.EntityState{ID: entityID},
-		AddTriples: triples,
+	allowed := make(map[string]bool, len(predicates))
+	for _, predicate := range predicates {
+		allowed[predicate] = true
 	}
-	for _, opt := range opts {
-		opt(&body)
-	}
-	// Both checks run AFTER the options, over the request as it will actually
-	// travel. Validating the triples parameter instead would validate a
-	// different value than it transmits — an option appending to AddTriples
-	// would walk straight past a guard whose whole reason for existing is that
-	// the failure it prevents is silent. And a clear-only merge carries no
-	// triples and is a legitimate write, while a request that neither adds nor
-	// clears is a round trip whose success proves nothing.
-	for idx := range body.AddTriples {
-		if body.AddTriples[idx].Subject != entityID {
-			return nil, fmt.Errorf(
-				"triple %d targets %q, not %q; a foreign subject is routed to its own entity rather than rejected",
-				idx, body.AddTriples[idx].Subject, entityID)
+	for _, triple := range desired {
+		if !allowed[triple.Predicate] {
+			return false
 		}
 	}
-	if len(body.AddTriples) == 0 && len(body.RemoveTriples) == 0 {
-		return nil, fmt.Errorf("merge into %s carries no triples and clears no predicates", entityID)
-	}
-
-	request, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("encode merge request for %s: %w", entityID, err)
-	}
-
-	reply, err := s.requester.RequestClassified(ctx, SubjectEntityUpdateWithTriples, request, s.timeout)
-	if err != nil {
-		if codeOf(err) == graph.ErrorCodeEntityNotFound {
-			return nil, fmt.Errorf("merge into %s: %w: %w", entityID, ErrEntityNotFound, err)
+	resident := make([]message.Triple, 0, len(got.Triples))
+	indexingFacts := 0
+	for _, triple := range got.Triples {
+		// graph-ingest injects exactly this operational fact at the canonical
+		// create seam. It is not caller-owned projection state.
+		if triple.Predicate == ssvocab.EntityIndexingProfile {
+			indexingFacts++
+			profile, validProfile := triple.Object.(string)
+			if indexingFacts != 1 || triple.Subject != got.ID ||
+				triple.Source != "graph-ingest-indexing-profile" || triple.Timestamp.IsZero() ||
+				triple.Confidence != 1 || triple.Context != "" || triple.Datatype != "" ||
+				triple.ExpiresAt != nil || !validProfile || !ssvocab.IsValidIndexingProfile(profile) {
+				return false
+			}
+			continue
 		}
-		return nil, fmt.Errorf("merge into %s: %w", entityID, err)
+		resident = append(resident, triple)
 	}
+	return indexingFacts == 1 && triplesEqual(resident, desired)
+}
 
-	var response graph.UpdateEntityWithTriplesResponse
-	if err := json.Unmarshal(reply, &response); err != nil {
-		return nil, fmt.Errorf("decode merge response for %s: %w", entityID, err)
+func createEnvelopeMatches(got, want *graph.EntityState) bool {
+	if got == nil || want == nil || got.ID != want.ID || !got.MessageType.Equal(want.MessageType) ||
+		!reflect.DeepEqual(got.StorageRef, want.StorageRef) {
+		return false
 	}
-	return response.Entity, nil
+	// The canonical create handler supplies these defaults only when the
+	// caller leaves them zero; nonzero caller values are preserved verbatim.
+	if want.Version == 0 {
+		if got.Version != 1 {
+			return false
+		}
+	} else if got.Version != want.Version {
+		return false
+	}
+	if want.UpdatedAt.IsZero() {
+		if got.UpdatedAt.IsZero() {
+			return false
+		}
+	} else if !got.UpdatedAt.Equal(want.UpdatedAt) {
+		return false
+	}
+	return true
+}
+
+func groupMatches(state *graph.EntityState, desired []message.Triple, predicates []string) bool {
+	if state == nil || len(predicates) == 0 {
+		return false
+	}
+	allowed := make(map[string]bool, len(predicates))
+	for _, predicate := range predicates {
+		allowed[predicate] = true
+	}
+	resident := make([]message.Triple, 0, len(desired))
+	for _, triple := range state.Triples {
+		if allowed[triple.Predicate] {
+			resident = append(resident, triple)
+		}
+	}
+	return triplesEqual(resident, desired)
+}
+
+func triplesEqual(resident, desired []message.Triple) bool {
+	resident = append([]message.Triple(nil), resident...)
+	want := append([]message.Triple(nil), desired...)
+	order := func(a, b message.Triple) int {
+		left, _ := json.Marshal(a)
+		right, _ := json.Marshal(b)
+		return stringCompare(string(left), string(right))
+	}
+	slices.SortFunc(resident, order)
+	slices.SortFunc(want, order)
+	return reflect.DeepEqual(resident, want)
+}
+
+func stringCompare(left, right string) int {
+	if left < right {
+		return -1
+	}
+	if left > right {
+		return 1
+	}
+	return 0
 }
 
 // codeOf returns the stable machine code from a classified error, or "".

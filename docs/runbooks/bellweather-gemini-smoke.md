@@ -165,4 +165,7 @@ credential.
 
 ## Recorded runs
 
+- [2026-08-12 authorized Gemini 3.5 Flash-Lite beta.160 acceptance][beta160-paid]
 - [2026-08-02 authorized Gemini 3.6 Flash baseline](../smoke-results/2026-08-02-bellweather-gemini.md)
+
+[beta160-paid]: ../smoke-results/2026-08-12-bellweather-gemini35-flash-lite-beta160.md

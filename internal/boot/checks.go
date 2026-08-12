@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/nats-io/nats.go/jetstream"
@@ -20,25 +22,9 @@ import (
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
-// The rule processor's own observability coordinates.
-//
-// Restated here because upstream exports neither, and the alternative to
-// restating them is the thing this check exists to replace: a comment recording
-// an obligation. TestRuleProcessorStatus_IsWrittenByTheRealProcessor pins both
-// against a real processor, so a rename upstream fails a test rather than a boot.
 const (
-	// componentStatusBucket is where every semstreams component reports its
-	// lifecycle stage (component.KVLifecycleReporter writes it, keyed by the
-	// component's own name).
-	componentStatusBucket = "COMPONENT_STATUS"
-	// ruleProcessorComponent is the rule processor's metadata name, which is the
-	// KEY it reports under.
 	ruleProcessorComponent = "rule-processor"
-	// ruleStatusWait bounds the readback below. The processor writes its status
-	// inside Start, so a healthy deployment answers on the first read; the window
-	// exists so a write that becomes visible a beat later is a pause rather than
-	// a refused boot.
-	ruleStatusWait = 10 * time.Second
+	ruleStatusWait         = 20 * time.Second
 )
 
 // checkPayloadRegistry proves the binary's bootstrap actually registered this
@@ -120,186 +106,114 @@ func checkStreamCaptures(ctx context.Context, streams streamReader, name string,
 	return nil
 }
 
-// checkRuleProcessorStarted is the CHECKABLE half of the one ordering
-// constraint the stranded-turn pass warns about hardest.
-//
-// # What the pass needs, and why the obvious probe is worthless
-//
-// resume.Reconcile reads the set of work the substrate is still holding and acts
-// on what is missing from it. The rule processor's bootstrap replay publishes
-// INTO that set, so a pass that ran before the processor was up would read an
-// empty set for a turn about to receive a trigger — and would then either
-// re-trigger it (a duplicate, and on a persona hop a second billed spawn) or END
-// it, which is terminal and declines the replayed trigger when it lands.
-//
-// The obvious probe does not work, and this was MEASURED rather than assumed:
-// the processor's Health() reports Healthy=true from CONSTRUCTION
-// (processor/rule/processor.go initialises the cached HealthStatus with
-// Healthy:true and only re-sets it inside run()), so a health check answers
-// "healthy" for a processor that has never started. That is exactly the
-// "indistinguishable from a quiet one" trap, and a boot that leaned on it would
-// have a check that always passes.
-//
-// # What IS observable, and why it is EXISTENCE rather than freshness
-//
-// Start's last act is a lifecycle report: the processor writes its status into
-// the COMPONENT_STATUS KV bucket under its own component name
-// (component.KVLifecycleReporter.ReportStage → Put). The key is attributable.
-// The trouble is that it SURVIVES A RESTART, so its mere presence is satisfied on
-// every boot after the first by the previous boot's write.
-//
-// The first version of this check compared timestamps: the reported
-// StageStartedAt had to be at or after the instant this boot called Start. That
-// reads correctly and rests on the one input a process does not control. The
-// stamp round-trips through JSON, which strips the monotonic reading, so the
-// comparison is WALL CLOCK on both sides — and a backwards clock step (an NTP
-// correction, a VM snapshot restore, a container host resync) lets a previous
-// boot's status satisfy it. On its own that is harmless, because the sequence has
-// already returned from Start by then. It bites in exactly one combination:
-// broken lifecycle reporting AND a backwards step, which is precisely where this
-// check is supposed to refuse.
-//
-// So the key is DELETED before the processor starts and the check waits for it to
-// REAPPEAR. Existence-after-deletion is a per-boot fact no clock can forge, and
-// it collapses the comparison into a mechanism — the same move this codebase
-// makes for connection ids, where reuse is unrepresentable rather than avoided.
-// The only clock left is the local poll deadline, which bounds a wait rather than
-// deciding a fact.
-//
-// One assumption it does rest on, stated because it is the deployment's rather
-// than the code's: instance-per-world. Two processes serving one world could have
-// the other's processor rewrite the key after this one deleted it. That is the
-// same assumption internal/resume's whole pass rests on, and it fails the same
-// way — the day it stops holding, this check needs a per-process identity in the
-// key before it needs anything else.
-//
-// It does NOT prove the replay has DRAINED. Nothing upstream exposes that, and
-// the pass covers it itself by waiting for the work queues to stop moving.
-// This closes the half that could otherwise only be a comment.
-//
-// # Why the reported STAGE is required to be non-empty and no more
-//
-// Requiring the exact value `idle` looks free and is not. The processor writes
-// exactly four stages and has NO path back to idle — there is no
-// ReportCycleComplete call anywhere in processor/rule, so `evaluating` is sticky
-// once written. Its entity watcher is already delivering before Start returns
-// (that is what rp.ready signals) and the reporter's throttle only suppresses for
-// a second, so a busy broker can leave the key reading `evaluating` by the time
-// this check looks. Pinning the value would hang the boot in that window, which
-// trades a hypothetical (`stopping`, a stage this component never writes) for a
-// stall. Non-empty rejects the shape that can actually occur — a zero-valued or
-// malformed status decoding to no stage at all — and costs nothing.
-//
-// # It fails CLOSED, deliberately
-//
-// Upstream's lifecycle reporting is best-effort: a COMPONENT_STATUS bucket it
-// cannot create downgrades to a no-op reporter with a warning. On such a
-// deployment the key never reappears and this check refuses the boot rather than
-// running the pass blind. Running the pass against a processor nobody can confirm
-// started is the failure that ends live turns; refusing to boot is the failure an
-// operator reads about.
+// checkRuleProcessorStarted closes the ordering edge between rule bootstrap and
+// stranded-turn recovery. ComponentManager state proves this process started the
+// admitted generation; the fresh GRAPH_STATUS/rule envelope proves its current
+// entity replay completed. Missing, stale, building, degraded, and reset-required
+// states all fail closed. The readiness key is never deleted: it is framework
+// operational state with heartbeat-based freshness semantics.
 func (e *Engine) checkRuleProcessorStarted(ctx context.Context) error {
-	if !e.ruleStatusCleared {
-		return errors.New(
-			"this boot never cleared the rule processor's lifecycle status, so it cannot tell a status the " +
-				"processor wrote from one an earlier process left behind; the processor has not been started by " +
-				"this boot at all")
+	if e.ruleManager == nil || !e.ruleManager.IsStarted() {
+		return errors.New("rule processor component manager has not started")
 	}
-	bucket, err := e.client.GetKeyValueBucket(ctx, componentStatusBucket)
-	if err != nil {
-		return fmt.Errorf(
-			"the %s bucket is unreadable, so this boot cannot confirm the rule processor started: %w. The "+
-				"stranded-turn pass must not run against an unstarted processor — it would read an empty work "+
-				"set for turns about to receive a trigger and END them, and `failed` is terminal",
-			componentStatusBucket, err)
+	managed := e.ruleManager.GetManagedComponents()[ruleProcessorComponent]
+	if managed == nil || managed.State != component.StateStarted {
+		return fmt.Errorf("rule component manager reports %q is not started", ruleProcessorComponent)
 	}
 
-	return awaitReportedStatus(ctx,
-		func(ctx context.Context) ([]byte, error) {
-			entry, getErr := bucket.Get(ctx, ruleProcessorComponent)
-			if getErr != nil {
-				return nil, getErr
-			}
-			return entry.Value(), nil
-		},
+	waitCtx, cancel := context.WithTimeout(ctx, ruleStatusWait)
+	defer cancel()
+	return awaitRuleReadiness(waitCtx, e.ruleStatusBaseline, func() ruleReadinessGeneration {
+		return e.readRuleReadinessGeneration(waitCtx)
+	},
 		readinessWindow{timeout: ruleStatusWait, poll: e.cfg.ReadyPoll, sleep: e.sleep})
 }
 
-// clearRuleProcessorStatus deletes the rule processor's lifecycle key so that its
-// REAPPEARANCE is a fact about this boot.
-//
-// Called immediately before the processor is started, and its success is what
-// checkRuleProcessorStarted requires: a boot that could not clear the key has no
-// way to tell the processor's own write from an earlier process's leftover, so it
-// refuses rather than reading one as the other.
-//
-// An ABSENT bucket is a cleared key, not a failure. The bucket is created by
-// whichever component reports first — the processor itself, inside Start — so
-// finding none means there is no leftover to forge with, which is the same
-// guarantee the delete provides.
-func (e *Engine) clearRuleProcessorStatus(ctx context.Context) error {
-	bucket, err := e.client.GetKeyValueBucket(ctx, componentStatusBucket)
+type ruleReadinessGeneration struct {
+	revision uint64
+	reading  readiness.Reading
+}
+
+func (e *Engine) captureRuleStatusBaseline(ctx context.Context) error {
+	e.ruleStatusBaseline = 0
+	bucket, err := e.client.GetKeyValueBucket(ctx, readiness.BucketGraphStatus)
+	if errors.Is(err, jetstream.ErrBucketNotFound) {
+		return nil
+	}
 	if err != nil {
-		if errors.Is(err, jetstream.ErrBucketNotFound) {
-			e.ruleStatusCleared = true
-			return nil
-		}
-		return fmt.Errorf(
-			"read the %s bucket to clear the rule processor's stale lifecycle status: %w", componentStatusBucket, err)
+		return fmt.Errorf("capture %s/%s generation: %w", readiness.BucketGraphStatus, readiness.KeyRule, err)
 	}
-	if err := bucket.Delete(ctx, ruleProcessorComponent); err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
-		return fmt.Errorf(
-			"delete the rule processor's stale lifecycle status from %s: %w; without the delete this boot cannot "+
-				"tell a status the processor wrote from one an earlier process left, and the stranded-turn pass "+
-				"would run against a processor nobody confirmed started",
-			componentStatusBucket, err)
+	entry, err := bucket.Get(ctx, readiness.KeyRule)
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return nil
 	}
-	e.ruleStatusCleared = true
+	if err != nil {
+		return fmt.Errorf("capture %s/%s generation: %w", readiness.BucketGraphStatus, readiness.KeyRule, err)
+	}
+	e.ruleStatusBaseline = entry.Revision()
 	return nil
 }
 
-// awaitReportedStatus waits for a component's lifecycle status to EXIST and to
-// carry a stage.
-//
-// Existence is the whole predicate, and it is only meaningful because the caller
-// deleted the key first: a check that merely found a status would be satisfied by
-// every earlier boot's leftover. See checkRuleProcessorStarted for why that is
-// preferred to comparing timestamps across a restart boundary.
-//
-// The stage must be non-empty. That rejects a zero-valued or malformed status —
-// the shape that can actually occur — without pinning a value the component may
-// legitimately have moved past by the time this reads it.
-func awaitReportedStatus(
+func (e *Engine) readRuleReadinessGeneration(ctx context.Context) ruleReadinessGeneration {
+	bucket, err := e.client.GetKeyValueBucket(ctx, readiness.BucketGraphStatus)
+	if errors.Is(err, jetstream.ErrBucketNotFound) {
+		return ruleReadinessGeneration{}
+	}
+	if err != nil {
+		return ruleReadinessGeneration{reading: readiness.Reading{Err: err}}
+	}
+	entry, err := bucket.Get(ctx, readiness.KeyRule)
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return ruleReadinessGeneration{}
+	}
+	if err != nil {
+		return ruleReadinessGeneration{reading: readiness.Reading{Err: err}}
+	}
+	var status graph.IndexStatusResponse
+	if err := json.Unmarshal(entry.Value(), &status); err != nil {
+		return ruleReadinessGeneration{revision: entry.Revision(), reading: readiness.Reading{
+			Known: true, Err: fmt.Errorf("decode %s/%s: %w", readiness.BucketGraphStatus, readiness.KeyRule, err),
+		}}
+	}
+	age := time.Since(entry.Created())
+	return ruleReadinessGeneration{revision: entry.Revision(), reading: readiness.Reading{
+		Known: true, Fresh: age <= readiness.FreshnessWindow(readiness.DefaultHeartbeat), Age: age, Status: status,
+	}}
+}
+
+func awaitRuleReadiness(
 	ctx context.Context,
-	read func(context.Context) ([]byte, error),
+	baseline uint64,
+	read func() ruleReadinessGeneration,
 	w readinessWindow,
 ) error {
 	deadline := time.Now().Add(w.timeout)
 	var last string
 	for {
-		value, readErr := read(ctx)
+		generation := read()
+		reading := generation.reading
 		switch {
-		case readErr != nil:
-			last = readErr.Error()
+		case generation.revision <= baseline:
+			last = fmt.Sprintf("status generation %d has not advanced past pre-activation generation %d",
+				generation.revision, baseline)
+		case !reading.Known:
+			last = "status unknown"
+		case reading.Err != nil:
+			last = reading.Err.Error()
+		case !reading.Fresh:
+			last = fmt.Sprintf("status stale (age %s)", reading.Age)
+		case reading.Status.State != graph.IndexStateReady:
+			last = fmt.Sprintf("state %q", reading.Status.State)
+		case !reading.Status.Ready:
+			last = "ready is false"
+		case !reading.Status.BootstrapComplete:
+			last = "bootstrap is incomplete"
 		default:
-			var status component.Status
-			if err := json.Unmarshal(value, &status); err != nil {
-				last = "status is undecodable: " + err.Error()
-				break
-			}
-			if status.Stage != "" {
-				return nil
-			}
-			last = "a status reappeared carrying no stage at all, which is not a report this component writes"
+			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf(
-				"the rule processor's lifecycle status did not reappear within %s after this boot deleted it (%s). "+
-					"It writes one at the end of Start, keyed %q in %s, so this is either a processor that did "+
-					"not start or a deployment whose lifecycle reporting is disabled — and this boot refuses to "+
-					"run the stranded-turn pass against a processor it cannot confirm, because an unstarted "+
-					"processor is indistinguishable from a quiet one and the pass would end live turns",
-				w.timeout, last, ruleProcessorComponent, componentStatusBucket)
+			return fmt.Errorf("rule readiness did not become fresh, ready, and bootstrap-complete within %s (%s)",
+				w.timeout, last)
 		}
 		if err := w.sleep(ctx, w.poll); err != nil {
 			return err

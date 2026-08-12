@@ -52,14 +52,15 @@ func ProcessorConfig() (json.RawMessage, error) {
 	outputs = append(outputs, stagePort("accusation", SubjectAccusation))
 	outputs = append(outputs, stagePort("case-progress", SubjectCaseProgress))
 
-	config := rule.Config{
-		PackID:      PackID,
-		InlineRules: definitions,
-		EntityWatchBuckets: map[string][]string{
-			EntityStatesBucket: {EntityPattern, CaseEntityPattern},
-		},
-		Ports: &component.PortConfig{Outputs: outputs},
+	config, err := rule.NewConfig(PackID)
+	if err != nil {
+		return nil, fmt.Errorf("build turn-sequencing rule defaults: %w", err)
 	}
+	config.InlineRules = definitions
+	config.EntityWatchBuckets = map[string][]string{
+		EntityStatesBucket: {EntityPattern, CaseEntityPattern},
+	}
+	config.Ports.Outputs = append(config.Ports.Outputs, outputs...)
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("turn-sequencing rule config: %w", err)
 	}
@@ -73,9 +74,8 @@ func ProcessorConfig() (json.RawMessage, error) {
 func stagePort(name, subject string) component.PortDefinition {
 	return component.PortDefinition{
 		Name:        "semmachina.turn." + name,
-		Type:        "jetstream",
-		Subject:     subject,
-		StreamName:  StageStream,
+		Required:    true,
+		Config:      component.JetStreamPort{StreamName: StageStream, Subjects: []string{subject}},
 		Description: "Stage trigger for the turn loop's " + name + " hop",
 	}
 }

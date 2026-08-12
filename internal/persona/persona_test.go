@@ -20,6 +20,7 @@ import (
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/persona"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/turn"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
@@ -307,16 +308,19 @@ func (g *fakeGraph) seedTurn(triples ...message.Triple) {
 	}
 }
 
-func (g *fakeGraph) MergeTriples(
+func (g *fakeGraph) Reconcile(
 	_ context.Context,
+	target projectioncontract.Target,
 	entityID string,
 	triples []message.Triple,
-	_ ...graphio.MergeOption,
 ) (*graph.EntityState, error) {
 	g.merges++
 	g.journal.add("merge " + entityID)
 	if g.mergeErr != nil {
 		return nil, g.mergeErr
+	}
+	if target.Contract == "" || target.Group == "" {
+		return nil, errors.New("reconcile requires a contract and group")
 	}
 	stored, ok := g.entities[entityID]
 	if !ok {

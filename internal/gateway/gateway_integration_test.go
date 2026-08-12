@@ -1,3 +1,5 @@
+//go:build integration
+
 package gateway_test
 
 import (
@@ -12,22 +14,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
-	graphingest "github.com/c360studio/semstreams/processor/graph-ingest"
+	"github.com/c360studio/semstreams/pkg/projection"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/gateway"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/testinfra"
 	"github.com/c360studio/semmachina/internal/turn"
 	"github.com/c360studio/semmachina/internal/vocabulary"
+	"github.com/c360studio/semmachina/internal/world"
 )
 
 // Everything the admission gate rests on is a claim about a REAL graph and a
-// REAL durable consumer. The pointer it reads is written on the merge lane, and
+// REAL durable consumer. The pointer it reads is written through reconciliation, and
 // the mutation API offers a second lane that accepts the same triples and
 // APPENDS — through which a player's second turn leaves them holding two
 // pointers, with a success response and no error anywhere. The turn it reads is
@@ -137,24 +140,23 @@ const liveCredential = "local-player-credential"
 // the gateway's "player_id is a graph entity" read has something true to find.
 func (l *liveGateway) bornPlayer(t *testing.T) {
 	t.Helper()
-	entity := &graph.EntityState{
-		ID: l.playerID,
-		MessageType: message.Type{
-			Domain: payload.Domain, Category: payload.CategoryWorldEntity, Version: payload.SchemaVersion,
-		},
-		Version:   1,
-		UpdatedAt: time.Now().UTC(),
-		Triples: []message.Triple{{
-			Subject:    l.playerID,
-			Predicate:  vocabulary.WorldEntityKind.String(),
-			Object:     string(vocabulary.EntityKindPlayer),
-			Source:     "integration-world-import",
-			Timestamp:  time.Now().UTC(),
-			Confidence: 1.0,
+	at := time.Now().UTC()
+	entity := &payload.WorldEntity{
+		ID: l.playerID, Kind: vocabulary.EntityKindPlayer,
+		Template: payload.TemplateRef{ID: liveTemplate, Version: "test", LocalID: "pat"},
+		Facts: []payload.WorldFact{{
+			Predicate: vocabulary.WorldEntityName,
+			Object:    "Pat",
 		}},
+		RecordedAt: at,
 	}
-	if _, err := l.store.CreateEntity(t.Context(), entity); err != nil {
-		t.Fatalf("create the player entity: %v", err)
+	wire, err := json.Marshal(message.NewBaseMessage(
+		entity.Schema(), entity, "integration-world-import", message.WithTime(at)))
+	if err != nil {
+		t.Fatalf("encode the player entity: %v", err)
+	}
+	if _, err := l.harness.Client.PublishToStreamWithAck(t.Context(), world.DefaultImportSubject, wire); err != nil {
+		t.Fatalf("publish the player entity: %v", err)
 	}
 	l.harness.AwaitEntity(t, l.playerID)
 }
@@ -359,27 +361,43 @@ func TestIntegration_ASecondTurnLeavesThePlayerHoldingOnePointer(t *testing.T) {
 	pointer := &payload.PlayerTurn{
 		PlayerID: live.playerID, TurnID: first.TurnID, TurnEntityID: firstEntity,
 	}
-	triples, err := pointer.Triples(live.playerID, turn.Source, time.Now().UTC())
+	at := time.Now().UTC()
+	triples, err := pointer.Triples(live.playerID, turn.Source, at)
 	if err != nil {
 		t.Fatalf("compose the pointer: %v", err)
 	}
-	request, err := json.Marshal(graph.AddTriplesBatchRequest{Triples: triples})
+	const appendRequestID = "gateway-append-control"
+	for index := range triples {
+		triples[index].Context = appendRequestID
+	}
+	appendClient, err := projection.NewMutationClient(projection.MutationClientConfig{
+		NATS: live.harness.Client,
+		Contracts: []projection.Contract{{
+			Name:          "test-player-current-turn-append",
+			MessageType:   payload.Domain + "." + payload.CategoryWorldEntity + "." + payload.SchemaVersion,
+			EntityPattern: "*.semmachina.*.*.player.*",
+			Groups: []projection.PredicateGroup{{
+				Name: "current-turn", Mode: projection.ModeAppend,
+				Predicates: projectioncontract.Predicates(projectioncontract.PlayerCurrentTurn),
+			}},
+		}},
+		Timeout: graphio.DefaultTimeout,
+	})
 	if err != nil {
-		t.Fatalf("encode add_batch: %v", err)
+		t.Fatalf("build append control client: %v", err)
 	}
-	reply, err := live.harness.Client.RequestClassified(
-		t.Context(), graphingest.SubjectTripleAddBatch, request, 5*time.Second)
+	receipt, err := appendClient.Append(t.Context(), projection.AppendMutation{
+		Contract: "test-player-current-turn-append", Group: "current-turn", EntityID: live.playerID,
+		Triples: triples,
+		Metadata: projection.MutationMetadata{
+			RequestID: appendRequestID, Source: turn.Source, Timestamp: at,
+		},
+	})
 	if err != nil {
-		t.Fatalf("add_batch: %v", err)
+		t.Fatalf("append control: %v", err)
 	}
-	var response graph.AddTriplesBatchResponse
-	if err := json.Unmarshal(reply, &response); err != nil {
-		t.Fatalf("decode add_batch response: %v", err)
-	}
-	// F7: a partial commit is a SUCCESS body with a nil error, so the
-	// failed-subject map is the only signal that a write did not land.
-	if len(response.FailedSubjects) != 0 {
-		t.Fatalf("add_batch reported failed subjects: %v", response.FailedSubjects)
+	if receipt.Commit != projection.CommitVerified {
+		t.Fatalf("append control receipt = %+v, want verified", receipt)
 	}
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
@@ -389,7 +407,7 @@ func TestIntegration_ASecondTurnLeavesThePlayerHoldingOnePointer(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatal("the appending lane left one pointer, so the merge-lane assertion above proves nothing about " +
+	t.Fatal("the appending lane left one pointer, so the reconcile-lane assertion above proves nothing about " +
 		"which lane the recorder used")
 }
 

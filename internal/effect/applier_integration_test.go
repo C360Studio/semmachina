@@ -1,3 +1,5 @@
+//go:build integration
+
 package effect_test
 
 import (
@@ -5,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +19,7 @@ import (
 	"github.com/c360studio/semmachina/internal/effect"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/testinfra"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 	"github.com/c360studio/semmachina/internal/world"
@@ -26,7 +30,7 @@ import (
 // both accept the same triples: one merges by (subject, predicate) and one
 // appends, and the appending one leaves a character accumulating health values
 // with a success response and no error anywhere. It is also where the SECOND
-// half of that trap lives — the merge lane replaces a predicate's whole value
+// half of that trap lives — reconciliation replaces a predicate group's whole value
 // set, so a relationship write that sent only its new value would delete the
 // siblings just as quietly. Neither is visible to a fake that has one lane.
 
@@ -148,21 +152,29 @@ func startWorld(t *testing.T) *liveWorld {
 
 func createTurn(t *testing.T, store *graphio.Store, id string) {
 	t.Helper()
-	if _, err := store.CreateEntity(t.Context(), &graph.EntityState{
+	parts := strings.Split(id, ".")
+	turnID := parts[len(parts)-1]
+	birth := &payload.TurnState{TurnID: turnID, Phase: vocabulary.PhaseAccepted,
+		PlayerID:  strings.Join(append(append([]string(nil), parts[:4]...), "player", "test"), "."),
+		SceneID:   strings.Join(append(append([]string(nil), parts[:4]...), "scene", "test"), "."),
+		ActionRef: "obj://TEST/turn/" + turnID + "/action"}
+	triples, err := birth.Triples(id, effect.Source, applyTime)
+	if err != nil {
+		t.Fatalf("turn birth triples: %v", err)
+	}
+	if _, err := store.CreateEntity(t.Context(), projectioncontract.TurnBirthContract, &graph.EntityState{
 		ID:          id,
-		MessageType: message.Type{Domain: payload.Domain, Category: "turn", Version: payload.SchemaVersion},
+		MessageType: message.Type{Domain: payload.Domain, Category: payload.CategoryTurnState, Version: payload.SchemaVersion},
 		Version:     1,
 		UpdatedAt:   applyTime,
-		Triples: []message.Triple{{
-			Subject:    id,
-			Predicate:  vocabulary.TurnPhaseCurrent.String(),
-			Object:     string(vocabulary.PhaseApplying),
-			Source:     effect.Source,
-			Timestamp:  applyTime,
-			Confidence: 1.0,
-		}},
+		Triples:     triples,
 	}); err != nil {
 		t.Fatalf("create turn entity: %v", err)
+	}
+	phase := []message.Triple{{Subject: id, Predicate: vocabulary.TurnPhaseCurrent.String(),
+		Object: string(vocabulary.PhaseApplying), Source: effect.Source, Timestamp: applyTime, Confidence: 1}}
+	if _, err := store.Reconcile(t.Context(), projectioncontract.TurnPhaseState, id, phase); err != nil {
+		t.Fatalf("advance test turn: %v", err)
 	}
 }
 
@@ -219,6 +231,30 @@ func TestIntegration_CommittedEffectsAreGraphVisibleAndReplacePriorValues(t *tes
 		got[0] != string(vocabulary.StatusHealthy) {
 		t.Fatalf("the write disturbed an untouched fact: status = %v", got)
 	}
+	for predicate, want := range map[vocabulary.Predicate]string{
+		vocabulary.CharacterAttributeStamina: "6",
+		vocabulary.CharacterAttributeResolve: "7",
+		vocabulary.WorldLocationCurrent:      live.entity("gatehouse-place"),
+	} {
+		if got := live.objects(t, "rook", predicate); len(got) != 1 || fmt.Sprint(got[0]) != want {
+			t.Errorf("health write disturbed %s: got %v, want [%s]", predicate, got, want)
+		}
+	}
+	for predicate, want := range map[vocabulary.Predicate][]string{
+		vocabulary.WorldRelationCarries: {live.entity("crowbar"), live.entity("lantern")},
+		vocabulary.WorldRelationKnows:   {live.entity("wren")},
+	} {
+		got := live.objects(t, "rook", predicate)
+		seen := make(map[string]bool, len(got))
+		for _, object := range got {
+			seen[fmt.Sprint(object)] = true
+		}
+		for _, object := range want {
+			if !seen[object] {
+				t.Errorf("health write disturbed %s: got %v, missing %s", predicate, got, object)
+			}
+		}
+	}
 	if got := live.objects(t, "rook", vocabulary.WorldEntityName); len(got) != 1 {
 		t.Fatalf("the write disturbed the entity name: %v", got)
 	}
@@ -268,7 +304,7 @@ func TestIntegration_ASingleValuedEffectAppliedTwiceLeavesOneValue(t *testing.T)
 }
 
 // F14's second hat, against a real graph. The starter world's courier carries
-// two things; adding a third must leave three. The merge lane replaces a
+// two things; adding a third must leave three. The reconcile group replaces a
 // predicate's WHOLE value set, so a writer that published only the new object
 // would leave the character carrying one item and would be told it succeeded.
 func TestIntegration_AddingARelationshipDoesNotDropTheSiblings(t *testing.T) {
@@ -289,7 +325,7 @@ func TestIntegration_AddingARelationshipDoesNotDropTheSiblings(t *testing.T) {
 
 	after := live.objects(t, "rook", vocabulary.WorldRelationCarries)
 	if len(after) != 3 {
-		t.Fatalf("after picking up one more item the character carries %v; the merge lane replaced "+
+		t.Fatalf("after picking up one more item the character carries %v; the reconcile group replaced "+
 			"the whole set and the siblings were dropped", after)
 	}
 	held := map[string]bool{}
@@ -304,7 +340,7 @@ func TestIntegration_AddingARelationshipDoesNotDropTheSiblings(t *testing.T) {
 }
 
 // Completing the set is forced; RESTAMPING it is a choice, and this is where
-// the choice is visible. graph.MergeTriples stores what it is handed verbatim,
+// the choice is visible. Reconciliation stores the supplied desired triples verbatim,
 // so the provenance of a sibling the applier only had to republish is entirely
 // the applier's to keep — and after this turn the graph must still be able to
 // answer "when did Rook pick up the crowbar, and who wrote that?" with the
@@ -426,7 +462,7 @@ func TestIntegration_ARejectedBatchLeavesTheWorldUnchanged(t *testing.T) {
 }
 
 // The spec's convergence scenario. A partial commit is a real outcome here —
-// the merge lane is per-entity — so recovery is re-application under the same
+// reconciliation is per-entity — so recovery is re-application under the same
 // batch identity, and it must converge the world to the full intended state
 // with the already-committed target unchanged by the replacement.
 func TestIntegration_ReapplicationAfterAPartialCommitConverges(t *testing.T) {
@@ -532,14 +568,14 @@ type flakyStore struct {
 	failFor string
 }
 
-func (s *flakyStore) MergeTriples(
+func (s *flakyStore) Reconcile(
 	ctx context.Context,
+	target projectioncontract.Target,
 	entityID string,
 	triples []message.Triple,
-	opts ...graphio.MergeOption,
 ) (*graph.EntityState, error) {
 	if entityID == s.failFor {
 		return nil, errors.New("simulated broker failure")
 	}
-	return s.Store.MergeTriples(ctx, entityID, triples, opts...)
+	return s.Store.Reconcile(ctx, target, entityID, triples)
 }

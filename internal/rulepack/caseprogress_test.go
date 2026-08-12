@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/processor/rule"
 
 	"github.com/c360studio/semmachina/internal/rulepack"
@@ -22,7 +23,9 @@ func TestCaseProgressUniversalBarrierIsRoutedAfterDecisionAndKnowledge(t *testin
 	}
 	portFound, triggerFound, barrierFound := false, false, false
 	for _, port := range cfg.Ports.Outputs {
-		portFound = portFound || port.Subject == rulepack.SubjectCaseProgress && port.StreamName == rulepack.StageStream
+		stream, ok := port.Config.(component.JetStreamPort)
+		portFound = portFound || ok && stream.StreamName == rulepack.StageStream &&
+			len(stream.Subjects) == 1 && stream.Subjects[0] == rulepack.SubjectCaseProgress
 	}
 	for _, definition := range cfg.InlineRules {
 		switch definition.ID {

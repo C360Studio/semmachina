@@ -100,7 +100,9 @@ type Config struct {
 	// played in by iteration order.
 	SceneLocalID string `json:"scene_local_id,omitempty"`
 
-	// ContentBucket is the ObjectStore bucket every artifact reference names.
+	// ContentBucket is the physical ObjectStore bucket. Artifact references name
+	// the manager-registered logical instance `objectstore`, which resolves to
+	// this bucket at runtime.
 	ContentBucket string `json:"content_bucket,omitempty"`
 
 	// Models is the model registry the personas resolve through.

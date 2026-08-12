@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/persona"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -27,7 +28,7 @@ type CompanionGraph interface {
 	GetEntity(context.Context, string) (*graph.EntityState, error)
 	GetEntities(context.Context, []string) (graphio.BatchResult, error)
 	EntitiesByPredicateValue(context.Context, string, string, int) ([]string, error)
-	MergeTriples(context.Context, string, []message.Triple, ...graphio.MergeOption) (*graph.EntityState, error)
+	Reconcile(context.Context, projectioncontract.Target, string, []message.Triple) (*graph.EntityState, error)
 }
 
 // CompanionArtifacts is the exact resident decision/stage-record store.
@@ -331,13 +332,13 @@ func (s *CompanionStage) commitRecord(
 			Predicate: vocabulary.TurnCompanionDecisionRef.String(), Object: decisionRef.String(),
 			Source: companionStageSource, Timestamp: s.now().UTC(), Confidence: 1, Context: trigger.TurnEntityID})
 	}
-	_, err = s.graph.MergeTriples(ctx, trigger.TurnEntityID, triples)
+	_, err = s.graph.Reconcile(ctx, projectioncontract.TurnCompanionResult, trigger.TurnEntityID, triples)
 	return err
 }
 
 func (s *CompanionStage) persistTrigger(ctx context.Context, turnEntityID string, trigger companion.Trigger) error {
 	at := s.now().UTC()
-	_, err := s.graph.MergeTriples(ctx, turnEntityID, []message.Triple{
+	_, err := s.graph.Reconcile(ctx, projectioncontract.TurnCompanionTrigger, turnEntityID, []message.Triple{
 		{Subject: turnEntityID, Predicate: vocabulary.TurnCompanionTriggerKind.String(), Object: string(trigger.Kind), Source: companionStageSource, Timestamp: at, Confidence: 1, Context: turnEntityID},
 		{Subject: turnEntityID, Predicate: vocabulary.TurnCompanionTriggerSource.String(), Object: string(trigger.Source), Source: companionStageSource, Timestamp: at, Confidence: 1, Context: turnEntityID},
 	})

@@ -146,9 +146,10 @@ func TestLoadPackage_RefusesAWorldRuleThatReachesTheEnginesTurnFacts(t *testing.
 				`{"type":"update_triple","predicate":"turn.roll.band","object":"triumph"}`),
 			names: []string{"world_updates_band", "turn.roll.band", "while_true[0]"},
 		},
-		"replace_owned on the turn phase": {
+		"reconcile_predicates on the turn phase": {
 			rule: ruleJSON("world_replaces_phase", ``, "on_recovery",
-				`{"type":"replace_owned","predicate":"turn.phase.current","object":"narrating"}`),
+				`{"type":"reconcile_predicates","predicate":"turn.phase.current","object":"narrating",`+
+					`"projection_contract":"world-turn","projection_group":"phase"}`),
 			names: []string{"world_replaces_phase", "turn.phase.current", "on_recovery[0]"},
 		},
 		"a turn-domain predicate the engine does not even write": {
@@ -309,7 +310,7 @@ func TestLoadPackage_RefusesGraphActionsThatCanWriteAcrossWorldInstances(t *test
 		rule.ActionTypeAddTriple,
 		rule.ActionTypeRemoveTriple,
 		rule.ActionTypeUpdateTriple,
-		rule.ActionTypeReplaceOwned,
+		rule.ActionTypeReconcilePredicates,
 	}
 	for _, list := range lists {
 		for _, actionType := range graphTypes {
@@ -337,7 +338,7 @@ func TestLoadPackage_RefusesUnprovableEntityReferenceObjectsAcrossEveryGraphActi
 	objectWritingTypes := []string{
 		rule.ActionTypeAddTriple,
 		rule.ActionTypeUpdateTriple,
-		rule.ActionTypeReplaceOwned,
+		rule.ActionTypeReconcilePredicates,
 	}
 	objects := map[string]string{
 		"literal foreign entity":   "other.semmachina.foreign.starter.character.rook",
@@ -371,7 +372,7 @@ func TestLoadPackage_RefusesGraphObjectsThatCanInferCrossInstanceRelationships(t
 	objectWritingTypes := []string{
 		rule.ActionTypeAddTriple,
 		rule.ActionTypeUpdateTriple,
-		rule.ActionTypeReplaceOwned,
+		rule.ActionTypeReconcilePredicates,
 	}
 	objects := map[string]string{
 		"canonical entity ID literal": "other.semmachina.foreign.starter.character.rook",
@@ -414,8 +415,9 @@ func TestLoadPackage_AllowsOnlyProvablyInstanceLocalGraphReferences(t *testing.T
 		"remove ignores object": ruleJSON("local-remove", "", "on_enter",
 			`{"type":"remove_triple","predicate":"world.entity.description",`+
 				`"object":"other.semmachina.foreign.starter.character.rook"}`),
-		"empty replace owned clears safely": ruleJSON("local-clear", "", "on_enter",
-			`{"type":"replace_owned","predicate":"world.relation.knows","object":""}`),
+		"empty reconcile clears safely": ruleJSON("local-clear", "", "on_enter",
+			`{"type":"reconcile_predicates","predicate":"world.relation.knows","object":"",`+
+				`"projection_contract":"world-local","projection_group":"knows"}`),
 		"narrowed related object": `{"id":"local-related","type":"expression","name":"local related",` +
 			`"enabled":true,"entity":{"pattern":"*.semmachina.*.*.character.*"},` +
 			`"related_patterns":["*.semmachina.*.*.character.*"],"conditions":[],"logic":"and",` +
@@ -435,7 +437,7 @@ func TestLoadPackage_RequiresBoundedPackageActionsAcrossEveryExecutableList(t *t
 		rule.ActionTypeAddTriple,
 		rule.ActionTypeRemoveTriple,
 		rule.ActionTypeUpdateTriple,
-		rule.ActionTypeReplaceOwned,
+		rule.ActionTypeReconcilePredicates,
 	}
 	for _, list := range lists {
 		for _, actionType := range graphTypes {

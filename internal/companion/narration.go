@@ -53,8 +53,8 @@ func (r *NarrationResolver) AuthorizedNarrationEvidence(
 	if err != nil {
 		return nil, fmt.Errorf("read companion narration turn: %w", err)
 	}
-	if turnState == nil || turnState.ID != request.TurnEntityID || turnState.IsStub() {
-		return nil, errors.New("companion narration turn is missing, foreign, or a stub")
+	if turnState == nil || turnState.ID != request.TurnEntityID {
+		return nil, errors.New("companion narration turn is missing or foreign")
 	}
 	playerID, err := exactString(turnState, vocabulary.TurnActionPlayer)
 	if err != nil {
@@ -159,8 +159,8 @@ func (r *NarrationResolver) authorizedKnowledge(
 		if err != nil {
 			return nil, fmt.Errorf("read companion narration knowledge %s: %w", recordID, err)
 		}
-		if record == nil || record.ID != recordID || record.IsStub() {
-			return nil, fmt.Errorf("companion narration knowledge %s is missing, foreign, or a stub", recordID)
+		if record == nil || record.ID != recordID {
+			return nil, fmt.Errorf("companion narration knowledge %s is missing or foreign", recordID)
 		}
 		records = append(records, *record)
 	}

@@ -68,32 +68,17 @@ type productionObserver struct {
 }
 
 func newProductionObserver(
-	ctx context.Context,
 	client *natsclient.Client,
-	contentBucket string,
+	details failureDetailReader,
 ) (*productionObserver, error) {
 	store, err := graphio.NewStore(client)
 	if err != nil {
 		return nil, err
 	}
-	backend, err := content.NewObjectStore(ctx, client, content.WithBucket(contentBucket))
-	if err != nil {
-		return nil, err
-	}
-	details, err := content.NewStore(backend)
-	if err != nil {
-		_ = backend.Close()
-		return nil, err
+	if details == nil {
+		return nil, errors.New("production observer requires a failure detail reader")
 	}
 	return &productionObserver{graph: store, details: details}, nil
-}
-
-// Close releases the content reader owned by the production observer.
-func (o *productionObserver) Close() error {
-	if details, ok := o.details.(*content.Store); ok {
-		return details.Close()
-	}
-	return nil
 }
 
 func (o *productionObserver) observeTurn(ctx context.Context, id string) (turnObservation, error) {
@@ -249,9 +234,6 @@ func exactTurnPhase(state *graph.EntityState) (vocabulary.TurnPhase, time.Time, 
 	if state == nil {
 		return "", time.Time{}, errors.New("turn read back as nil")
 	}
-	if state.IsStub() {
-		return "", time.Time{}, errors.New("turn is a referential stub")
-	}
 	var value any
 	var recordedAt time.Time
 	count := 0
@@ -298,9 +280,6 @@ func (o *productionObserver) casePhase(ctx context.Context, id string) (vocabula
 func semanticCasePhase(state *graph.EntityState) (vocabulary.CasePhase, error) {
 	if state == nil {
 		return "", errors.New("case read back as nil")
-	}
-	if state.IsStub() {
-		return "", errors.New("case is a referential stub")
 	}
 	values := make(map[string]struct{})
 	for _, triple := range state.Triples {

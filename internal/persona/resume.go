@@ -97,10 +97,9 @@ func NewGuard(reader TurnReader) (*Guard, error) {
 // whether a model call is made. A turn holding two references for one
 // single-valued reference predicate is the signature of a write that took an
 // appending lane, and a reader taking the first would be choosing which of two
-// verdicts the campaign remembers; a referential stub is queryable and factless,
-// so "no artifact recorded" read off one would be a false negative that buys a
-// second call every time; and a value that is not a resolvable reference is a
-// pointer at nothing, which is worse than an absent one because it reads as
+// verdicts the campaign remembers; a missing turn is a read error, not evidence
+// that no artifact was recorded; and a value that is not a resolvable reference
+// is a pointer at nothing, which is worse than an absent one because it reads as
 // finished.
 func (g *Guard) Check(ctx context.Context, spec Spec, turnID, turnEntityID string) (Resumption, error) {
 	if err := spec.Validate(); err != nil {
@@ -120,13 +119,6 @@ func (g *Guard) Check(ctx context.Context, spec Spec, turnID, turnEntityID strin
 	if state == nil {
 		return Resumption{}, fmt.Errorf("read turn entity %s: the graph returned nothing", turnEntityID)
 	}
-	if state.IsStub() {
-		return Resumption{}, fmt.Errorf(
-			"turn entity %s is a referential stub: it holds no facts, so whether the %s stage finished is "+
-				"unknown, and reading that as 'not finished' would buy a second model call every attempt",
-			turnEntityID, spec.Role)
-	}
-
 	objects := objectsFor(state, spec.Artifact)
 	switch len(objects) {
 	case 0:

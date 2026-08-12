@@ -1,3 +1,5 @@
+//go:build integration
+
 package stage_test
 
 import (
@@ -20,12 +22,14 @@ import (
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/persona"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/resume"
 	"github.com/c360studio/semmachina/internal/rulepack"
 	"github.com/c360studio/semmachina/internal/stage"
 	"github.com/c360studio/semmachina/internal/testinfra"
 	"github.com/c360studio/semmachina/internal/turn"
 	"github.com/c360studio/semmachina/internal/vocabulary"
+	"github.com/c360studio/semmachina/internal/world"
 )
 
 // parkedWorld is a turn engine with the RULE PROCESSOR and nothing else: real
@@ -113,9 +117,33 @@ func startParkedWorld(t *testing.T) *parkedWorld {
 		stream: stream, agent: agent, namespace: namespace,
 		campaignID: composeID(t, namespace, "campaign", "instance"),
 	}
+	world.seedPlayer(t)
 	world.startRules(t)
 	t.Cleanup(func() { world.drainStageTriggers(t) })
 	return world
+}
+
+// seedPlayer creates the reconciliation target intake expects to already
+// exist. beta.160 no longer materializes relationship stubs, so pointing a
+// new turn at an absent player cannot implicitly create the player entity.
+func (w *parkedWorld) seedPlayer(t *testing.T) {
+	t.Helper()
+	id := composeID(t, w.namespace, "player", "one")
+	at := time.Now().UTC()
+	entity := &payload.WorldEntity{
+		ID: id, Kind: vocabulary.EntityKindPlayer,
+		Template:   payload.TemplateRef{ID: testTemplate, Version: "test", LocalID: "one"},
+		Facts:      []payload.WorldFact{{Predicate: vocabulary.WorldEntityName, Object: "Test Player"}},
+		RecordedAt: at,
+	}
+	wire, err := json.Marshal(message.NewBaseMessage(entity.Schema(), entity, "stage-resume-test", message.WithTime(at)))
+	if err != nil {
+		t.Fatalf("encode player fixture: %v", err)
+	}
+	if _, err := w.harness.Client.PublishToStreamWithAck(t.Context(), world.DefaultImportSubject, wire); err != nil {
+		t.Fatalf("publish player fixture: %v", err)
+	}
+	w.harness.AwaitEntity(t, id)
 }
 
 // clearTaskConsumers gives the AGENT stream a KNOWN consumer set.
@@ -382,7 +410,7 @@ func (w *parkedWorld) writeCaseDecision(t *testing.T, turnID, actionID, entityID
 	if err != nil {
 		t.Fatalf("case decision triples: %v", err)
 	}
-	if _, err := w.graph.MergeTriples(t.Context(), entityID, triples); err != nil {
+	if _, err := w.graph.Reconcile(t.Context(), projectioncontract.TurnCaseDecision, entityID, triples); err != nil {
 		t.Fatalf("merge case decision: %v", err)
 	}
 }
@@ -417,7 +445,7 @@ func (w *parkedWorld) writeVerdict(t *testing.T, turnID, actionID, entityID stri
 	if err != nil {
 		t.Fatalf("verdict triples: %v", err)
 	}
-	if _, err := w.graph.MergeTriples(t.Context(), entityID, triples); err != nil {
+	if _, err := w.graph.Reconcile(t.Context(), projectioncontract.TurnVerdict, entityID, triples); err != nil {
 		t.Fatalf("merge verdict: %v", err)
 	}
 }
@@ -664,7 +692,7 @@ func TestBootstrapReplay_PublishesForATurnWrittenWhileItWasDown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("triples: %v", err)
 	}
-	if _, err := world.graph.MergeTriples(t.Context(), entityID, triples); err != nil {
+	if _, err := world.graph.Reconcile(t.Context(), projectioncontract.TurnResume, entityID, triples); err != nil {
 		t.Fatalf("merge: %v", err)
 	}
 	if got := world.triggers(t, resolving, entityID); got != 1 {
@@ -1070,6 +1098,12 @@ func TestTurnLoop_AStrandedTurnResumesAndCompletesAfterTheBootPass(t *testing.T)
 	// turn genuinely stranded rather than merely in flight.
 	undrop(t)
 	time.Sleep(3 * time.Second)
+	// The accusation barrier is a sibling consumer of the stage runner and can
+	// race another turn projection at the same authoritative revision. A
+	// revision conflict is correctly NAKed and retried; measure strandedness only
+	// after that durable consumer has actually retired its delivery, rather than
+	// mistaking its AckWait window for abandoned work.
+	awaitSettledConsumer(t, world.harness.Client, rulepack.StageStream, rulepack.AccusationConsumerName)
 	if phase, err := world.recorder.Current(t.Context(), entityID); err != nil {
 		t.Fatalf("read turn: %v", err)
 	} else if phase != vocabulary.PhaseAdjudicating {

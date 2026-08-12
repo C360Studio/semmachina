@@ -10,6 +10,7 @@ import (
 
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 )
 
 // CaseDecisionStore is the durable private interpretation store.
@@ -95,7 +96,7 @@ func (e *CaseDecisionExecutor) Execute(
 	if err != nil {
 		return internalFailure(call, "project the case decision onto the turn", err)
 	}
-	if _, err := e.graph.MergeTriples(ctx, identity.TurnEntityID, triples); err != nil {
+	if _, err := e.graph.Reconcile(ctx, projectioncontract.TurnCaseDecision, identity.TurnEntityID, triples); err != nil {
 		return transientFailure(call, "record the case decision reference on the turn", err)
 	}
 	body, err := json.Marshal(record)

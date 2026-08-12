@@ -12,9 +12,9 @@ import (
 
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/epistemic"
-	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/persona"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -48,7 +48,10 @@ func (s *decisionStore) PutCompanionDecision(_ context.Context, _ string, d *pay
 
 type decisionWriter struct{ merges int }
 
-func (w *decisionWriter) MergeTriples(_ context.Context, _ string, _ []message.Triple, _ ...graphio.MergeOption) (*graph.EntityState, error) {
+func (w *decisionWriter) Reconcile(_ context.Context, target projectioncontract.Target, _ string, _ []message.Triple) (*graph.EntityState, error) {
+	if target != projectioncontract.TurnCompanionResult {
+		return nil, errors.New("unexpected companion result projection target")
+	}
 	w.merges++
 	return &graph.EntityState{}, nil
 }

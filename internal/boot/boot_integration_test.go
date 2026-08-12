@@ -1,3 +1,5 @@
+//go:build acceptance
+
 package boot_test
 
 import (
@@ -19,6 +21,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	sspersona "github.com/c360studio/semstreams/persona"
@@ -37,6 +40,7 @@ import (
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/persona"
 	"github.com/c360studio/semmachina/internal/playersocket"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/rulepack"
 	"github.com/c360studio/semmachina/internal/stage"
 	"github.com/c360studio/semmachina/internal/testinfra"
@@ -49,8 +53,8 @@ import (
 // processor and the agentic loop, all of it — against a real broker, because a
 // composition is the one thing a unit test cannot be wrong about usefully. Every
 // substitute here would hide the failure it was meant to catch: a fake broker
-// cannot refuse a consumer whose filter its stream does not capture, a stub
-// graph-ingest mints no referential stubs, and a hand-called step proves the step
+// cannot refuse a consumer whose filter its stream does not capture, a fake
+// graph-ingest cannot prove beta.160 missing-target behavior, and a hand-called step proves the step
 // and nothing about the order.
 //
 // Nothing in this file uses internal/testinfra's harness, and that is not an
@@ -73,9 +77,6 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	broker.client, broker.err = startBroker()
-	if broker.err == nil {
-		broker.err = keepComponentStatusHistory(broker.client)
-	}
 	if broker.err != nil && testinfra.Skipped() {
 		fmt.Fprintf(os.Stderr,
 			"\n================================================================\n"+
@@ -105,21 +106,10 @@ func startBroker() (*natsclient.TestClient, error) {
 	}
 	// A bare broker: no streams, no components. Everything the engine needs, the
 	// engine creates — which is the claim these tests are checking.
-	return natsclient.NewSharedTestClient(natsclient.WithJetStream())
-}
-
-// keepComponentStatusHistory pre-creates COMPONENT_STATUS in the catalog shape.
-//
-// beta.159's framework bucket catalog owns its History=1 declaration and
-// reconciles every reporter acquisition to it, so a delete followed by the
-// processor's status write intentionally leaves only the write observable.
-func keepComponentStatusHistory(client *natsclient.TestClient) error {
-	_, err := client.Client.CreateKeyValueBucket(context.Background(), jetstream.KeyValueConfig{
-		Bucket:      "COMPONENT_STATUS",
-		Description: "Component lifecycle status tracking",
-		History:     1,
-	})
-	return err
+	return natsclient.NewSharedTestClient(
+		natsclient.WithJetStream(),
+		natsclient.WithNATSVersion("2.14.4"),
+	)
 }
 
 func requireBroker(t *testing.T) *natsclient.TestClient {
@@ -410,7 +400,7 @@ func awaitBellweatherTurnFailed(t *testing.T, cfg boot.Config, turnID string) *g
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		state, readErr := store.GetEntity(t.Context(), entityID)
-		if readErr == nil && !state.IsStub() {
+		if readErr == nil {
 			phase := vocabulary.TurnPhase(fmt.Sprint(
 				testinfra.FirstObject(state, vocabulary.TurnPhaseCurrent.String()),
 			))
@@ -478,27 +468,27 @@ func awaitStageConsumersSettled(t *testing.T, deadline time.Time) {
 func seedForeignPrivateCanary(t *testing.T, entityID, text string) {
 	t.Helper()
 	at := time.Now().UTC()
-	state := &graph.EntityState{
-		ID: entityID,
-		MessageType: message.Type{
-			Domain: payload.Domain, Category: payload.CategoryWorldEntity, Version: payload.SchemaVersion,
-		},
-		Version: 1, UpdatedAt: at,
-		Triples: []message.Triple{
-			{Subject: entityID, Predicate: vocabulary.WorldEntityKind.String(),
-				Object: string(vocabulary.EntityKindEvidence), Source: "test", Timestamp: at, Confidence: 1},
-			{Subject: entityID, Predicate: vocabulary.WorldEntityName.String(),
-				Object: text, Source: "test", Timestamp: at, Confidence: 1},
-		},
+	parts := strings.Split(entityID, ".")
+	if len(parts) != 6 {
+		t.Fatalf("foreign canary id %q is not canonical", entityID)
+	}
+	entity := &payload.WorldEntity{
+		ID: entityID, Kind: vocabulary.EntityKindEvidence,
+		Template: payload.TemplateRef{ID: parts[3], Version: "test", LocalID: parts[5]},
+		Facts:    []payload.WorldFact{{Predicate: vocabulary.WorldEntityName, Object: text}}, RecordedAt: at,
+	}
+	wire, err := json.Marshal(message.NewBaseMessage(entity.Schema(), entity, "test", message.WithTime(at)))
+	if err != nil {
+		t.Fatalf("encode foreign private canary: %v", err)
+	}
+	if _, err := requireBroker(t).Client.PublishToStreamWithAck(t.Context(), world.DefaultImportSubject, wire); err != nil {
+		t.Fatalf("publish foreign private canary: %v", err)
 	}
 	store := graphStore(t)
-	if _, err := store.CreateEntity(t.Context(), state); err != nil {
-		t.Fatalf("seed foreign private canary: %v", err)
-	}
 	deadline := time.Now().Add(20 * time.Second)
 	for {
-		got, err := store.GetEntity(t.Context(), entityID)
-		if err == nil && !got.IsStub() {
+		_, err := store.GetEntity(t.Context(), entityID)
+		if err == nil {
 			return
 		}
 		if time.Now().After(deadline) {
@@ -747,7 +737,7 @@ func countStoredTask(
 	return publishedTasks
 }
 
-// The world lands whole: every planned entity queryable and NON-STUB, the
+// The world lands whole: every planned entity queryable from authority, the
 // membership edges readable from the reverse-edge index, and the campaign
 // carrying both the seed and the completion marker.
 func TestBoot_ImportsTheWorldAndMarksItComplete(t *testing.T) {
@@ -821,7 +811,7 @@ func TestBoot_ASecondBootDoesNotImportOverALivingCampaign(t *testing.T) {
 
 	// Play happens: the character is wounded. A re-import would put them back.
 	at := time.Now().UTC()
-	if _, err := store.MergeTriples(t.Context(), character, []message.Triple{{
+	if _, err := store.Reconcile(t.Context(), projectioncontract.EffectTargetStatus, character, []message.Triple{{
 		Subject:    character,
 		Predicate:  vocabulary.CharacterStatusCurrent.String(),
 		Object:     string(vocabulary.StatusWounded),
@@ -922,7 +912,7 @@ func TestBoot_ExperienceProvenanceFailuresPrecedePersonaSeedingAndRules(t *testi
 					t.Fatalf("NewSeed: %v", err)
 				}
 				at := time.Now().UTC()
-				_, err = store.CreateEntity(t.Context(), &graph.EntityState{
+				_, err = store.CreateEntity(t.Context(), projectioncontract.CampaignBirthContract, &graph.EntityState{
 					ID: gate.CampaignID(), MessageType: campaign.EntityMessageType,
 					Version: 1, UpdatedAt: at,
 					Triples: []message.Triple{{
@@ -1013,10 +1003,8 @@ func interruptedHelperConfig(cfg boot.Config) boot.Config {
 //
 // # The stale key is the point, and it is planted rather than hoped for
 //
-// A previous boot leaves a lifecycle status behind, and the earlier version of
-// this check compared its timestamp. This one deletes the key before starting the
-// processor and waits for it to reappear, so the property under test is that a
-// LEFTOVER key — from a processor this boot never started — is not an answer. The
+// A previous boot leaves a readiness envelope behind, so the property under
+// test is that a LEFTOVER key — from a processor this boot never started — is not an answer. The
 // leftover is planted by a real processor in another namespace rather than
 // depending on which tests ran first on the shared broker, because a test whose
 // premise is supplied by its neighbours is a test that stops proving anything
@@ -1025,11 +1013,15 @@ func TestBoot_TheResumePreconditionRefusesAnUnstartedRuleProcessor(t *testing.T)
 	cfg := bootConfig(t)
 
 	// Plant the leftover: a real rule processor, in its own namespace, started
-	// and stopped. Its lifecycle status is now in COMPONENT_STATUS under the same
+	// and stopped. Its readiness envelope is now in GRAPH_STATUS under the same
 	// key the check below reads.
 	planter := newTestEngine(t, interruptedHelperConfig(cfg))
 	if err := planter.StartThrough(t.Context(), boot.StepRules); err != nil {
-		t.Fatalf("plant a previous boot's lifecycle status: %v", err)
+		t.Fatalf("plant a previous boot's readiness status: %v", err)
+	}
+	if err := resumePrecondition(t, planter)(t.Context()); err != nil {
+		planter.Stop()
+		t.Fatalf("wait for the previous boot's rule generation: %v", err)
 	}
 	requireRuleStatusPresent(t)
 	planter.Stop()
@@ -1085,83 +1077,100 @@ func TestBoot_TheResumePreconditionRefusesAnUnstartedRuleProcessor(t *testing.T)
 // boot did not write it".
 func requireRuleStatusPresent(t *testing.T) {
 	t.Helper()
-	bucket, err := requireBroker(t).Client.GetKeyValueBucket(t.Context(), "COMPONENT_STATUS")
+	bucket, err := requireBroker(t).Client.GetKeyValueBucket(t.Context(), readiness.BucketGraphStatus)
 	if err != nil {
-		t.Fatalf("the COMPONENT_STATUS bucket does not exist, so no leftover status was planted: %v", err)
+		t.Fatalf("the GRAPH_STATUS bucket does not exist, so no leftover status was planted: %v", err)
 	}
-	if _, err := bucket.Get(t.Context(), "rule-processor"); err != nil {
-		t.Fatalf("no rule-processor status is in the bucket, so this test's premise is missing: %v", err)
+	if _, err := bucket.Get(t.Context(), readiness.KeyRule); err != nil {
+		t.Fatalf("no rule readiness status is in the bucket, so this test's premise is missing: %v", err)
 	}
 }
 
-// The rule processor's lifecycle status is what the precondition reads, and this
-// pins the two coordinates upstream does not export — the bucket and the key —
-// plus the mechanism built on them.
+// The rule processor's readiness status is what the precondition reads.
 //
 // Without it, a rename upstream would turn the precondition into a check that
 // always fails — a boot that refuses every deployment — and nothing would say
 // which of the two strings had moved.
 //
-// The REVISION proves this boot wrote a fresh report rather than merely reading
-// the planted one. The preceding stale-status test is the functional proof that
-// the leftover alone cannot satisfy the resume precondition. beta.159's catalog
-// fixes COMPONENT_STATUS at History=1, so the intermediate delete marker is no
-// longer retained after the subsequent write.
-func TestRuleProcessorStatus_IsDeletedAndRewrittenByEachBoot(t *testing.T) {
+// The revision proves this boot wrote a fresh report rather than merely reading
+// the planted one. The preceding stale-status test proves the leftover alone
+// cannot satisfy the resume precondition.
+func TestRuleProcessorReadiness_IsRewrittenHealthyByEachBoot(t *testing.T) {
 	cfg := bootConfig(t)
 
 	planter := newTestEngine(t, interruptedHelperConfig(cfg))
+	planterRunning := true
+	t.Cleanup(func() {
+		if planterRunning {
+			planter.Stop()
+		}
+	})
 	if err := planter.StartThrough(t.Context(), boot.StepRules); err != nil {
-		t.Fatalf("plant a previous boot's lifecycle status: %v", err)
+		t.Fatalf("plant a previous boot's readiness status: %v", err)
+	}
+	if err := resumePrecondition(t, planter)(t.Context()); err != nil {
+		t.Fatalf("wait for the previous boot's rule generation: %v", err)
 	}
 	planted := ruleStatusRevision(t)
 	planter.Stop()
+	planterRunning = false
 
 	engine := newTestEngine(t, cfg)
 	t.Cleanup(engine.Stop)
 	if err := engine.StartThrough(t.Context(), boot.StepRules); err != nil {
 		t.Fatalf("start through %s: %v", boot.StepRules, err)
 	}
-
-	bucket, err := requireBroker(t).Client.GetKeyValueBucket(t.Context(), "COMPONENT_STATUS")
-	if err != nil {
-		t.Fatalf("the COMPONENT_STATUS bucket does not exist after the rule processor started: %v", err)
+	// StepRules captures the previous status revision before starting its own
+	// manager. The real resume precondition performs the bounded wait for a
+	// later ready/bootstrap-complete generation; an immediate KV read here
+	// races the rule processor's asynchronous initial status publication.
+	if err := resumePrecondition(t, engine)(t.Context()); err != nil {
+		t.Fatalf("wait for this boot's rule generation: %v", err)
 	}
-	entry, err := bucket.Get(t.Context(), "rule-processor")
+
+	bucket, err := requireBroker(t).Client.GetKeyValueBucket(t.Context(), readiness.BucketGraphStatus)
 	if err != nil {
-		t.Fatalf("the rule processor reported no lifecycle status under the key %q: %v", "rule-processor", err)
+		t.Fatalf("the GRAPH_STATUS bucket does not exist after the rule processor started: %v", err)
+	}
+	entry, err := bucket.Get(t.Context(), readiness.KeyRule)
+	if err != nil {
+		t.Fatalf("the rule processor reported no readiness under the key %q: %v", readiness.KeyRule, err)
 	}
 	if entry.Revision() <= planted {
 		t.Errorf("the status is still at revision %d, the one an earlier boot left; this boot neither deleted "+
 			"nor rewrote it, so its precondition is reading somebody else's report", entry.Revision())
 	}
 
-	var status struct {
-		Component string `json:"component"`
-		Stage     string `json:"stage"`
-	}
+	var status graph.IndexStatusResponse
 	if err := json.Unmarshal(entry.Value(), &status); err != nil {
 		t.Fatalf("decode the reported status: %v", err)
 	}
-	if status.Component != "rule-processor" {
-		t.Errorf("the status names component %q", status.Component)
+	if !status.Ready || !status.BootstrapComplete || status.State != graph.IndexStateReady {
+		t.Errorf("rule readiness = %+v, want ready with bootstrap complete", status)
 	}
-	if status.Stage == "" {
-		t.Error("the status carries no stage; the check requires one, so an upstream that stopped writing it " +
-			"would refuse every boot")
+}
+
+func resumePrecondition(t *testing.T, engine *boot.Engine) func(context.Context) error {
+	t.Helper()
+	for _, step := range engine.Steps() {
+		if step.ID == boot.StepResume && step.Check != nil {
+			return step.Check
+		}
 	}
+	t.Fatal("the resume step declares no precondition")
+	return nil
 }
 
 // ruleStatusRevision reads the current revision of the rule processor's status.
 func ruleStatusRevision(t *testing.T) uint64 {
 	t.Helper()
-	bucket, err := requireBroker(t).Client.GetKeyValueBucket(t.Context(), "COMPONENT_STATUS")
+	bucket, err := requireBroker(t).Client.GetKeyValueBucket(t.Context(), readiness.BucketGraphStatus)
 	if err != nil {
-		t.Fatalf("the COMPONENT_STATUS bucket does not exist, so no status was planted: %v", err)
+		t.Fatalf("the GRAPH_STATUS bucket does not exist, so no status was planted: %v", err)
 	}
-	entry, err := bucket.Get(t.Context(), "rule-processor")
+	entry, err := bucket.Get(t.Context(), readiness.KeyRule)
 	if err != nil {
-		t.Fatalf("no rule-processor status is in the bucket, so this test's premise is missing: %v", err)
+		t.Fatalf("no rule readiness status is in the bucket, so this test's premise is missing: %v", err)
 	}
 	return entry.Revision()
 }
@@ -1193,7 +1202,7 @@ func TestBoot_AnActionThroughTheSocketBecomesATurn(t *testing.T) {
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		state, readErr := store.GetEntity(t.Context(), turnEntityID)
-		if readErr == nil && !state.IsStub() {
+		if readErr == nil {
 			if phase := testinfra.FirstObject(state, vocabulary.TurnPhaseCurrent.String()); phase != nil {
 				return
 			}
@@ -1470,8 +1479,7 @@ func TestBoot_TheIngressGateReadsTheMarkerRatherThanRememberingIt(t *testing.T) 
 	// stands in for is a boot that reached this step against a campaign whose
 	// import never completed.
 	store := graphStore(t)
-	if _, err := store.MergeTriples(t.Context(), engine.CampaignID(), nil,
-		graphio.WithClearedPredicates(vocabulary.CampaignImportCompleted.String())); err != nil {
+	if _, err := store.Reconcile(t.Context(), projectioncontract.CampaignImport, engine.CampaignID(), nil); err != nil {
 		t.Fatalf("clear the marker: %v", err)
 	}
 
@@ -1764,50 +1772,4 @@ func TestBoot_SeedsOnlySelectedPersonaFragments(t *testing.T) {
 	if stored[mutated] != nil {
 		t.Fatalf("persona %q replaced the construction-bound selected record", mutated)
 	}
-}
-
-func selectedPersonaWorld(t *testing.T, adjudicatorID, narratorID, unselectedID string) fstest.MapFS {
-	t.Helper()
-	source, err := fixtures.StarterWorld()
-	if err != nil {
-		t.Fatalf("StarterWorld: %v", err)
-	}
-	worldFS := make(fstest.MapFS)
-	if err := fs.WalkDir(source, ".", func(name string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		data, readErr := fs.ReadFile(source, name)
-		if readErr != nil {
-			return readErr
-		}
-		worldFS[name] = &fstest.MapFile{Data: data}
-		return nil
-	}); err != nil {
-		t.Fatalf("copy starter world: %v", err)
-	}
-	worldFS["personas/selected-adjudicator.json"] = &fstest.MapFile{Data: personaRecord(adjudicatorID, "adjudicator")}
-	worldFS["personas/selected-narrator.json"] = &fstest.MapFile{Data: personaRecord(narratorID, "narrator")}
-	worldFS["personas/unselected.json"] = &fstest.MapFile{Data: personaRecord(unselectedID, "narrator")}
-	worldFS[world.PacksFile] = &fstest.MapFile{Data: []byte(`version: 1
-defaults:
-  persona_pack: selected
-  mechanics_pack: empty
-persona_packs:
-  selected:
-    files:
-      - personas/selected-adjudicator.json
-      - personas/selected-narrator.json
-  unselected:
-    files:
-      - personas/selected-adjudicator.json
-      - personas/unselected.json
-mechanics_packs:
-  empty:
-    files: []
-`)}
-	return worldFS
 }

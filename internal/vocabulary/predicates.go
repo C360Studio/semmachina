@@ -155,9 +155,10 @@ const (
 	// nothing about the N entity publications that follow it, so a process that
 	// crashes mid-import leaves a claimed campaign and a partial world — and the
 	// next boot, told the campaign exists, skips the import and serves play from
-	// half a world. The context assembler is the silent reader: stub-filtering
-	// catches a referenced-but-unborn entity, while an entity nobody ever
-	// published just makes a scene quietly smaller.
+	// half a world. The context assembler is the silent reader: reporting the
+	// batch read's missing targets catches a referenced entity without a birth
+	// record, while an entity nobody ever published just makes a scene quietly
+	// smaller.
 	//
 	// Written on the MERGE lane so it replaces its own predicate and leaves
 	// CampaignSeedValue — on the same entity — untouched. Through the appending

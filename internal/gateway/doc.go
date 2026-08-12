@@ -27,8 +27,8 @@
 // component downstream of the action stream may branch on it.
 //
 // A session is minted only after the player entity is READ from the graph and
-// found to be real — present and not a referential stub. That read is what makes
-// "player_id is a graph entity" a property rather than a naming convention: a
+// found to have an authority entry. That read is what makes "player_id is a
+// graph entity" a property rather than a naming convention: a
 // credential that resolves to an id nothing ever imported produces no session,
 // rather than a stream of actions attributed to a player who does not exist.
 //

@@ -1,22 +1,27 @@
+//go:build integration
+
 package scene_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/scene"
 	"github.com/c360studio/semmachina/internal/testinfra"
 	"github.com/c360studio/semmachina/internal/turn"
 	"github.com/c360studio/semmachina/internal/vocabulary"
+	"github.com/c360studio/semmachina/internal/world"
 )
 
 // Two of this component's claims are only true of a REAL graph.
@@ -26,9 +31,8 @@ import (
 // only once its initial build is complete. A fake that answered instantly would
 // hide the property a caller has to design around.
 //
-// And a referential stub is minted by graph-ingest, not by us. The whole hazard
-// is that it answers a read successfully; the only place to observe a real one
-// is against the component that makes them.
+// Beta.160 keeps an undelivered relationship target absent. Only the real graph
+// proves the batch response reports that missing authority entry.
 
 func TestMain(m *testing.M) { os.Exit(testinfra.RunTests(m)) }
 
@@ -63,23 +67,36 @@ func (l *liveScene) id(t *testing.T, kind, instance string) string {
 // how every entity in this engine is born.
 func (l *liveScene) create(t *testing.T, entityID string, triples ...message.Triple) {
 	t.Helper()
-	state := &graph.EntityState{
-		ID: entityID,
-		MessageType: message.Type{
-			Domain: payload.Domain, Category: payload.CategoryWorldEntity, Version: payload.SchemaVersion,
-		},
-		Version:   1,
-		UpdatedAt: time.Now().UTC(),
-	}
+	var kind vocabulary.EntityKind
+	facts := make([]payload.WorldFact, 0, len(triples)-1)
 	for _, triple := range triples {
-		triple.Subject = entityID
-		triple.Source = "scene-integration-test"
-		triple.Timestamp = time.Now().UTC()
-		triple.Confidence = 1
-		state.Triples = append(state.Triples, triple)
+		predicate := vocabulary.Predicate(triple.Predicate)
+		if predicate == vocabulary.WorldEntityKind {
+			kind = vocabulary.EntityKind(fmt.Sprint(triple.Object))
+			continue
+		}
+		value, reference := triple.Object.(string)
+		facts = append(facts, payload.WorldFact{
+			Predicate: predicate, Object: triple.Object,
+			Reference: reference && message.IsValidEntityID(value),
+		})
 	}
-	if _, err := l.store.CreateEntity(t.Context(), state); err != nil {
-		t.Fatalf("create %s: %v", entityID, err)
+	parts := strings.Split(entityID, ".")
+	if kind == "" {
+		kind = vocabulary.EntityKind(parts[4])
+	}
+	entity := &payload.WorldEntity{
+		ID: entityID, Kind: kind,
+		Template: payload.TemplateRef{ID: parts[3], Version: "test", LocalID: parts[5]},
+		Facts:    facts, RecordedAt: time.Now().UTC(),
+	}
+	wire, err := json.Marshal(message.NewBaseMessage(
+		entity.Schema(), entity, "scene-integration-test", message.WithTime(entity.RecordedAt)))
+	if err != nil {
+		t.Fatalf("encode %s: %v", entityID, err)
+	}
+	if _, err := l.harness.Client.PublishToStreamWithAck(t.Context(), world.DefaultImportSubject, wire); err != nil {
+		t.Fatalf("publish %s: %v", entityID, err)
 	}
 	l.harness.AwaitEntity(t, entityID)
 }
@@ -108,9 +125,8 @@ func startScene(t *testing.T) *liveScene {
 	live.sceneID = live.id(t, "scene", "gatehouse")
 	live.locationID = live.id(t, "location", "gatehouse-place")
 
-	// The location FIRST. An entity referencing it before it exists mints a
-	// referential stub at its key, and the atomic create then loses to that stub
-	// — the same ordering the world importer and the campaign gate live under.
+	// The location first, so every relationship target has an authority entry
+	// before a referencing entity is created.
 	live.create(t, live.locationID,
 		fact(vocabulary.WorldEntityName, "The Gatehouse Place"),
 		fact(vocabulary.WorldEntityKind, string(vocabulary.EntityKindLocation)),
@@ -243,7 +259,10 @@ func TestIntegration_TheContextReflectsAChangeMadeAfterTheActionWasSubmitted(t *
 			Source: "scene-integration-test", Timestamp: time.Now().UTC(), Confidence: 1,
 		},
 	}
-	if _, err := live.store.MergeTriples(t.Context(), rook, wounded); err != nil {
+	if _, err := live.store.Reconcile(t.Context(), projectioncontract.EffectTargetAttributes, rook, wounded[:1]); err != nil {
+		t.Fatalf("lower the courier's health: %v", err)
+	}
+	if _, err := live.store.Reconcile(t.Context(), projectioncontract.EffectTargetStatus, rook, wounded[1:]); err != nil {
 		t.Fatalf("wound the courier: %v", err)
 	}
 
@@ -307,24 +326,16 @@ func TestIntegration_TheViewNamesTheActingCharacterAndProvesTheyAreInTheRoom(t *
 	}
 }
 
-// F11 against the component that actually mints stubs. A referenced-but-
-// undelivered entity is queryable and factless, and handing one to a persona is
-// a silent context hole: the courier carries a thing with no name and the
-// narrator describes it anyway.
-func TestIntegration_AReferencedButUndeliveredEntityIsExcludedAsAStub(t *testing.T) {
+// F11 against the real beta.160 graph. A referenced-but-undelivered target stays
+// absent, and handing it to a persona would be a silent context hole: the
+// courier carries a thing with no name and the narrator describes it anyway.
+func TestIntegration_AReferencedButUndeliveredEntityRemainsAbsentAndIsExcluded(t *testing.T) {
 	live := startScene(t)
 	hollis := live.id(t, "character", "hollis")
 	lantern := live.id(t, "item", "lantern")
 
-	// The reference alone mints the stub. Nothing ever delivers the lantern's
-	// own facts — which is exactly what a half-imported world looks like.
-	//
-	// It has to arrive on the CREATE lane, not the merge lane. Only the
-	// fact-arrival and create lanes walk an entity's relationship triples and
-	// materialize absent targets (upstream: update_with_triples "does NOT run
-	// ensureRelationshipTargetsExist"), so merging a new reference onto an
-	// existing entity leaves the target genuinely absent rather than stubbed —
-	// which is a different bug with a different answer.
+	// Nothing ever delivers the lantern's own facts. In beta.160 relationship
+	// targets remain absent rather than being materialized as stub entities.
 	live.create(t, hollis,
 		fact(vocabulary.WorldEntityName, "Hollis"),
 		fact(vocabulary.WorldEntityKind, string(vocabulary.EntityKindCharacter)),
@@ -332,24 +343,8 @@ func TestIntegration_AReferencedButUndeliveredEntityIsExcludedAsAStub(t *testing
 		fact(vocabulary.WorldRelationCarries, lantern),
 	)
 
-	// Anti-vacuity: the thing at that key really is a stub, and it really does
-	// answer a read. A test that excluded an entity that simply did not exist
-	// would prove nothing about stubs at all.
-	deadline := time.Now().Add(20 * time.Second)
-	var stub *graph.EntityState
-	for time.Now().Before(deadline) {
-		state, err := live.harness.QueryEntity(t.Context(), lantern)
-		if err == nil {
-			stub = state
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if stub == nil {
-		t.Fatal("no stub was minted at the referenced key; this test proves nothing")
-	}
-	if !stub.IsStub() {
-		t.Fatalf("the referenced key holds a real entity, not a stub: %+v", stub.MessageType)
+	if _, err := live.harness.QueryEntity(t.Context(), lantern); err == nil {
+		t.Fatal("a relationship reference materialized an entity at the undelivered target")
 	}
 
 	view := live.assembleWhen(t, "aware of the lantern", func(v *scene.View) bool {
@@ -363,12 +358,12 @@ func TestIntegration_AReferencedButUndeliveredEntityIsExcludedAsAStub(t *testing
 
 	for _, entity := range view.Entities() {
 		if entity.ID == lantern {
-			t.Fatal("a referential stub was handed to a persona as a thing in the world")
+			t.Fatal("an undelivered relationship target was handed to a persona as a thing in the world")
 		}
 	}
 	for _, excluded := range view.Excluded {
-		if excluded.ID == lantern && excluded.Reason != scene.ExcludedStub {
-			t.Fatalf("the stub was excluded as %q, want %q", excluded.Reason, scene.ExcludedStub)
+		if excluded.ID == lantern && excluded.Reason != scene.ExcludedMissing {
+			t.Fatalf("the missing target was excluded as %q, want %q", excluded.Reason, scene.ExcludedMissing)
 		}
 	}
 }

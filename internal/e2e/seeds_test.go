@@ -11,6 +11,14 @@ import (
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
+// These identity segments are inputs to the pure seed derivation below. They
+// live in this untagged file so the pinned-seed proofs stay in the unit lane;
+// the broker-backed E2E harness uses the same package constants when built.
+const (
+	playerLocalID = "one"
+	templateID    = "starter"
+)
+
 // pinnedSeedHex is the campaign seed the three band scenarios are played under.
 //
 // Arbitrary and deliberate: it is not a secret (a campaign seed never is — an

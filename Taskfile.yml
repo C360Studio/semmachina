@@ -27,6 +27,7 @@ tasks:
     desc: Go and frontend static analysis, formatting, and gate self-checks
     cmds:
       - go vet ./...
+      - go vet -tags=integration,acceptance,e2e ./...
       # `gofmt -l` reports; `go fmt` rewrites. A gate that fixes what it checks
       # passes the second time for the wrong reason.
       - |
@@ -39,6 +40,9 @@ tasks:
       - bash scripts/run-revive.sh
       - bash scripts/check-revive-fires.sh
       - bash scripts/check-no-skips_fixture_test.sh
+      - bash scripts/check-test-tiers_fixture_test.sh
+      - bash scripts/check-test-tiers.sh
+      - bash scripts/check-test-union_fixture_test.sh
       - task: frontend:lint
 
   build:
@@ -51,22 +55,62 @@ tasks:
 
   test:
     desc: |
-      The full suite under -race, with the zero-skip gate over its JSON.
+      Temporary aggregate Go gate plus the frontend suite.
 
-      Needs Docker: the integration tests FAIL without it rather than skipping.
-      SEMMACHINA_SKIP_INTEGRATION turns those proofs off for a machine that
-      genuinely cannot run Docker — and then this task refuses to certify the
-      run, which is the point of it existing.
+      The Go aggregate intentionally enables every tier while CI transitions to
+      independent lanes. It still refuses any skipped test.
+    cmds:
+      - task: test:all-tags
+      - task: frontend:test
+
+  test:unit:
+    desc: Docker-free default Go test lane
+    vars:
+      JSON: '{{.JSON | default ".task-gotest-unit.json"}}'
+    cmds:
+      - bash scripts/run-go-test-lane.sh unit "{{.JSON}}"
+
+  test:integration:
+    desc: Focused real-infrastructure Go component tests
+    vars:
+      JSON: '{{.JSON | default ".task-gotest-integration.json"}}'
+    cmds:
+      - bash scripts/run-go-test-lane.sh integration "{{.JSON}}"
+
+  test:pipeline:
+    desc: Real rule, graph, and stage pipeline tests, including stage recovery
+    vars:
+      JSON: '{{.JSON | default ".task-gotest-pipeline.json"}}'
+    cmds:
+      - bash scripts/run-go-test-lane.sh pipeline "{{.JSON}}"
+
+  test:recovery:
+    desc: Real JetStream resume and work-queue recovery tests
+    vars:
+      JSON: '{{.JSON | default ".task-gotest-recovery.json"}}'
+    cmds:
+      - bash scripts/run-go-test-lane.sh recovery "{{.JSON}}"
+
+  test:acceptance:
+    desc: Real production-composition boot acceptance tests
+    vars:
+      JSON: '{{.JSON | default ".task-gotest-acceptance.json"}}'
+    cmds:
+      - bash scripts/run-go-test-lane.sh acceptance "{{.JSON}}"
+
+  test:e2e:
+    desc: Real-broker end-to-end turn tests
+    vars:
+      JSON: '{{.JSON | default ".task-gotest-e2e.json"}}'
+    cmds:
+      - bash scripts/run-go-test-lane.sh e2e "{{.JSON}}"
+
+  test:all-tags:
+    desc: Temporary all-tier zero-skip Go gate during lane migration
     vars:
       JSON: '{{.JSON | default ".task-gotest.json"}}'
     cmds:
-      - |
-        go test -json -race -p 2 -timeout=20m -count=1 ./... >"{{.JSON}}" && status=0 || status=$?
-        bash scripts/report-test-json.sh "{{.JSON}}" || echo "(could not render the test report)"
-        bash scripts/check-no-skips.sh "{{.JSON}}" && gate=0 || gate=$?
-        if [ "$status" -ne 0 ]; then echo "go test exited $status"; exit "$status"; fi
-        exit "$gate"
-      - task: frontend:test
+      - bash scripts/run-go-test-lane.sh all "{{.JSON}}"
 
   frontend:install:
     desc: Install the lockfile-pinned SvelteKit dependencies

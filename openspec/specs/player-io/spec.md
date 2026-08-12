@@ -290,8 +290,8 @@ avoided.
 
 #### Scenario: A session names a player the graph was read for
 - **WHEN** a connection is bound to a session
-- **THEN** its `player_id` is one a credential resolved to and a graph read proved real and
-  non-stub, and a player identifier that has not been through that read cannot be bound at all
+- **THEN** its `player_id` is one a credential resolved to and an exact graph read proved exists,
+  and a player identifier that has not been through that read cannot be bound at all
 
 ### Requirement: The local-only posture SHALL announce itself when it stops holding
 The player transport SHALL refuse to bind or serve an address that is not loopback, and SHALL

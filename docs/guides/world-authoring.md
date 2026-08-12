@@ -95,6 +95,11 @@ copies the exact sorted selected file lists into the world plan; boot seeds only
 records and composes only those mechanics rules with the fixed engine-owned turn rules. Unselected
 files have no runtime effect.
 
+`content_bucket`, when present in the complete instance configuration, is the physical NATS object
+store bucket. It does not change the logical storage instance: trajectory evidence and every
+SemMachina content reference use `objectstore`. The ComponentManager-owned provider is the sole
+production owner of that bucket.
+
 Persona content can set voice, tone, and judging stance. It cannot select a model, tool schema, or
 iteration budget. Mechanics can react to world facts, but cannot replace or reorder the engine's
 turn stages.
@@ -103,7 +108,8 @@ turn stages.
 
 Downloaded mechanics have a categorical capability boundary. The only admitted actions are:
 
-- `add_triple`, `remove_triple`, `update_triple`, and `replace_owned` for bounded graph changes;
+- `add_triple`, `remove_triple`, `update_triple`, and `reconcile_predicates` for bounded graph
+  changes;
 - `deny` for a bounded refusal returned to the rule caller.
 
 Every executable action is bounded. Omitting `max_iterations` uses the upstream default of 3; an
@@ -116,7 +122,13 @@ Graph mutation stays in the selected instance:
 - `subject` is omitted for the triggering entity or is exactly `$entity.id`;
 - an entity-reference `object` is `$entity.id`, or `$related.id` when a related pattern is declared;
 - scalar predicates may use literal values, while foreign IDs and unprovable substitutions are
-  refused; `remove_triple` ignores `object`, and an empty `replace_owned` clears its owned group.
+  refused; `remove_triple` ignores `object`, and an empty `reconcile_predicates` value clears its
+  declared projection group.
+
+Every `reconcile_predicates` action names its case-sensitive `projection_contract` and
+`projection_group`. Package preflight derives and validates the selected mechanics pack's complete
+contract inventory before graph materialization. A predicate outside that declared group, or inside
+a protected engine namespace, fails startup rather than widening the group's authority.
 
 Boot narrows primary and related entity patterns to the selected `org`, `world_ns`, and template.
 Conditions may inspect world facts, but not turn, sealed campaign, protected player, secret truth,

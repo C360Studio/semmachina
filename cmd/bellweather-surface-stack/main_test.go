@@ -77,7 +77,7 @@ func TestProbeGraphQLRequiresKnownLocationAndRelationshipsShape(t *testing.T) {
 		}
 		body := `{"data":{"relationships":[]}}`
 		if strings.Contains(request.Query, "entitiesByPrefix") {
-			body = `{"data":{"entitiesByPrefix":[{"id":"` + locationID + `"}]}}`
+			body = `{"data":{"entitiesByPrefix":{"entities":[{"id":"` + locationID + `"}],"next_cursor":null}}}`
 		}
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})}
@@ -105,7 +105,7 @@ func TestProbeGraphQLRefusesAbsentNullAndErrors(t *testing.T) {
 				}
 				_ = json.NewDecoder(r.Body).Decode(&request)
 				if strings.Contains(request.Query, "entitiesByPrefix") {
-					return `{"data":{"entitiesByPrefix":[{"id":"` + locationID + `"}]}}`
+					return `{"data":{"entitiesByPrefix":{"entities":[{"id":"` + locationID + `"}],"next_cursor":null}}}`
 				}
 				return test.relationshipBody
 			})
@@ -130,7 +130,7 @@ func TestProbeGraphQLRefusesMalformedRelationshipMembers(t *testing.T) {
 			}
 			_ = json.NewDecoder(r.Body).Decode(&request)
 			if strings.Contains(request.Query, "entitiesByPrefix") {
-				return `{"data":{"entitiesByPrefix":[{"id":"` + locationID + `"}]}}`
+				return `{"data":{"entitiesByPrefix":{"entities":[{"id":"` + locationID + `"}],"next_cursor":null}}}`
 			}
 			return body
 		})
@@ -140,7 +140,7 @@ func TestProbeGraphQLRefusesMalformedRelationshipMembers(t *testing.T) {
 	}
 }
 
-func TestProbeGraphQLAcceptsBeta159Relationships(t *testing.T) {
+func TestProbeGraphQLRejectsBeta159Relationships(t *testing.T) {
 	locationID := "c360.semmachina.run.bellweather-maze.location.fete-green-place"
 	withGraphQLTransport(t, func(r *http.Request) string {
 		var request struct {
@@ -148,12 +148,12 @@ func TestProbeGraphQLAcceptsBeta159Relationships(t *testing.T) {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&request)
 		if strings.Contains(request.Query, "entitiesByPrefix") {
-			return `{"data":{"entitiesByPrefix":[{"id":"` + locationID + `"}]}}`
+			return `{"data":{"entitiesByPrefix":{"entities":[{"id":"` + locationID + `"}],"next_cursor":null}}}`
 		}
 		return `{"data":{"relationships":[{"from_entity_id":"a","to_entity_id":"b","edge_type":"world.relation.knows"}]}}`
 	})
-	if err := probeGraphQL(context.Background(), "http://graph.invalid/graphql", "c360.semmachina.run.bellweather-maze.location", locationID); err != nil {
-		t.Fatalf("probeGraphQL() = %v", err)
+	if err := probeGraphQL(context.Background(), "http://graph.invalid/graphql", "c360.semmachina.run.bellweather-maze.location", locationID); err == nil {
+		t.Fatal("probeGraphQL() accepted retired beta.159 relationship fields")
 	}
 }
 
@@ -165,7 +165,7 @@ func TestProbeGraphQLRejectsConflictingDualRelationships(t *testing.T) {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&request)
 		if strings.Contains(request.Query, "entitiesByPrefix") {
-			return `{"data":{"entitiesByPrefix":[{"id":"` + locationID + `"}]}}`
+			return `{"data":{"entitiesByPrefix":{"entities":[{"id":"` + locationID + `"}],"next_cursor":null}}}`
 		}
 		return `{"data":{"relationships":[{"from":"a","to":"b","predicate":"p","from_entity_id":"x","to_entity_id":"b","edge_type":"p"}]}}`
 	})
@@ -242,10 +242,10 @@ type recordingStopper struct {
 
 func (s recordingStopper) Stop(time.Duration) error { *s.order = append(*s.order, s.name); return nil }
 
-func TestStopReadSurfaceIsGatewayThenQuery(t *testing.T) {
+func TestStopReadSurfaceDelegatesToComponentManager(t *testing.T) {
 	var order []string
-	stopReadSurface(recordingStopper{"gateway", &order}, recordingStopper{"query", &order})
-	if strings.Join(order, ",") != "gateway,query" {
+	stopReadSurface(recordingStopper{"manager", &order})
+	if strings.Join(order, ",") != "manager" {
 		t.Fatalf("order = %v", order)
 	}
 }
@@ -507,12 +507,6 @@ func TestProductionObserverClassifiesReturnedEntityAnomaliesAsAcceptedTurnInvari
 				Triples: []message.Triple{{Predicate: vocabulary.TurnPhaseCurrent.String(), Object: 42, Timestamp: time.Now()}},
 			},
 		}, errs: map[string]error{}},
-		{name: "turn is a stub", states: map[string]*graph.EntityState{
-			"prefix.turn.turn-42": {
-				ID: "prefix.turn.turn-42", MessageType: graph.StubMessageType, Version: 1,
-				Triples: []message.Triple{{Predicate: vocabulary.TurnPhaseCurrent.String(), Object: string(vocabulary.PhaseAdjudicating), Timestamp: time.Now()}},
-			},
-		}, errs: map[string]error{}},
 		{name: "phase timestamp is zero", states: map[string]*graph.EntityState{
 			"prefix.turn.turn-42": {
 				ID: "prefix.turn.turn-42", Version: 1,
@@ -607,11 +601,6 @@ func TestProductionObserverClassifiesCasePhaseAnomaliesAsTerminal(t *testing.T) 
 			{Predicate: vocabulary.CaseLifecyclePhase.String(), Object: ""},
 		}}},
 		{name: "case is nil", state: nil},
-		{name: "case is a stub", state: &graph.EntityState{
-			ID: caseID, MessageType: graph.StubMessageType, Triples: []message.Triple{
-				{Predicate: vocabulary.CaseLifecyclePhase.String(), Object: string(vocabulary.CasePhaseDiscovery)},
-			},
-		}},
 		{name: "case entity is missing", err: graphio.ErrEntityNotFound},
 	} {
 		t.Run(test.name, func(t *testing.T) {

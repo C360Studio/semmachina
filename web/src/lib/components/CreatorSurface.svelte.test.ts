@@ -83,6 +83,36 @@ const world = Object.freeze({
 });
 
 describe('CreatorSurface', () => {
+	it('offers an accessible explicit retry and restores controls only after projection succeeds', async () => {
+		const controller = new FakeController();
+		let resolveRetry: ((value: typeof world) => void) | undefined;
+		const worldLoader = vi
+			.fn<() => Promise<typeof world>>()
+			.mockRejectedValueOnce(new Error('index_not_ready'))
+			.mockImplementationOnce(() => new Promise((resolve) => (resolveRetry = resolve)));
+		const screen = await render(CreatorSurface, {
+			controllerFactory: () => controller,
+			worldLoader,
+			keyFactory: () => 'key-1'
+		});
+
+		controller.emit(idle());
+		await expect
+			.element(screen.getByRole('alert'))
+			.toHaveTextContent('World projection unavailable. Session controls are disabled.');
+		const retry = screen.getByRole('button', { name: 'Retry world projection' });
+		await retry.click();
+		await expect.element(screen.getByRole('status')).toHaveTextContent('Loading world.');
+		expect(screen.getByRole('alert').query()).toBeNull();
+		expect(screen.getByRole('button', { name: 'Retry world projection' }).query()).toBeNull();
+		expect(screen.getByRole('textbox', { name: 'What do you do?' }).query()).toBeNull();
+
+		resolveRetry?.(world);
+		await expect.element(screen.getByRole('region', { name: 'World topology' })).toBeVisible();
+		await expect.element(screen.getByRole('textbox', { name: 'What do you do?' })).toBeEnabled();
+		expect(worldLoader).toHaveBeenCalledTimes(2);
+	});
+
 	it('clears credentials on submit, loads the world once after authentication, and tears down', async () => {
 		const controller = new FakeController();
 		const worldLoader = vi.fn(async () => world);

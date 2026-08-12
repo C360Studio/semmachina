@@ -107,11 +107,14 @@ describe('loadDeploymentConfig', () => {
 		);
 	});
 
-	it('pins prefix enumeration to beta.159 capacity rather than browser or env authority', () => {
-		expect(
-			loadDeploymentConfig({ ...baseEnvironment, SEMMACHINA_GRAPHQL_PLACE_LIMIT: '3' }).graphql
-				.placeLimit
-		).toBe(1000);
+	it('pins beta.160 prefix page and aggregate caps rather than accepting env authority', () => {
+		const graphql = loadDeploymentConfig({
+			...baseEnvironment,
+			SEMMACHINA_GRAPHQL_PLACE_LIMIT: '3'
+		}).graphql;
+		expect(graphql.placeLimit).toBe(1000);
+		expect(graphql.placePageSize).toBe(200);
+		expect(graphql.placePageLimit).toBe(10);
 	});
 
 	it('validates the server-fixed overall projection deadline', () => {

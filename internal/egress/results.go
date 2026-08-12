@@ -358,10 +358,6 @@ func (r *Results) read(ctx context.Context, turnEntityID string) (*graph.EntityS
 		return nil, fmt.Errorf("%w: %s", ErrTurnNotFound, turnEntityID)
 	case err != nil:
 		return nil, fmt.Errorf("read turn %s: %w", turnEntityID, err)
-	case state.IsStub():
-		// Queryable and factless. Something referenced this turn without it ever
-		// being created, so there is no phase to read and no result to compose.
-		return nil, fmt.Errorf("%w: %s is a referential stub", ErrTurnNotFound, turnEntityID)
 	}
 	return state, nil
 }

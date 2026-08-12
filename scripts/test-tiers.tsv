@@ -1,0 +1,27 @@
+# tier<TAB>test file
+acceptance	internal/boot/boot_integration_test.go
+e2e	internal/e2e/bellweather_test.go
+e2e	internal/e2e/delivery_test.go
+e2e	internal/e2e/experience_test.go
+e2e	internal/e2e/harness_test.go
+e2e	internal/e2e/resume_test.go
+e2e	internal/e2e/turnloop_test.go
+integration	internal/campaign/gate_integration_test.go
+integration	internal/companion/companion_integration_test.go
+integration	internal/content/content_integration_test.go
+integration	internal/dice/dice_integration_test.go
+integration	internal/effect/applier_integration_test.go
+integration	internal/egress/egress_integration_test.go
+integration	internal/gateway/gateway_integration_test.go
+integration	internal/ledger/ledger_integration_test.go
+integration	internal/ledger/reconcile_integration_test.go
+integration	internal/persona/persona_integration_test.go
+integration	internal/playersocket/playersocket_integration_test.go
+recovery	internal/resume/pending_integration_test.go
+integration	internal/scene/scene_integration_test.go
+pipeline	internal/stage/resume_integration_test.go
+pipeline	internal/stage/spawn_integration_test.go
+pipeline	internal/stage/stage_integration_test.go
+integration	internal/turn/turn_integration_test.go
+integration	internal/world/importer_integration_test.go
+integration	internal/world/infra_test.go

@@ -9,6 +9,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -108,7 +109,7 @@ func (g *Gate) MarkImported(ctx context.Context, claim Instantiation) (time.Time
 		Confidence: 1.0,
 		Context:    g.campaignID,
 	}
-	if _, err := g.store.MergeTriples(ctx, g.campaignID, []message.Triple{triple}); err != nil {
+	if _, err := g.store.Reconcile(ctx, projectioncontract.CampaignImport, g.campaignID, []message.Triple{triple}); err != nil {
 		return time.Time{}, fmt.Errorf(
 			"record the import-completion marker on campaign %s: %w; the world is imported and unmarked, so the "+
 				"next boot will refuse to serve it rather than guess", g.campaignID, err)
@@ -181,17 +182,6 @@ func completionFromEntity(state *graph.EntityState, campaignID string) (time.Tim
 	if state == nil {
 		return time.Time{}, false, fmt.Errorf("campaign entity %s read back as nil", campaignID)
 	}
-	if state.IsStub() {
-		// A stub occupies the key and carries none of the campaign's own facts,
-		// so it is neither an instantiated campaign nor a completed import. Read
-		// as "unmarked" it would send a boot into the bounded wait for a marker
-		// that can never arrive; read as "marked" it would serve play from a
-		// world that was never imported at all.
-		return time.Time{}, false, fmt.Errorf(
-			"campaign entity %s is a referential stub: something referenced it before it was created, so it "+
-				"records neither an instantiation nor an import", campaignID)
-	}
-
 	var objects []any
 	for _, triple := range state.Triples {
 		if triple.Predicate == vocabulary.CampaignImportCompleted.String() {

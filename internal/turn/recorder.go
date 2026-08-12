@@ -13,6 +13,7 @@ import (
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -21,17 +22,12 @@ const Source = "turn-recorder"
 
 // EntityMessageType is the provenance envelope stamped on a turn entity.
 //
-// It is stamped explicitly because upstream treats a zero or invalid envelope as
-// NOT-YET-REALLY-BORN. graph.EntityState.IsStub keys on the stub envelope
-// specifically, so a typeless entity does not read as a stub — but every
-// re-stamping lane refuses to treat one as a real birth
-// (restampStubOnCreate: "!IsValid() rejects a zero/partial type"), which is how
-// a typeless entity ends up in the dispatchable-non-real class upstream named in
-// gh#429. The turn entity is precisely the thing every stage guard asks about,
-// so it is born with its own type or not at all.
+// beta.160 atomic create validates the complete birth envelope. The turn entity
+// is the thing every stage guard asks about, so its canonical provenance type is
+// supplied as part of that single create or the birth fails.
 //
 // No message of this type is ever published — the turn is created through the
-// atomic mutation lane and advanced through the merge lane — so it is
+// atomic mutation lane and advanced through complete reconciliation — so it is
 // deliberately absent from the payload registry.
 var EntityMessageType = message.Type{
 	Domain:   payload.Domain,
@@ -41,25 +37,19 @@ var EntityMessageType = message.Type{
 
 // Store is the graph surface the recorder needs.
 //
-// The write methods are the atomic-create lane and the merge lane, and nothing
+// The write methods are the atomic-create lane and complete reconciliation, and nothing
 // else. There is no seam here for triple.add or .add_batch: the phase is
 // single-valued, and a phase committed through an appending lane leaves a turn
 // holding two phases with a success response and no error anywhere.
 type Store interface {
 	// CreateEntity performs an atomic create-or-fail, reporting a taken key as
 	// graphio.ErrEntityExists.
-	CreateEntity(ctx context.Context, entity *graph.EntityState) (graphio.CreateResult, error)
+	CreateEntity(ctx context.Context, contract string, entity *graph.EntityState) (graphio.CreateResult, error)
 	// GetEntity reads one entity, reporting an absent one as
 	// graphio.ErrEntityNotFound rather than as an empty state.
 	GetEntity(ctx context.Context, id string) (*graph.EntityState, error)
-	// MergeTriples writes one entity's triples with replace-by-predicate
-	// semantics.
-	MergeTriples(
-		ctx context.Context,
-		entityID string,
-		triples []message.Triple,
-		opts ...graphio.MergeOption,
-	) (*graph.EntityState, error)
+	// Reconcile writes one complete declared predicate group.
+	Reconcile(context.Context, projectioncontract.Target, string, []message.Triple) (*graph.EntityState, error)
 }
 
 // The claim above, enforced by the compiler rather than by a doc comment.
@@ -206,19 +196,12 @@ func (r *Recorder) Accept(ctx context.Context, action *payload.PlayerAction) (Ac
 		return Acceptance{}, &RejectedActionError{ActionID: action.ActionID, Err: err}
 	}
 
-	result, err := r.store.CreateEntity(ctx, entity)
+	result, err := r.store.CreateEntity(ctx, projectioncontract.TurnBirthContract, entity)
 	acceptance := Acceptance{TurnID: turnID, TurnEntityID: turnEntityID}
 	switch {
 	case err == nil:
-		// Degraded means the write committed and only the read-back failed, so
-		// there is nothing to confirm and nothing to retry. Otherwise the
-		// read-back is checked: a create that succeeded while the phase triple
-		// was dropped would leave a turn every later guard refuses to read, and
-		// a wedged turn that reports itself as accepted is the worst of both.
-		if !result.Degraded {
-			if err := confirmAccepted(result.Entity, turnEntityID); err != nil {
-				return Acceptance{}, err
-			}
+		if err := confirmAccepted(result.Entity, turnEntityID); err != nil {
+			return Acceptance{}, err
 		}
 		acceptance.Created = true
 		acceptance.Phase = vocabulary.PhaseAccepted
@@ -259,7 +242,7 @@ func (r *Recorder) Accept(ctx context.Context, action *payload.PlayerAction) (Ac
 // # After the create, never before or inside it
 //
 // Inside is not available — the create is atomic on the TURN entity and
-// graph-ingest's merge lane is per-entity, so a foreign subject in it is split
+// graph-ingest reconciliation is per-entity, so a foreign subject in it is split
 // onto the appending lane and the failure is swallowed (F14). So it is a second
 // write, and the ORDER is the turn first. A crash in the gap leaves the pointer
 // naming the player's PREVIOUS turn, which is terminal, so the gate admits their
@@ -330,7 +313,7 @@ func (r *Recorder) pointPlayerAtTurn(ctx context.Context, playerID string, accep
 	if err != nil {
 		return err
 	}
-	if _, err := r.store.MergeTriples(ctx, playerID, triples); err != nil {
+	if _, err := r.store.Reconcile(ctx, projectioncontract.PlayerCurrentTurn, playerID, triples); err != nil {
 		return fmt.Errorf(
 			"point player %s at turn %s: %w; the turn exists, so this is retried on redelivery rather than "+
 				"failing the action", playerID, acceptance.TurnEntityID, err)
@@ -383,9 +366,7 @@ func confirmAccepted(stored *graph.EntityState, turnEntityID string) error {
 // Every anomaly is an error rather than a shrug, because this answer decides
 // whether a stage runs. A turn holding two phases is the signature of a write
 // that took an appending lane, and a reader taking the first value it found
-// would be reading a coin flip; a turn holding none is a half-created record; a
-// turn that is only a referential stub is queryable and factless, so "no phase
-// recorded" read off one would be a false negative.
+// would be reading a coin flip; a turn holding none is a half-created record.
 func (r *Recorder) Current(ctx context.Context, turnEntityID string) (vocabulary.TurnPhase, error) {
 	_, phase, err := r.currentState(ctx, turnEntityID)
 	return phase, err
@@ -419,16 +400,11 @@ func (r *Recorder) currentState(
 // running — asks the question exactly the way the recorder does. A second
 // implementation would be a second opinion about what an anomalous turn record
 // means, and the anomalies are the whole content of this function: a turn
-// holding two phases, none, or nothing but a referential stub each has a
-// deliberate answer, and "take the first triple you find" is the wrong one three
-// times over.
+// holding two phases or none has a deliberate answer, and "take the first triple
+// you find" is wrong for either shape.
 func PhaseOf(state *graph.EntityState, turnEntityID string) (vocabulary.TurnPhase, error) {
 	if state == nil {
 		return "", &RecordError{TurnEntityID: turnEntityID, Err: errors.New("read back as nil")}
-	}
-	if state.IsStub() {
-		return "", &RecordError{TurnEntityID: turnEntityID, Err: errors.New(
-			"is a referential stub: it holds no facts, so its phase is unknown")}
 	}
 
 	var objects []any
@@ -467,11 +443,11 @@ func PhaseOf(state *graph.EntityState, turnEntityID string) (vocabulary.TurnPhas
 // Every way of failing to find out resolves toward WRITING the pointer rather
 // than toward leaving it where it is, and that polarity is deliberate:
 //
-//   - The player entity is absent. Nothing is held. (The turn's own birth record
-//     names the player, so graph-ingest has usually minted a referential stub by
-//     now; a stub holds no facts and answers the same way.)
+//   - The player entity is absent. Nothing is held. The turn's own birth record
+//     may name that player, but beta.160 does not synthesize a relationship
+//     target, so the player remains absent until its own birth record lands.
 //   - A held turn is absent. A turn nobody can find is not one that is running.
-//   - A held turn's record is unreadable — two phases, none, a stub. Moving the
+//   - A held turn's record is unreadable — two phases or none. Moving the
 //     pointer HEALS that: leaving it would strand the player behind a turn the
 //     gateway cannot read, which is the lockout this whole design refuses.
 //
@@ -527,7 +503,7 @@ func (r *Recorder) turnIsLive(ctx context.Context, turnEntityID string) (bool, e
 // ones it could not read.
 //
 // A slice rather than a single value, because "how many values does this
-// predicate hold" is what distinguishes a merge-lane write from an append-lane
+// predicate hold" is what distinguishes a reconcile write from an append-lane
 // one, and a reader that took the first would answer a coin flip.
 //
 // Exported because it has two callers asking the same question from opposite
@@ -563,7 +539,7 @@ func HeldTurns(state *graph.EntityState) (held []string, unreadable int) {
 //
 // The shape mirrors HeldTurns, and for the same reason: a slice rather than one
 // value, because "how many values does this predicate hold" is what distinguishes
-// a merge-lane write from an append-lane one, and a reader that took the first
+// a reconcile write from an append-lane one, and a reader that took the first
 // would answer a coin flip about what happened to this player last.
 //
 // Exported because it also has two callers on opposite sides — this package
@@ -626,7 +602,7 @@ type Transition struct {
 // different questions with three different outcomes:
 //
 //   - The recorded phase is a legal predecessor → Advanced. The phase is written
-//     on the merge lane, replacing its own prior value.
+//     through reconciliation, replacing its own prior value.
 //   - The recorded phase IS the target → Resumed. Nothing is written; the fact
 //     is already stated, and rewriting it would only churn the timestamp.
 //   - The turn has moved past this stage (or ended) → Declined. Nothing is
@@ -750,7 +726,7 @@ func (r *Recorder) transition(
 	if err != nil {
 		return Transition{}, err
 	}
-	if _, err := r.store.MergeTriples(ctx, turnEntityID, triples); err != nil {
+	if _, err := r.store.Reconcile(ctx, projectioncontract.TurnPhaseState, turnEntityID, triples); err != nil {
 		return Transition{}, fmt.Errorf("record phase %q on turn %s: %w", to, turnEntityID, err)
 	}
 
@@ -828,7 +804,7 @@ func (r *Recorder) pointPlayerAtResolvedTurn(
 	if err != nil {
 		return err
 	}
-	if _, err := r.store.MergeTriples(ctx, playerID, triples); err != nil {
+	if _, err := r.store.Reconcile(ctx, projectioncontract.PlayerResolvedTurn, playerID, triples); err != nil {
 		return fmt.Errorf(
 			"point player %s at their resolved turn %s: %w; the phase is written, so this is retried on "+
 				"redelivery rather than failing the turn", playerID, turnEntityID, err)
@@ -906,7 +882,7 @@ func (r *Recorder) repairResolvedPointer(
 	if err != nil {
 		return err
 	}
-	if _, err := r.store.MergeTriples(ctx, playerID, triples); err != nil {
+	if _, err := r.store.Reconcile(ctx, projectioncontract.PlayerResolvedTurn, playerID, triples); err != nil {
 		return fmt.Errorf(
 			"repair player %s's pointer at their resolved turn %s: %w", playerID, turnEntityID, err)
 	}

@@ -2,6 +2,8 @@ const COMPONENT = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 const PREDICATE = /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/;
 const MAX_ENTITY_ID_BYTES = 256;
 const PLACE_QUERY_LIMIT = 1000;
+const PLACE_QUERY_PAGE_SIZE = 200;
+const PLACE_QUERY_PAGE_LIMIT = 10;
 const DEFAULT_PROJECTION_DEADLINE_MS = 5000;
 const MIN_PROJECTION_DEADLINE_MS = 1000;
 const MAX_PROJECTION_DEADLINE_MS = 30_000;
@@ -41,6 +43,8 @@ export interface DeploymentConfig {
 		readonly endpoint: string;
 		readonly posture: GraphQLPosture;
 		readonly placeLimit: number;
+		readonly placePageSize: number;
+		readonly placePageLimit: number;
 		readonly projectionDeadlineMs: number;
 		readonly authentication:
 			{ readonly kind: 'none' } | { readonly kind: 'bearer'; readonly token: string };
@@ -137,6 +141,8 @@ function graphqlConfig(environment: DeploymentEnvironment): DeploymentConfig['gr
 		endpoint: endpoint.toString(),
 		posture: posture as GraphQLPosture,
 		placeLimit: PLACE_QUERY_LIMIT,
+		placePageSize: PLACE_QUERY_PAGE_SIZE,
+		placePageLimit: PLACE_QUERY_PAGE_LIMIT,
 		projectionDeadlineMs,
 		authentication:
 			posture === 'auth_proxy'

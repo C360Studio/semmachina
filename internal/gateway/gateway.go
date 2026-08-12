@@ -285,9 +285,9 @@ func (g *Gateway) Authenticate(ctx context.Context, credential string, conn Conn
 //
 // The player entity is READ, and that read is what makes "player_id is a graph
 // entity" true rather than merely intended. A credential resolving to an id
-// nothing imported, or to a key holding only a referential stub, produces no
-// identity at all — instead of a stream of actions attributed to a player who
-// does not exist and a turn whose context assembler finds nobody.
+// nothing imported produces no identity at all — instead of a stream of actions
+// attributed to a player who does not exist and a turn whose context assembler
+// finds nobody.
 //
 // It is separate from Bind for the transport's sake, and the separation is a
 // posture decision rather than a convenience. A WebSocket handshake is an HTTP
@@ -314,21 +314,13 @@ func (g *Gateway) Verify(ctx context.Context, credential string) (VerifiedPlayer
 			ErrUnauthenticated, playerID)
 	}
 
-	state, err := g.store.GetEntity(ctx, playerID)
+	_, err = g.store.GetEntity(ctx, playerID)
 	switch {
 	case errors.Is(err, graphio.ErrEntityNotFound):
 		return VerifiedPlayer{}, fmt.Errorf(
 			"%w: player %s is not an entity of this world", ErrUnauthenticated, playerID)
 	case err != nil:
 		return VerifiedPlayer{}, fmt.Errorf("read player %s: %w", playerID, err)
-	case state.IsStub():
-		// A referential stub is queryable and factless: something MENTIONED this
-		// player without ever importing them. An existence poll alone would take
-		// it for a real player, and every read the turn depends on would come
-		// back empty.
-		return VerifiedPlayer{}, fmt.Errorf(
-			"%w: player %s is a referential stub — something references them but nothing imported them",
-			ErrUnauthenticated, playerID)
 	}
 	return VerifiedPlayer{id: playerID}, nil
 }
@@ -555,7 +547,7 @@ func classify(err error, fallback payload.SubmitRefusalCode) *payload.SubmitRefu
 // a live turn.
 //
 // The one case that is not fail-open is a turn record that is CORRUPT — two
-// phases, none, a stub. That is turn.PhaseOf's judgement, taken here rather than
+// phases or none. That is turn.PhaseOf's judgement, taken here rather than
 // re-derived, and it is an error rather than an admission because the phase is
 // the fact the whole turn design rests on and guessing at it would start a
 // second turn on top of one that may still be running.
@@ -567,10 +559,6 @@ func (g *Gateway) admit(ctx context.Context, playerID, turnID string) (*payload.
 			"player %s authenticated but their entity is gone; the admission gate cannot answer", playerID)
 	case err != nil:
 		return nil, fmt.Errorf("read player %s: %w", playerID, err)
-	case state.IsStub():
-		return nil, fmt.Errorf(
-			"player %s is a referential stub, so it holds no facts and the admission gate cannot answer",
-			playerID)
 	}
 
 	held, unreadable := turn.HeldTurns(state)

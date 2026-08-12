@@ -1,5 +1,5 @@
 // Command bellweather-surface-stack starts the paid Bellweather engine and its
-// real beta.159 read surface for a separate same-origin browser acceptance run.
+// real beta.160 read surface for a separate same-origin browser acceptance run.
 package main
 
 import (
@@ -20,11 +20,14 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	ssconfig "github.com/c360studio/semstreams/config"
 	graphgateway "github.com/c360studio/semstreams/gateway/graph-gateway"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/payloadregistry"
 	graphquery "github.com/c360studio/semstreams/processor/graph-query"
+	"github.com/c360studio/semstreams/service"
+	"github.com/c360studio/semstreams/types"
 
 	"github.com/c360studio/semmachina/internal/boot"
 	"github.com/c360studio/semmachina/internal/payload"
@@ -77,7 +80,11 @@ func run(ctx context.Context, opts options) (runErr error) {
 	}
 
 	engineLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	freshNATS, err := natsclient.NewSharedTestClient(natsclient.WithJetStream(), natsclient.WithFileStorage())
+	freshNATS, err := natsclient.NewSharedTestClient(
+		natsclient.WithJetStream(),
+		natsclient.WithNATSVersion("2.14.4"),
+		natsclient.WithFileStorage(),
+	)
 	if err != nil {
 		return fmt.Errorf("start fresh NATS broker: %w", err)
 	}
@@ -126,11 +133,12 @@ func run(ctx context.Context, opts options) (runErr error) {
 	}
 	defer closeClient(queryClient)
 
-	queryComponent, gatewayComponent, err := startReadSurface(runtimeCtx, queryClient, cfg.Registry, opts.graphAddr, engineLogger)
+	readSurface, err := startReadSurface(runtimeCtx, queryClient, cfg.Registry, cfg.Org, cfg.WorldNS,
+		opts.graphAddr, engineLogger)
 	if err != nil {
 		return err
 	}
-	defer stopReadSurface(gatewayComponent, queryComponent)
+	defer stopReadSurface(readSurface)
 
 	worldPrefix := strings.Join([]string{cfg.Org, vocabulary.PlatformSegment, cfg.WorldNS, templateID}, ".")
 	locationPrefix := worldPrefix + "." + string(vocabulary.EntityKindLocation)
@@ -141,18 +149,13 @@ func run(ctx context.Context, opts options) (runErr error) {
 	}
 	graphqlURL := "http://" + opts.graphAddr + "/graphql"
 	if err := awaitGraphQL(runtimeCtx, graphqlURL, locationPrefix, locationID); err != nil {
-		return fmt.Errorf("beta.159 GraphQL readiness: %w", err)
+		return fmt.Errorf("beta.160 GraphQL readiness: %w", err)
 	}
 
-	observer, err := newProductionObserver(runtimeCtx, queryClient, cfg.ContentBucket)
+	observer, err := newProductionObserver(queryClient, engine)
 	if err != nil {
 		return fmt.Errorf("open authoritative observer: %w", err)
 	}
-	defer func() {
-		if err := observer.Close(); err != nil {
-			runErr = errors.Join(runErr, fmt.Errorf("close authoritative observer: %w", err))
-		}
-	}()
 	caseID, err := vocabulary.ComposeEntityID(cfg.Org, cfg.WorldNS, templateID,
 		string(vocabulary.EntityKindCase), "bellweather-case")
 	if err != nil {
@@ -247,54 +250,70 @@ func loadConfig(configPath, worldPath string, logger *slog.Logger) (boot.Config,
 	return cfg, packageRoot, nil
 }
 
-func startReadSurface(ctx context.Context, client *natsclient.Client, registry *payloadregistry.Registry,
-	graphAddr string, logger *slog.Logger) (component.LifecycleComponent, component.LifecycleComponent, error) {
-	deps := component.Dependencies{NATSClient: client, PayloadRegistry: registry, Logger: logger}
+func startReadSurface(ctx context.Context, client *natsclient.Client, payloads *payloadregistry.Registry,
+	org, worldNS, graphAddr string, logger *slog.Logger) (*service.ComponentManager, error) {
 	queryCfg := graphquery.DefaultConfig()
-	queryCfg.StartupAttempts, queryCfg.StartupInterval = 1, 10*time.Millisecond
-	queryRaw, _ := json.Marshal(queryCfg)
-	createdQuery, err := graphquery.CreateGraphQuery(queryRaw, deps)
+	queryRaw, err := json.Marshal(queryCfg)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create graph-query: %w", err)
-	}
-	query := createdQuery.(component.LifecycleComponent)
-	if err := query.Initialize(); err != nil {
-		_ = query.Stop(5 * time.Second)
-		return nil, nil, fmt.Errorf("initialize graph-query: %w", err)
-	}
-	if err := query.Start(ctx); err != nil {
-		_ = query.Stop(5 * time.Second)
-		return nil, nil, fmt.Errorf("start graph-query: %w", err)
+		return nil, fmt.Errorf("encode graph-query: %w", err)
 	}
 
 	gatewayCfg := graphgateway.DefaultConfig()
 	gatewayCfg.StandaloneServer, gatewayCfg.BindAddress = true, graphAddr
-	gatewayRaw, _ := json.Marshal(gatewayCfg)
-	createdGateway, err := graphgateway.CreateGraphGateway(gatewayRaw, deps)
+	gatewayRaw, err := json.Marshal(gatewayCfg)
 	if err != nil {
-		_ = query.Stop(5 * time.Second)
-		return nil, nil, fmt.Errorf("create graph-gateway: %w", err)
+		return nil, fmt.Errorf("encode graph-gateway: %w", err)
 	}
-	gateway := createdGateway.(component.LifecycleComponent)
-	if err := gateway.Initialize(); err != nil {
-		stopReadSurface(gateway, query)
-		return nil, nil, fmt.Errorf("initialize graph-gateway: %w", err)
+	componentRegistry := component.NewRegistry(component.WithLogger(logger))
+	if err := graphquery.Register(componentRegistry); err != nil {
+		return nil, fmt.Errorf("register graph-query: %w", err)
 	}
-	if err := gateway.Start(ctx); err != nil {
-		stopReadSurface(gateway, query)
-		return nil, nil, fmt.Errorf("start graph-gateway: %w", err)
+	if err := graphgateway.Register(componentRegistry); err != nil {
+		return nil, fmt.Errorf("register graph-gateway: %w", err)
 	}
-	return query, gateway, nil
+	configManager, err := ssconfig.NewConfigManager(&ssconfig.Config{
+		Version: "1.1.0",
+		Platform: ssconfig.PlatformConfig{Org: org, ID: "semmachina-surface-" + worldNS,
+			Type: "application", Environment: "acceptance"},
+		Components: ssconfig.ComponentConfigs{
+			"graph-query":   componentConfig("graph-query", types.ComponentTypeProcessor, queryRaw),
+			"graph-gateway": componentConfig("graph-gateway", types.ComponentTypeGateway, gatewayRaw),
+		},
+	}, client, logger)
+	if err != nil {
+		return nil, fmt.Errorf("build read-surface config manager: %w", err)
+	}
+	constructed, err := service.NewComponentManager(json.RawMessage(`{"watch_config":false}`), &service.Dependencies{
+		NATSClient: client, Logger: logger,
+		Platform: types.PlatformMeta{Org: org, Platform: "semmachina-surface-" + worldNS},
+		Manager:  configManager, ComponentRegistry: componentRegistry, PayloadRegistry: payloads,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build read-surface component manager: %w", err)
+	}
+	manager, ok := constructed.(*service.ComponentManager)
+	if !ok {
+		return nil, fmt.Errorf("read-surface constructor returned %T", constructed)
+	}
+	if len(manager.GetManagedComponents()) != 2 {
+		return nil, fmt.Errorf("read-surface manager did not admit both configured components")
+	}
+	if err := manager.Start(ctx); err != nil {
+		_ = manager.Stop(5 * time.Second)
+		return nil, fmt.Errorf("start read-surface component manager: %w", err)
+	}
+	return manager, nil
+}
+
+func componentConfig(name string, kind types.ComponentType, raw json.RawMessage) types.ComponentConfig {
+	return types.ComponentConfig{Type: kind, Name: name, Enabled: true, Config: raw}
 }
 
 type componentStopper interface{ Stop(time.Duration) error }
 
-func stopReadSurface(gateway, query componentStopper) {
-	if gateway != nil {
-		_ = gateway.Stop(5 * time.Second)
-	}
-	if query != nil {
-		_ = query.Stop(5 * time.Second)
+func stopReadSurface(manager componentStopper) {
+	if manager != nil {
+		_ = manager.Stop(5 * time.Second)
 	}
 }
 

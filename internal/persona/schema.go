@@ -28,9 +28,9 @@ import (
 //     the tool definition, where a model can see it, and into a parser, where it
 //     cannot. For the slice's one schema-bearing exit on a mid-tier model
 //     (ADR-026, F5), that is the wrong direction.
-//   - decide publishes coordinator.decision.* triples onto the LOOP entity
-//     through AddTriplesBatch — the APPENDING lane. Our scalars are
-//     single-valued facts on the TURN entity and must travel the merge lane, or a
+//   - decide publishes coordinator.decision.* triples onto the LOOP entity.
+//     Our scalars are single-valued facts on the TURN entity and must travel
+//     through their declared reconciliation group, or a
 //     duplicate exit leaves a turn holding two plausibilities with no error
 //     anywhere (F14). Using decide would put the verdict in the wrong place, on
 //     the wrong lane, and still need a second write to reach the turn.

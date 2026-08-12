@@ -19,7 +19,7 @@ func TestEntitiesByPredicateValueUsesBoundedNATSDirectQuery(t *testing.T) {
 		t.Fatal(err)
 	}
 	requester := &fakeRequester{reply: reply}
-	store, err := graphio.NewStore(requester)
+	store, err := graphio.NewStoreWithMutationClient(requester, &fakeMutations{})
 	if err != nil {
 		t.Fatal(err)
 	}

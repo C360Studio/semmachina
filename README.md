@@ -11,7 +11,7 @@ graph. Secondary product: the chronicler/writer loop — a running prose
 collection during play, replayable into long-form manuscript.
 
 **Status:** Stage 3, the template/place proof, and the minimal creator surface are complete and
-archived. The repository currently targets SemStreams `v1.0.0-beta.*` and contains a bootable
+archived. The repository currently targets SemStreams `v1.0.0-beta.160` and contains a bootable
 turn-loop engine, durable world import and restart gates, mystery and companion proofs, and one
 immutable world package that can select different bounded voice and mechanics overlays while engine
 sequencing remains fixed. The creator surface adds a one-world, one-player SvelteKit session over
@@ -29,7 +29,9 @@ voice.
 | [`Founding proposal`](docs/proposals/fiction-first-rpg.md) | Idea review and engine decomposition |
 | [`Federation roadmap`](docs/proposals/living-world-federation-roadmap.md) | Hypothetical zone and handoff proof |
 | [`World authoring guide`](docs/guides/world-authoring.md) | Packages, overlays, places, rules, and migration |
+| [`Testing guide`](docs/guides/testing.md) | Test tiers, harness rules, anti-omission gates, and commands |
 | [`Gemini smoke runbook`](docs/runbooks/bellweather-gemini-smoke.md) | Operator-only paid smoke |
+| [`Beta.160 migration`](docs/runbooks/semstreams-beta160-migration.md) | Cutover and rollback checklist |
 | [`openspec/project.md`](openspec/project.md) | Purpose, product boundary (game repo vs engine asks), conventions |
 | [`CLAUDE.md`](CLAUDE.md) | Working context for AI-assisted development |
 

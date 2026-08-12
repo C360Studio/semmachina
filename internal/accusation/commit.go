@@ -13,6 +13,7 @@ import (
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -27,7 +28,7 @@ type RecordStore interface {
 // CommitGraph is the exact-result journal surface.
 type CommitGraph interface {
 	GetEntity(context.Context, string) (*graph.EntityState, error)
-	MergeTriples(context.Context, string, []message.Triple, ...graphio.MergeOption) (*graph.EntityState, error)
+	Reconcile(context.Context, projectioncontract.Target, string, []message.Triple) (*graph.EntityState, error)
 }
 
 // CommitOption configures deterministic commit metadata.
@@ -123,7 +124,11 @@ func (c *Committer) Commit(ctx context.Context, turnEntityID string, record *con
 	}
 	at := c.now().UTC()
 	triples := []message.Triple{resultTriple(turnEntityID, vocabulary.TurnAccusationRef, ref.String(), at)}
-	if _, err := c.graph.MergeTriples(ctx, turnEntityID, triples); err != nil {
+	err = graphio.RetryRevisionConflict(ctx, func() error {
+		_, reconcileErr := c.graph.Reconcile(ctx, projectioncontract.TurnAccusation, turnEntityID, triples)
+		return reconcileErr
+	})
+	if err != nil {
 		return content.Ref{}, fmt.Errorf("record accusation barrier on turn: %w", err)
 	}
 	return ref, nil

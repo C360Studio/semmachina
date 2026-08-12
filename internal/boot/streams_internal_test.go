@@ -22,7 +22,7 @@ func TestStreamDeclarations_BoundWorkQueuesAndNamePermanentArchives(t *testing.T
 		t.Fatalf("platform declaration = version %q org %q id %q", cfg.Version, cfg.Platform.Org, cfg.Platform.ID)
 	}
 	if _, err := ssconfig.ValidateStreamDeclarations(cfg); err != nil {
-		t.Fatalf("SemMachina stream declarations do not satisfy beta.159: %v", err)
+		t.Fatalf("SemMachina stream declarations do not satisfy beta.160: %v", err)
 	}
 
 	for name, wantSubjects := range map[string][]string{

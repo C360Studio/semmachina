@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/processor/rule"
@@ -25,7 +26,9 @@ func TestAccusationUniversalBarrierIsRoutedAndRequiredBeforeNarration(t *testing
 	}
 	portFound, interpretationFound, applicationFound := false, false, false
 	for _, port := range cfg.Ports.Outputs {
-		if port.Subject == rulepack.SubjectAccusation && port.StreamName == rulepack.StageStream {
+		stream, ok := port.Config.(component.JetStreamPort)
+		if ok && stream.StreamName == rulepack.StageStream &&
+			len(stream.Subjects) == 1 && stream.Subjects[0] == rulepack.SubjectAccusation {
 			portFound = true
 		}
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/rulepack"
 	"github.com/c360studio/semmachina/internal/turn"
 	"github.com/c360studio/semmachina/internal/vocabulary"
@@ -84,12 +85,7 @@ const maxPages = 1000
 // response and no error, and a bound that has silently stopped bounding.
 type TurnStore interface {
 	EntitiesWithPrefix(ctx context.Context, prefix, cursor string, limit int) (graphio.PrefixPage, error)
-	MergeTriples(
-		ctx context.Context,
-		entityID string,
-		triples []message.Triple,
-		opts ...graphio.MergeOption,
-	) (*graph.EntityState, error)
+	Reconcile(context.Context, projectioncontract.Target, string, []message.Triple) (*graph.EntityState, error)
 }
 
 // TriggerPublisher puts a stage trigger back on the stage stream.
@@ -157,10 +153,6 @@ type TurnFailure struct {
 type Reconciliation struct {
 	// Scanned is how many turn entities were examined.
 	Scanned int
-	// Unborn is how many were referential stubs — queryable, factless, and not
-	// yet a turn. Nothing has gone wrong when an entity is referenced before it
-	// is born, and a stub has no phase to resume.
-	Unborn int
 	// Resolved is how many had already ended. They are not this pass's business:
 	// a terminal turn owes nobody a stage.
 	Resolved int
@@ -413,10 +405,6 @@ func (r *Reconciler) reconcileTurn(
 ) {
 	report.Scanned++
 
-	if state.IsStub() {
-		report.Unborn++
-		return
-	}
 	turnID, err := turnIDOf(state.ID)
 	if err != nil {
 		report.Failures = append(report.Failures, TurnFailure{TurnEntityID: state.ID, Err: err})
@@ -695,7 +683,7 @@ func (r *Reconciler) countAttempt(ctx context.Context, turnID, turnEntityID stri
 	if err != nil {
 		return err
 	}
-	if _, err := r.turns.MergeTriples(ctx, turnEntityID, triples); err != nil {
+	if _, err := r.turns.Reconcile(ctx, projectioncontract.TurnResume, turnEntityID, triples); err != nil {
 		return fmt.Errorf("record resume attempt %d on turn %s: %w", attempt, turnEntityID, err)
 	}
 	return nil

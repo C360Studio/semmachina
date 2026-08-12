@@ -12,6 +12,7 @@ import (
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -40,10 +41,12 @@ func (g *progressGraph) GetEntity(_ context.Context, id string) (*graph.EntitySt
 	return g.caseState, nil
 }
 
-func (g *progressGraph) MergeTriples(_ context.Context, _ string, triples []message.Triple,
-	_ ...graphio.MergeOption) (*graph.EntityState, error) {
+func (g *progressGraph) Reconcile(_ context.Context, target projectioncontract.Target, _ string, triples []message.Triple) (*graph.EntityState, error) {
 	if g.mergeErr != nil {
 		return nil, g.mergeErr
+	}
+	if target != projectioncontract.TurnCaseProgress {
+		return nil, errors.New("unexpected case progress projection target")
 	}
 	g.writes = append(g.writes, triples)
 	g.turn.Triples = append(g.turn.Triples, triples...)

@@ -17,6 +17,7 @@ import (
 
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 	"github.com/c360studio/semmachina/internal/world"
 )
@@ -31,7 +32,7 @@ type Graph interface {
 }
 
 type graphWriter interface {
-	MergeTriples(context.Context, string, []message.Triple, ...graphio.MergeOption) (*graph.EntityState, error)
+	Reconcile(context.Context, projectioncontract.Target, string, []message.Triple) (*graph.EntityState, error)
 }
 
 var _ Graph = (*graphio.Store)(nil)
@@ -143,8 +144,8 @@ func (a *Authority) ValidateBond(
 		}
 		return nil, fmt.Errorf("read companion bond %s: %w", bondID, err)
 	}
-	if state == nil || state.IsStub() {
-		return nil, integrity("bond %s is missing or a referential stub", bondID)
+	if state == nil {
+		return nil, integrity("bond %s is missing", bondID)
 	}
 	if err := requireStateKind(state, vocabulary.EntityKindCompanionBond); err != nil {
 		return nil, err
@@ -257,7 +258,7 @@ func (a *Authority) advanceHintLocked(
 	if !ok {
 		return nil, errors.New("companion authority graph is read-only; hint level cannot advance")
 	}
-	_, err = writer.MergeTriples(ctx, bond.ID, []message.Triple{{
+	_, err = writer.Reconcile(ctx, projectioncontract.CompanionBondHint, bond.ID, []message.Triple{{
 		Subject: bond.ID, Predicate: vocabulary.CompanionBondHintLevel.String(), Object: string(next),
 		Source: "companion-hint-ladder", Timestamp: time.Now().UTC(), Confidence: 1, Context: bond.ID,
 	}})
@@ -288,7 +289,7 @@ func (a *Authority) resetHintLocked(ctx context.Context, bond *Bond) (*Bond, err
 	if !ok {
 		return nil, errors.New("companion authority graph is read-only; hint level cannot reset")
 	}
-	_, err := writer.MergeTriples(ctx, bond.ID, []message.Triple{{
+	_, err := writer.Reconcile(ctx, projectioncontract.CompanionBondHint, bond.ID, []message.Triple{{
 		Subject: bond.ID, Predicate: vocabulary.CompanionBondHintLevel.String(), Object: string(vocabulary.HintLevelNudge),
 		Source: "companion-hint-ladder", Timestamp: time.Now().UTC(), Confidence: 1, Context: bond.ID,
 	}})
@@ -391,8 +392,8 @@ func (a *Authority) referentError(kind, id string, err error) error {
 }
 
 func requireStateKind(state *graph.EntityState, want vocabulary.EntityKind) error {
-	if state == nil || state.IsStub() {
-		return integrity("%s referent is missing or a stub", want)
+	if state == nil {
+		return integrity("%s referent is missing", want)
 	}
 	wantMessage := (&payload.WorldEntity{}).Schema()
 	if state.MessageType != wantMessage {

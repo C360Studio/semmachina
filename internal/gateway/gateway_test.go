@@ -354,60 +354,12 @@ func TestAuthenticate_RefusesACredentialThisWorldDoesNotKnow(t *testing.T) {
 
 // "player_id is a graph entity" is a READ, not a naming convention.
 func TestAuthenticate_RefusesAPlayerThatIsNotARealEntity(t *testing.T) {
-	tests := []struct {
-		name     string
-		sabotage func(*fakeStore)
-	}{
-		{
-			name:     "the player was never imported",
-			sabotage: func(s *fakeStore) { delete(s.entities, testPlayerID) },
-		},
-		{
-			name: "the player is only a referential stub",
-			sabotage: func(s *fakeStore) {
-				s.entities[testPlayerID] = stubEntity(testPlayerID)
-			},
-		},
-	}
+	h := newHarness(t)
+	delete(h.store.entities, testPlayerID)
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			h := newHarness(t)
-			test.sabotage(h.store)
-
-			_, err := h.gateway.Authenticate(t.Context(), testCredential, conn(testConnID))
-			if !errors.Is(err, gateway.ErrUnauthenticated) {
-				t.Fatalf("authentication produced %v, want ErrUnauthenticated", err)
-			}
-		})
-	}
-}
-
-// Anti-vacuity for the stub case above: the fixture the test calls "a stub" must
-// actually read as one, or the refusal could be coming from anywhere.
-func TestAuthenticate_TheStubFixtureIsReallyAStub(t *testing.T) {
-	if !stubEntity(testPlayerID).IsStub() {
-		t.Fatal("the fixture the stub test uses does not read as a referential stub, so that test proves nothing")
-	}
-	if newFakeStore().entities[testPlayerID].IsStub() {
-		t.Fatal("the healthy player fixture reads as a stub, so the refusal above would fire for any player")
-	}
-}
-
-// stubEntity is what graph-ingest materializes at a referenced-but-not-yet-born
-// id. IsStub keys on the ENVELOPE — the marker triple persists after real birth
-// — so a fixture that carried only the marker would not be a stub at all.
-func stubEntity(id string) *graph.EntityState {
-	return &graph.EntityState{
-		ID:          id,
-		MessageType: graph.StubMessageType,
-		Triples: []message.Triple{{
-			Subject:   id,
-			Predicate: graph.PredStubMarker,
-			Object:    true,
-			Source:    "graph-ingest",
-			Timestamp: testTime,
-		}},
+	_, err := h.gateway.Authenticate(t.Context(), testCredential, conn(testConnID))
+	if !errors.Is(err, gateway.ErrUnauthenticated) {
+		t.Fatalf("authentication produced %v, want ErrUnauthenticated", err)
 	}
 }
 

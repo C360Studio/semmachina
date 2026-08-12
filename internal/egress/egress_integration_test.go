@@ -1,3 +1,5 @@
+//go:build integration
+
 package egress_test
 
 import (
@@ -13,7 +15,6 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
-	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/nats-io/nats.go/jetstream"
 
@@ -26,11 +27,13 @@ import (
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
 	"github.com/c360studio/semmachina/internal/persona"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/rulepack"
 	"github.com/c360studio/semmachina/internal/stage"
 	"github.com/c360studio/semmachina/internal/testinfra"
 	"github.com/c360studio/semmachina/internal/turn"
 	"github.com/c360studio/semmachina/internal/vocabulary"
+	"github.com/c360studio/semmachina/internal/world"
 )
 
 // Targeted delivery is a claim about a real broker, a real graph and a real
@@ -220,22 +223,32 @@ func (w *egressWorld) seedWorld(t *testing.T) {
 func (w *egressWorld) createEntity(t *testing.T, id string, facts map[string]any) {
 	t.Helper()
 	at := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
-	triples := make([]message.Triple, 0, len(facts))
+	kind, ok := facts[vocabulary.WorldEntityKind.String()].(string)
+	if !ok {
+		t.Fatalf("create %s requires a world entity kind", id)
+	}
+	worldFacts := make([]payload.WorldFact, 0, len(facts)-1)
 	for predicate, object := range facts {
-		triples = append(triples, message.Triple{
-			Subject: id, Predicate: predicate, Object: object,
-			Source: "test", Timestamp: at, Confidence: 1.0,
-		})
+		if predicate != vocabulary.WorldEntityKind.String() {
+			worldFacts = append(worldFacts, payload.WorldFact{Predicate: vocabulary.Predicate(predicate), Object: object,
+				Reference: isEntityReference(object)})
+		}
 	}
-	if _, err := w.graph.CreateEntity(t.Context(), &graph.EntityState{
-		ID: id,
-		MessageType: message.Type{
-			Domain: payload.Domain, Category: payload.CategoryWorldEntity, Version: payload.SchemaVersion,
-		},
-		Version: 1, UpdatedAt: at, Triples: triples,
-	}); err != nil {
-		t.Fatalf("create %s: %v", id, err)
+	parts := strings.Split(id, ".")
+	entity := &payload.WorldEntity{ID: id, Kind: vocabulary.EntityKind(kind),
+		Template: payload.TemplateRef{ID: parts[3], Version: "test", LocalID: parts[5]}, Facts: worldFacts, RecordedAt: at}
+	wire, err := json.Marshal(message.NewBaseMessage(entity.Schema(), entity, "test", message.WithTime(at)))
+	if err != nil {
+		t.Fatalf("encode %s: %v", id, err)
 	}
+	if _, err := w.harness.Client.PublishToStreamWithAck(t.Context(), world.DefaultImportSubject, wire); err != nil {
+		t.Fatalf("publish %s: %v", id, err)
+	}
+}
+
+func isEntityReference(object any) bool {
+	value, ok := object.(string)
+	return ok && message.IsValidEntityID(value)
 }
 
 func (w *egressWorld) buildStages(t *testing.T, instantiation campaign.Instantiation) {
@@ -428,7 +441,7 @@ func (w *egressWorld) resolvedTurn(
 	if err != nil {
 		t.Fatalf("project no-active-bond companion stage: %v", err)
 	}
-	if _, err := w.graph.MergeTriples(t.Context(), entityID, companionTriples); err != nil {
+	if _, err := w.graph.Reconcile(t.Context(), projectioncontract.TurnCompanionResult, entityID, companionTriples); err != nil {
 		t.Fatalf("record no-active-bond companion stage: %v", err)
 	}
 	w.advance(t, turnID, entityID, vocabulary.PhaseNarrating)

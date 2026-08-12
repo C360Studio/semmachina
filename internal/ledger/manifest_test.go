@@ -273,15 +273,6 @@ func TestCompose_RefusesAnIncoherentTurnRecord(t *testing.T) {
 			wantErr: "appending lane",
 		},
 		{
-			name: "a referential stub",
-			build: func() *graph.EntityState {
-				state := completedTurn().build()
-				state.MessageType = graph.StubMessageType
-				return state
-			},
-			wantErr: "referential stub",
-		},
-		{
 			name: "no action reference",
 			build: func() *graph.EntityState {
 				b := completedTurn()

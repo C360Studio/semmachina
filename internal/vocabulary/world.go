@@ -291,6 +291,24 @@ func WorldFactPredicates() []Predicate {
 	return out
 }
 
+// EffectWritablePredicateStrings returns the complete predicate group an
+// effect reconciliation may replace. The group is complete so an empty desired
+// set clears a predicate without affecting facts outside effect authority.
+func EffectWritablePredicateStrings() []string {
+	out := make([]string, 0)
+	for _, predicate := range allPredicates {
+		if _, attribute := AttributeForPredicate(predicate); attribute ||
+			predicate == CharacterStatusCurrent || predicate == WorldLocationCurrent {
+			out = append(out, predicate.String())
+			continue
+		}
+		if _, relation := RelationForPredicate(predicate); relation {
+			out = append(out, predicate.String())
+		}
+	}
+	return out
+}
+
 // AllowsSubjectKind reports whether an entity of kind k may carry p.
 func AllowsSubjectKind(p Predicate, k EntityKind) bool {
 	kinds, ok := worldFactSubjectKinds[p]

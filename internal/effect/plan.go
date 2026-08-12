@@ -11,6 +11,7 @@ import (
 
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -47,8 +48,8 @@ type entityView struct {
 // triplesFor returns every triple this entity records for a predicate.
 //
 // The whole triple, not just its object, because a multi-valued write has to
-// republish siblings it never intended to change (the merge lane replaces the
-// predicate's whole set) and graph.MergeTriples stores what it is handed
+// republish siblings it never intended to change (the reconcile group replaces the
+// predicate's whole set) and reconciliation stores the desired triples
 // verbatim. Carrying only the object would restamp every sibling with this
 // turn's provenance — the answer to "when did Rook pick up the crowbar?" would
 // become the turn he picked up the rations.
@@ -80,11 +81,10 @@ func newResolver(store Store) *resolver {
 // view resolves an entity an intent names, refusing anything an effect must not
 // be committed against.
 //
-// A referential stub is the trap worth naming: graph-ingest materializes one the
-// moment another entity references an ID, so the ID resolves, the read succeeds,
-// and the entity carries none of its own facts. Committing against it would
-// write real state onto something that was never born, and the stub MARKER
-// triple persists after real birth — so only the envelope answers the question.
+// In beta.160 a relationship target without a birth record remains missing.
+// Committing against that absent authority entry would create state on an
+// entity the world never declared, so ErrEntityNotFound is classified before
+// the entity's kind or requested changes are considered.
 func (r *resolver) view(ctx context.Context, id string) (entityView, *violation) {
 	if view, ok := r.seen[id]; ok {
 		return view, nil
@@ -100,12 +100,6 @@ func (r *resolver) view(ctx context.Context, id string) (entityView, *violation)
 			err:  fmt.Errorf("read entity %s: %w", id, err),
 		}
 	}
-	if state.IsStub() {
-		return entityView{}, missing(
-			"entity %s exists only as a referential stub: it carries none of its own facts, "+
-				"so it has been referenced but never born", id)
-	}
-
 	kind, kindErr := kindOf(state)
 	if kindErr != nil {
 		return entityView{}, kindErr
@@ -167,7 +161,7 @@ type objectWrite struct {
 // predicateWrite is the complete desired value set for one predicate on one
 // entity.
 //
-// "Complete" is the load-bearing word. The merge lane replaces a predicate's
+// "Complete" is the load-bearing word. Reconciliation replaces a predicate's
 // whole value set, so a multi-valued predicate must travel as every value it
 // should end up holding — the current ones plus or minus this batch's change —
 // and a writer that sent only the new value would delete the siblings and be
@@ -184,63 +178,95 @@ type predicateWrite struct {
 }
 
 // targetWrite is one entity's whole write: every predicate this batch touches
-// on it, in first-touch order.
+// on it, in first-touch order. Projection reconciliation is issued separately
+// for each mutable predicate family represented here.
 type targetWrite struct {
 	entityID string
+	resident *graph.EntityState
 	order    []vocabulary.Predicate
 	writes   map[vocabulary.Predicate]*predicateWrite
 }
 
-// triples renders the write, returning the triples to merge and the predicates
-// to clear.
-//
-// An emptied predicate has to be CLEARED rather than merged: the add list
-// replaces a predicate's values with the ones it carries, so carrying none
-// leaves the predicate exactly as it was, and "the last carried item was put
-// down" would commit as "it is still carried" with a success response.
-func (w *targetWrite) triples(source, context string, at time.Time) ([]message.Triple, []string) {
-	var triples []message.Triple
-	var cleared []string
+type projectionWrite struct {
+	target  projectioncontract.Target
+	triples []message.Triple
+}
 
+// projections renders one complete desired set for each touched mutable
+// predicate family. Untouched families are omitted and therefore remain
+// outside this operation's authority. Untouched predicates inside a touched
+// family travel verbatim from the exact read.
+func (w *targetWrite) projections(source, context string, at time.Time) []projectionWrite {
+	touchedByTarget := make(map[projectioncontract.Target]map[string]bool)
+	var targets []projectioncontract.Target
 	for _, predicate := range w.order {
-		write := w.writes[predicate]
-		if len(write.objects) == 0 {
-			cleared = append(cleared, predicate.String())
-			continue
+		target, ok := projectioncontract.EffectTargetForPredicate(predicate)
+		if !ok {
+			continue // guarded earlier by validateEffectPredicate
 		}
-		for _, value := range write.objects {
-			// A sibling this batch never touched travels VERBATIM — including
-			// its subject. The merge lane forces it back onto the wire; that is
-			// a lane constraint, not a licence to restamp somebody else's fact
-			// with this turn's provenance. Verbatim also keeps it honest: a
-			// resident triple whose subject is not this entity is refused by the
-			// merge client's foreign-subject guard rather than laundered onto
-			// this entity under the applier's own name.
-			if value.resident != nil {
-				triples = append(triples, *value.resident)
+		if touchedByTarget[target] == nil {
+			touchedByTarget[target] = make(map[string]bool)
+			targets = append(targets, target)
+		}
+		touchedByTarget[target][predicate.String()] = true
+	}
+
+	projected := make([]projectionWrite, 0, len(targets))
+	for _, target := range targets {
+		write := projectionWrite{target: target}
+		allowed := make(map[string]bool)
+		for _, predicate := range projectioncontract.Predicates(target) {
+			allowed[predicate] = true
+		}
+		if w.resident != nil {
+			for _, triple := range w.resident.Triples {
+				if allowed[triple.Predicate] && !touchedByTarget[target][triple.Predicate] {
+					write.triples = append(write.triples, triple)
+				}
+			}
+		}
+
+		for _, predicate := range w.order {
+			predicateTarget, _ := projectioncontract.EffectTargetForPredicate(predicate)
+			if predicateTarget != target {
 				continue
 			}
-			datatype := ""
-			if write.reference {
-				// Marks the object as an entity ID so the graph's contract
-				// validator checks it as one instead of guessing from its shape.
-				datatype = message.EntityReferenceDatatype
+			predicateWrite := w.writes[predicate]
+			for _, value := range predicateWrite.objects {
+				// A sibling this batch never touched travels VERBATIM — including
+				// its subject. Reconciliation forces it back onto the wire; that is
+				// a lane constraint, not a licence to restamp somebody else's fact
+				// with this turn's provenance. Verbatim also keeps it honest: a
+				// resident triple whose subject is not this entity is refused by the
+				// merge client's foreign-subject guard rather than laundered onto
+				// this entity under the applier's own name.
+				if value.resident != nil {
+					write.triples = append(write.triples, *value.resident)
+					continue
+				}
+				datatype := ""
+				if predicateWrite.reference {
+					// Marks the object as an entity ID so the graph's contract
+					// validator checks it as one instead of guessing from its shape.
+					datatype = message.EntityReferenceDatatype
+				}
+				write.triples = append(write.triples, message.Triple{
+					Subject:   w.entityID,
+					Predicate: predicate.String(),
+					Object:    value.object,
+					Source:    source,
+					Timestamp: at,
+					// A committed effect is a fact the engine recorded as decided,
+					// never an inference about the world.
+					Confidence: 1.0,
+					Context:    context,
+					Datatype:   datatype,
+				})
 			}
-			triples = append(triples, message.Triple{
-				Subject:   w.entityID,
-				Predicate: predicate.String(),
-				Object:    value.object,
-				Source:    source,
-				Timestamp: at,
-				// A committed effect is a fact the engine recorded as decided,
-				// never an inference about the world.
-				Confidence: 1.0,
-				Context:    context,
-				Datatype:   datatype,
-			})
 		}
+		projected = append(projected, write)
 	}
-	return triples, cleared
+	return projected
 }
 
 // plan is the validated, ordered set of per-entity writes for one batch.
@@ -373,7 +399,7 @@ func checkBounds(specs vocabulary.AttributeSpecSet, predicate vocabulary.Predica
 // It is the object-side twin of the subject-kind rule, and it matters for the
 // same reason: nothing in `world.location.current` says a character is moved
 // into a scene rather than into a crowbar. The existence check earns its keep
-// separately — the merge lane does not materialize a referential stub for a
+// separately — reconciliation does not materialize a referential stub for a
 // relationship target, so an unchecked reference does not create the entity it
 // names, it just points at nothing forever.
 //
@@ -424,6 +450,9 @@ func foldValue(
 	object any,
 	effectType vocabulary.EffectType,
 ) *violation {
+	if write.resident == nil {
+		write.resident = target.state.Clone()
+	}
 	entry, violated := write.entryFor(target, predicate)
 	if violated != nil {
 		return violated
@@ -463,7 +492,7 @@ func foldValue(
 // the entity's CURRENT triples so the published set is complete.
 //
 // It seeds whole triples rather than bare objects because a seeded value is a
-// fact this batch is not changing: republishing it is the merge lane's demand,
+// fact this batch is not changing: republishing it is the reconcile group's demand,
 // and it must arrive with the provenance it already had.
 func (w *targetWrite) entryFor(target entityView, predicate vocabulary.Predicate) (*predicateWrite, *violation) {
 	if existing, ok := w.writes[predicate]; ok {

@@ -13,13 +13,14 @@ import (
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
 // ProgressGraph is the authoritative state surface used by case progress.
 type ProgressGraph interface {
 	GetEntity(context.Context, string) (*graph.EntityState, error)
-	MergeTriples(context.Context, string, []message.Triple, ...graphio.MergeOption) (*graph.EntityState, error)
+	Reconcile(context.Context, projectioncontract.Target, string, []message.Triple) (*graph.EntityState, error)
 }
 
 // ProgressArtifacts is the private structured-artifact surface.
@@ -103,7 +104,7 @@ func (p *Progressor) Process(ctx context.Context, turnID, turnEntityID string) (
 		}
 		return content.Ref{}, fmt.Errorf("read progress turn %s: %w", turnEntityID, err)
 	}
-	if state == nil || state.ID != turnEntityID || state.IsStub() {
+	if state == nil || state.ID != turnEntityID {
 		return content.Ref{}, &MissingTriggeredTurnError{TurnEntityID: turnEntityID,
 			Err: graphio.ErrEntityNotFound}
 	}
@@ -199,7 +200,7 @@ func (p *Progressor) Process(ctx context.Context, turnID, turnEntityID string) (
 		Subject: turnEntityID, Predicate: vocabulary.TurnCaseProgressRef.String(), Object: ref.String(),
 		Source: ReceiptSource, Timestamp: p.now().UTC(), Confidence: 1,
 	}
-	if _, err := p.graph.MergeTriples(ctx, turnEntityID, []message.Triple{triple}); err != nil {
+	if _, err := p.graph.Reconcile(ctx, projectioncontract.TurnCaseProgress, turnEntityID, []message.Triple{triple}); err != nil {
 		return content.Ref{}, fmt.Errorf("land case progress reference last: %w", err)
 	}
 	return ref, nil
@@ -228,8 +229,8 @@ func (p *Progressor) derive(
 			}
 			return nil, nil, fmt.Errorf("read case victim for progress: %w", err)
 		}
-		if caseState == nil || caseState.ID != decision.CaseID || caseState.IsStub() {
-			return nil, nil, permanentProgressf("case %s is missing, foreign, or a stub", decision.CaseID)
+		if caseState == nil || caseState.ID != decision.CaseID {
+			return nil, nil, permanentProgressf("case %s is missing or foreign", decision.CaseID)
 		}
 		victims, err := objects(caseState, vocabulary.CaseMemberVictim)
 		if err != nil {

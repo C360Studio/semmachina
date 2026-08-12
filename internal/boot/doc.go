@@ -67,22 +67,18 @@
 //     endpoints support tool calling. An undeclared capability resolves — to the
 //     registry's default model — so "it started" says nothing about which model
 //     the schema-bearing persona is on.
-//   - The rule processor reported a lifecycle status stamped by THIS boot. See
-//     checkRuleProcessorStarted: the obvious probe (Health) is worthless because
-//     the processor reports Healthy from construction, and the status key
-//     survives a restart, so freshness rather than presence is the check.
+//   - ComponentManager reports the rule generation started and a fresh
+//     GRAPH_STATUS/rule envelope reports ready with bootstrap complete.
 //   - The import-completion marker, re-read from the graph immediately before the
 //     two steps that let play begin.
-//   - Every planned entity is queryable AND non-stub, and every membership edge
+//   - Every planned entity is queryable, and every membership edge
 //     the plan declares is readable from the reverse-edge index.
 //
 // NOT CHECKED, and why:
 //
-//   - That the rule processor's bootstrap replay has DRAINED. Upstream exposes no
-//     completion signal for it, and its timing relative to Start returning is a
-//     race measured both ways. The pass covers this itself by waiting for the work
-//     queues to stop moving (resume.WorkQueues.Settle) — observation instead of a
-//     sleep — which is why the composition only has to guarantee "started".
+//   - That no new rule output lands after the bootstrap-complete envelope. The
+//     pass covers concurrent queue movement by waiting for the work queues to
+//     settle (resume.WorkQueues.Settle), using observation instead of a sleep.
 //   - That no player action is accepted during the pass. There is no way to ask
 //     the broker "is anybody about to bind this durable?", so it is structural: the
 //     intake consumer is not constructed until several steps later, and the

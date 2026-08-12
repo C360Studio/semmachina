@@ -18,6 +18,7 @@ import (
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/turn"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
@@ -70,10 +71,10 @@ type journal struct{ entries []string }
 
 func (j *journal) add(entry string) { j.entries = append(j.entries, entry) }
 
-// fakeStore is an in-memory graph with the two lanes that matter kept honest:
-// create is atomic create-or-fail, and merge REPLACES by (subject, predicate).
+// fakeStore is an in-memory graph with the two operations that matter kept honest:
+// create is atomic create-or-fail, and reconcile REPLACES a complete predicate group.
 // It exists for the failure paths a real broker will not produce on demand — a
-// stub at a turn's key, a create that reports degraded, a transport error — and
+// conflicting create and a transport error — and
 // every property that depends on the real lanes is proven against real
 // graph-ingest in turn_integration_test.go instead.
 type fakeStore struct {
@@ -83,7 +84,6 @@ type fakeStore struct {
 	createErr error
 	getErr    error
 	mergeErr  error
-	degraded  bool
 
 	creates int
 	merges  int
@@ -98,8 +98,8 @@ func (s *fakeStore) mergesInto(entityID string) int { return s.mergesBySubject[e
 
 // newFakeStore starts with the PLAYER entity already in the graph, because a
 // world always has one: the importer materializes players before play starts,
-// and the gateway refuses to mint a session for a player that is not a real,
-// non-stub entity. A fake with no player would make the recorder's pointer write
+// and the gateway refuses to mint a session for a player absent from authority.
+// A fake with no player would make the recorder's pointer write
 // fail on every accept for a reason production cannot produce.
 func newFakeStore() *fakeStore {
 	store := &fakeStore{
@@ -122,9 +122,12 @@ func newFakeStore() *fakeStore {
 	return store
 }
 
-func (s *fakeStore) CreateEntity(_ context.Context, entity *graph.EntityState) (graphio.CreateResult, error) {
+func (s *fakeStore) CreateEntity(_ context.Context, contract string, entity *graph.EntityState) (graphio.CreateResult, error) {
 	s.creates++
 	s.journal.add("create " + entity.ID)
+	if contract != projectioncontract.TurnBirthContract {
+		return graphio.CreateResult{}, fmt.Errorf("create uses contract %q, want %q", contract, projectioncontract.TurnBirthContract)
+	}
 	if s.createErr != nil {
 		return graphio.CreateResult{}, s.createErr
 	}
@@ -133,9 +136,6 @@ func (s *fakeStore) CreateEntity(_ context.Context, entity *graph.EntityState) (
 	}
 	stored := clone(entity)
 	s.entities[entity.ID] = stored
-	if s.degraded {
-		return graphio.CreateResult{Degraded: true, DegradedReason: "read-back failed"}, nil
-	}
 	return graphio.CreateResult{Entity: clone(stored), Revision: uint64(s.creates)}, nil
 }
 
@@ -150,17 +150,20 @@ func (s *fakeStore) GetEntity(_ context.Context, id string) (*graph.EntityState,
 	return clone(stored), nil
 }
 
-func (s *fakeStore) MergeTriples(
+func (s *fakeStore) Reconcile(
 	_ context.Context,
+	target projectioncontract.Target,
 	entityID string,
 	triples []message.Triple,
-	_ ...graphio.MergeOption,
 ) (*graph.EntityState, error) {
 	s.merges++
 	s.mergesBySubject[entityID]++
 	s.journal.add("merge " + entityID)
 	if s.mergeErr != nil {
 		return nil, s.mergeErr
+	}
+	if target.Contract == "" || target.Group == "" {
+		return nil, errors.New("reconcile requires a contract and group")
 	}
 	stored, ok := s.entities[entityID]
 	if !ok {
@@ -212,11 +215,11 @@ func clone(entity *graph.EntityState) *graph.EntityState {
 // against the shape that actually produces it.
 type appendingStore struct{ *fakeStore }
 
-func (s *appendingStore) MergeTriples(
+func (s *appendingStore) Reconcile(
 	_ context.Context,
+	_ projectioncontract.Target,
 	entityID string,
 	triples []message.Triple,
-	_ ...graphio.MergeOption,
 ) (*graph.EntityState, error) {
 	s.merges++
 	s.mergesBySubject[entityID]++
@@ -364,8 +367,8 @@ func TestAccept_CreatesTheTurnInAcceptedBeforeReturning(t *testing.T) {
 	if got := objectsFor(stored, vocabulary.TurnActionScene); len(got) != 1 || got[0] != testSceneID {
 		t.Fatalf("the created turn records scene %v", got)
 	}
-	if stored.IsStub() {
-		t.Fatal("the created turn reads as a referential stub; every guard that asks about it would refuse")
+	if stored.MessageType != turn.EntityMessageType {
+		t.Fatalf("turn message type = %v, want %v", stored.MessageType, turn.EntityMessageType)
 	}
 }
 
@@ -557,22 +560,6 @@ func TestAccept_ADuplicateReportsThePhaseTheTurnHasReached(t *testing.T) {
 	}
 }
 
-// A committed write whose read-back failed is a SUCCESS. Retrying it would come
-// back as entity_already_exists, and a caller reading that as "somebody else got
-// here first" would draw exactly the wrong conclusion about a turn it just made.
-func TestAccept_TreatsADegradedCreateAsCreated(t *testing.T) {
-	store := newFakeStore()
-	store.degraded = true
-
-	acceptance, err := newRecorder(t, store).Accept(t.Context(), testAction())
-	if err != nil {
-		t.Fatalf("Accept: %v", err)
-	}
-	if !acceptance.Created {
-		t.Fatal("a degraded create was reported as a duplicate")
-	}
-}
-
 func TestAccept_RejectsAnActionThatCannotBecomeATurn(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -634,7 +621,7 @@ func TestCurrent_RefusesEveryUnreadableTurnRecord(t *testing.T) {
 		setup func(*fakeStore)
 	}{
 		{
-			name: "a referential stub",
+			name: "a zero-envelope turn",
 			setup: func(s *fakeStore) {
 				s.entities[testTurnEntityID] = &graph.EntityState{ID: testTurnEntityID}
 			},

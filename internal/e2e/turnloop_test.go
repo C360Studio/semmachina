@@ -1,3 +1,5 @@
+//go:build e2e
+
 package e2e_test
 
 import (
@@ -110,6 +112,7 @@ func TestE2E_ANoRollTurnResolvesEndToEnd(t *testing.T) {
 
 	requireProviderShape(t, w)
 	requirePromptsCarriedTheAction(t, w, action, vocabulary.BandAuto)
+	w.requireTrajectoryEvidenceStored(t)
 
 	// The player was told, on the socket they were still holding.
 	delivery := player.await(t, playersocket.FrameTurnDelivery, turnBudget).Delivery

@@ -1,3 +1,5 @@
+//go:build integration
+
 package ledger_test
 
 import (
@@ -12,6 +14,7 @@ import (
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/ledger"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/rulepack"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
@@ -304,7 +307,7 @@ func TestLedger_RefusesToArchiveASecondDifferentAccountOfOneTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store a second narration: %v", err)
 	}
-	if _, err := world.graph.MergeTriples(t.Context(), entityID, []message.Triple{{
+	if _, err := world.graph.Reconcile(t.Context(), projectioncontract.TurnEffectMarker, entityID, []message.Triple{{
 		Subject:   entityID,
 		Predicate: vocabulary.TurnEffectsRef.String(),
 		Object:    ref.String(),

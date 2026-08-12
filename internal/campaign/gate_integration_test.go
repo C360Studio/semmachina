@@ -1,15 +1,12 @@
+//go:build integration
+
 package campaign_test
 
 import (
 	"errors"
 	"os"
-	"strings"
 	"sync"
 	"testing"
-	"time"
-
-	"github.com/c360studio/semstreams/graph"
-	"github.com/c360studio/semstreams/message"
 
 	"github.com/c360studio/semmachina/internal/campaign"
 	"github.com/c360studio/semmachina/internal/graphio"
@@ -59,8 +56,8 @@ func TestIntegration_ClaimCreatesTheCampaignEntityCarryingItsSeed(t *testing.T) 
 		t.Fatal("a fresh campaign was created with no seed")
 	}
 
-	// AwaitEntity refuses a referential stub, so this also proves the campaign
-	// entity was born with a real envelope — the signal boot-readiness keys on.
+	// AwaitEntity proves the campaign was born with its complete authority
+	// envelope rather than merely claimed in process memory.
 	state := harness.AwaitEntity(t, claim.CampaignID)
 	stored := testinfra.ObjectsFor(state, vocabulary.CampaignSeedValue.String())
 	if len(stored) != 1 {
@@ -175,84 +172,11 @@ func TestIntegration_ConcurrentClaimsHaveExactlyOneWinnerAndOneSeed(t *testing.T
 	}
 }
 
-// F13 argues the campaign entity is immune to the referential-stub problem
-// because nothing references a campaign today. "Today" is doing real work in
-// that sentence: the moment some entity carries an entity reference to the
-// campaign's ID, graph-ingest mints a STUB at that key, and the gate's create
-// then loses to a resident that holds no seed.
-//
 // The failure that must not happen is the quiet one — reading "the key is
 // taken" as "the world is already instantiated" and skipping the import of a
 // world that was never imported, then rolling dice from a seed nobody minted.
-// So the guard is proven against real infrastructure rather than assumed from
-// the F13 argument.
-//
-// The referencing predicate is immaterial; what makes graph-ingest mint the
-// stub is an object that resolves as an entity reference.
-func TestIntegration_ClaimRefusesACampaignKeyOccupiedByAReferentialStub(t *testing.T) {
-	gate, harness := realGate(t, "gateworld6")
-
-	store, err := graphio.NewStore(harness.Client)
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
-
-	const referrer = "c360.semmachina.gateworld6.starter.character.rook"
-	stamp := time.Date(2026, 7, 28, 9, 15, 30, 0, time.UTC)
-	if _, err := store.CreateEntity(t.Context(), &graph.EntityState{
-		ID:          referrer,
-		MessageType: campaign.EntityMessageType,
-		Version:     1,
-		UpdatedAt:   stamp,
-		Triples: []message.Triple{{
-			Subject:    referrer,
-			Predicate:  vocabulary.WorldRelationKnows.String(),
-			Object:     gate.CampaignID(),
-			Datatype:   message.EntityReferenceDatatype,
-			Source:     "stub-collision-test",
-			Timestamp:  stamp,
-			Confidence: 1.0,
-		}},
-	}); err != nil {
-		t.Fatalf("create the referring entity: %v", err)
-	}
-
-	// Confirm the premise: the campaign key is occupied by a stub. Without
-	// this the test could pass because nothing was ever there.
-	//
-	// A failed premise FAILS rather than skips, for the two reasons testinfra's
-	// opt-out policy is written around. `go test` discards a passing package's
-	// output, so a skip here is invisible without -v: "the guard is covered" and
-	// "the guard was never exercised" would look identical. And the premise not
-	// holding is not a local inconvenience — it means graph-ingest stopped
-	// minting referential stubs, an upstream behavior change that invalidates
-	// F11's reasoning and belongs in front of whoever is reading the build.
-	var occupied bool
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		state, err := harness.QueryEntity(t.Context(), gate.CampaignID())
-		if err == nil && state.IsStub() {
-			occupied = true
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if !occupied {
-		t.Fatal("graph-ingest did not mint a referential stub at the campaign key; the premise no longer holds")
-	}
-
-	claim, err := gate.Claim(t.Context(), testExperience)
-	if err == nil {
-		t.Fatalf("the gate reported an instantiation decision over a factless stub: %+v", claim)
-	}
-	if !strings.Contains(err.Error(), "referential stub") {
-		t.Fatalf("failure reason %q does not name the stub", err.Error())
-	}
-	if claim.Fresh || !claim.Seed.IsZero() {
-		t.Fatalf("a refused claim returned usable state: %+v", claim)
-	}
-}
-
+// Beta.160 leaves an absent campaign absent; the guard is proven against real
+// infrastructure so the missing-authority classification cannot be faked.
 func TestIntegration_LoadSeedReportsAnAbsentCampaignRatherThanMintingOne(t *testing.T) {
 	gate, _ := realGate(t, "gateworld4")
 

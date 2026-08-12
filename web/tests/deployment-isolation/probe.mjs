@@ -10,7 +10,7 @@ const origin = `https://${runtimeHost}:4181`;
 const agent = new https.Agent({ rejectUnauthorized: false });
 const EXACT_GRAPHQL_BODY = JSON.stringify({
 	query:
-		'query SemMachinaIsolationProbe { entitiesByPrefix(prefix: "c360.semmachina.isolation.isolation-world.location", limit: 1) { id } }',
+		'query SemMachinaIsolationProbe { entitiesByPrefix(prefix: "c360.semmachina.isolation.isolation-world.location", limit: 1) { entities { id } next_cursor } }',
 	variables: {}
 });
 

@@ -2,24 +2,18 @@ package boot
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"time"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	sspersona "github.com/c360studio/semstreams/persona"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
-	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
-	agenticmodel "github.com/c360studio/semstreams/processor/agentic-model"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
-	graphindex "github.com/c360studio/semstreams/processor/graph-index"
-	graphingest "github.com/c360studio/semstreams/processor/graph-ingest"
-	"github.com/c360studio/semstreams/processor/rule"
+	"github.com/c360studio/semstreams/service"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semmachina/internal/accusation"
@@ -104,20 +98,27 @@ type streamReader interface {
 	GetStream(ctx context.Context, name string) (jetstream.Stream, error)
 }
 
+// clientShutdown is the shared-client teardown surface Stop owns. Keeping it
+// narrow makes shutdown ordering testable without constructing a live broker.
+type clientShutdown interface {
+	StopAllConsumers()
+	Close(context.Context) error
+}
+
 // Engine is one world instance: every component, in one process, started in an
 // order whose violations are refusals rather than lost turns.
 type Engine struct {
 	cfg Config
 
-	client    *natsclient.Client
-	graph     *graphio.Store
-	content   *content.Store
-	backend   interface{ Close() error }
-	recorder  *turn.Recorder
-	gate      *campaign.Gate
-	importer  *world.Importer
-	results   *egress.Results
-	lifecycle *lifecycle.Manager
+	client         *natsclient.Client
+	shutdownClient clientShutdown
+	graph          *graphio.Store
+	content        *content.Store
+	recorder       *turn.Recorder
+	gate           *campaign.Gate
+	importer       *world.Importer
+	results        *egress.Results
+	lifecycle      *lifecycle.Manager
 
 	pkg       *world.Package
 	plan      *world.Plan
@@ -133,22 +134,26 @@ type Engine struct {
 	gatewaySv        *gateway.Gateway
 	listener         net.Listener
 
-	// components are stopped in reverse start order.
-	components []namedComponent
-	// ruleStatusCleared records that this boot DELETED the rule processor's
-	// lifecycle status before starting it. That deletion is what makes the
-	// status's reappearance a fact about this boot rather than one satisfied by
-	// the previous boot's leftover key — and unlike a timestamp comparison, it
-	// cannot be forged by a clock that stepped backwards.
-	ruleStatusCleared bool
+	// ComponentManager barriers are stopped in reverse activation order. The
+	// Sequence remains the composition root and owns ordering between managers.
+	managers           []namedManager
+	graphManager       *service.ComponentManager
+	agenticManager     *service.ComponentManager
+	ruleManager        *service.ComponentManager
+	ruleStatusBaseline uint64
 
 	seq    *Sequence
 	served chan error
 }
 
-type namedComponent struct {
-	name      string
-	component component.LifecycleComponent
+type namedManager struct {
+	name    string
+	manager componentManagerLifecycle
+}
+
+type componentManagerLifecycle interface {
+	Start(context.Context) error
+	Stop(time.Duration) error
 }
 
 // New builds an engine from a validated configuration. It touches nothing.
@@ -185,6 +190,27 @@ func (e *Engine) CampaignID() string {
 	}
 	id, _ := e.campaignIdentity().EntityID()
 	return id
+}
+
+// GetFailureDetail resolves one diagnostic artifact through the
+// ComponentManager-owned content provider. It lets read surfaces borrow the
+// engine's authoritative store without creating or closing a second backend.
+func (e *Engine) GetFailureDetail(ctx context.Context, ref content.Ref) (*content.FailureDetail, error) {
+	if e.content == nil {
+		return nil, errors.New("content provider is not prepared")
+	}
+	return e.content.GetFailureDetail(ctx, ref)
+}
+
+// BorrowContentStore returns the live read/write facade over the
+// ComponentManager-owned objectstore provider. The facade borrows the current
+// provider generation on every operation; callers must not invent a second
+// physical-bucket backend to resolve logical obj://objectstore references.
+func (e *Engine) BorrowContentStore() (*content.Store, error) {
+	if e.content == nil {
+		return nil, errors.New("content provider is not prepared")
+	}
+	return e.content, nil
 }
 
 // Addr returns the address the player socket is listening on, or "" before the
@@ -282,46 +308,42 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 }
 
-// Stop shuts the engine down, in reverse start order.
 // Stop shuts the engine down, in reverse start order, and is safe to call twice.
 //
 // The order is the mirror of Start's and matters for the same reason: the socket
-// stops taking work first, then the components stop — over the connection they
-// still need, which is why the consumers this engine bound directly are stopped
-// AFTER them and the client is closed last. Closing the connection first would
-// turn every component's orderly shutdown into a transport error.
+// stops taking work first, then ComponentManager barriers release the consumers
+// they own in reverse activation order. Only then may the shared client's global
+// consumer stop catch bindings the engine owns directly; running it earlier
+// invalidates subscriptions while component teardown is still using them. The
+// transport remains open until both ownership layers have stopped.
 func (e *Engine) Stop() {
 	if e.listener != nil {
 		_ = e.listener.Close()
 		e.listener = nil
 	}
 	e.stopComponents()
-	if e.client != nil {
+	if e.shutdownClient != nil {
 		// The consumers this engine bound itself — intake, the stages, the
 		// loop-failure watcher, the egress notifier, the ledger — which no
-		// component's Stop knows about.
-		e.client.StopAllConsumers()
-	}
-	if e.backend != nil {
-		_ = e.backend.Close()
-		e.backend = nil
-	}
-	if e.client != nil {
+		// component's Stop knows about. Component-owned consumers have already
+		// been released above, while their subscriptions were still valid.
+		e.shutdownClient.StopAllConsumers()
 		ctx, cancel := context.WithTimeout(context.Background(), e.cfg.StopTimeout)
 		defer cancel()
-		_ = e.client.Close(ctx)
+		_ = e.shutdownClient.Close(ctx)
+		e.shutdownClient = nil
 		e.client = nil
 	}
 }
 
 func (e *Engine) stopComponents() {
-	for idx := len(e.components) - 1; idx >= 0; idx-- {
-		entry := e.components[idx]
-		if err := entry.component.Stop(e.cfg.StopTimeout); err != nil {
-			e.log().Warn("a component did not stop cleanly", "component", entry.name, "error", err)
+	for idx := len(e.managers) - 1; idx >= 0; idx-- {
+		entry := e.managers[idx]
+		if err := entry.manager.Stop(e.cfg.StopTimeout); err != nil {
+			e.log().Warn("a component barrier did not stop cleanly", "barrier", entry.name, "error", err)
 		}
 	}
-	e.components = nil
+	e.managers = nil
 }
 
 // steps declares the boot sequence: what runs, in what order, and what each step
@@ -488,6 +510,7 @@ func (e *Engine) connect(ctx context.Context) error {
 		return fmt.Errorf("connect to %s: %w", e.cfg.NATSURL, err)
 	}
 	e.client = client
+	e.shutdownClient = client
 
 	store, err := graphio.NewStore(client)
 	if err != nil {
@@ -495,18 +518,11 @@ func (e *Engine) connect(ctx context.Context) error {
 	}
 	e.graph = store
 
-	backend, err := content.NewObjectStore(ctx, client, content.WithBucket(e.cfg.ContentBucket))
-	if err != nil {
+	if err := e.prepareComponentBarriers(ctx); err != nil {
 		return err
 	}
-	e.backend = backend
-	artifacts, err := content.NewStore(backend)
-	if err != nil {
-		return err
-	}
-	e.content = artifacts
 
-	recorder, err := turn.NewRecorder(store, artifacts, e.turnIdentity())
+	recorder, err := turn.NewRecorder(store, e.content, e.turnIdentity())
 	if err != nil {
 		return err
 	}
@@ -529,60 +545,20 @@ func (e *Engine) connect(ctx context.Context) error {
 // startGraph runs graph-ingest and graph-index in-process.
 //
 // graph-ingest is the SOLE ENTITY_STATES writer, and running it here rather than
-// writing the bucket directly is what makes the predicate contract, the
-// indexing-profile stamp, referential stubs and the newer-wins merge apply to
-// this engine's writes at all. graph-index is the reverse-edge projection the
+// writing the bucket directly is what makes the canonical mutation contract and
+// indexing-profile stamp apply to this engine's writes. graph-index is the reverse-edge projection the
 // context assembler's "who is in this scene" question is answered from.
 func (e *Engine) startGraph(ctx context.Context) error {
-	if err := e.startComponent(ctx, "graph-ingest", graphingest.CreateGraphIngest); err != nil {
-		return err
-	}
-	return e.startComponent(ctx, "graph-index", graphindex.CreateGraphIndex)
-}
-
-type factory func(json.RawMessage, component.Dependencies) (component.Discoverable, error)
-
-// startComponent creates, initialises and starts one framework component through
-// its production factory and lifecycle.
-func (e *Engine) startComponent(ctx context.Context, name string, create factory, cfg ...json.RawMessage) error {
-	var raw json.RawMessage
-	if len(cfg) == 1 {
-		raw = cfg[0]
-	}
-	created, err := create(raw, e.deps())
-	if err != nil {
-		return fmt.Errorf("create %s: %w", name, err)
-	}
-	lifecycle, ok := created.(component.LifecycleComponent)
-	if !ok {
-		return fmt.Errorf("%s is a %T, not a LifecycleComponent", name, created)
-	}
-	if err := lifecycle.Initialize(); err != nil {
-		return fmt.Errorf("initialize %s: %w", name, err)
-	}
-	if err := lifecycle.Start(ctx); err != nil {
-		return fmt.Errorf("start %s: %w", name, err)
-	}
-	e.components = append(e.components, namedComponent{name: name, component: lifecycle})
-	return nil
-}
-
-func (e *Engine) deps() component.Dependencies {
-	return component.Dependencies{
-		NATSClient:       e.client,
-		PayloadRegistry:  e.cfg.Registry,
-		Logger:           e.log(),
-		ModelRegistry:    e.cfg.Models,
-		ToolRegistry:     e.tools,
-		LifecycleManager: e.lifecycle,
-	}
+	return e.startManager(ctx, "graph", e.graphManager)
 }
 
 // attachCaseLifecycle registers the workflow and adds its initial phase to an
 // imported case. Manager.Create is attach-on-existing and returns AlreadyExists
 // on restart, so an existing phase is preserved rather than reset.
 func (e *Engine) attachCaseLifecycle(ctx context.Context) error {
-	e.lifecycle = lifecycle.NewManager(e.client, e.log())
+	if e.lifecycle == nil {
+		return errors.New("attach case lifecycle: lifecycle manager was not prepared")
+	}
 	if err := e.lifecycle.Register(caseflow.Workflow()); err != nil {
 		return fmt.Errorf("register case lifecycle: %w", err)
 	}
@@ -700,111 +676,7 @@ func (e *Engine) ensureActionStream(ctx context.Context) error {
 // off by default and nothing here turns it on; the mode is stated explicitly so
 // enabling it is an edit somebody makes on purpose, next to the reason not to.
 func (e *Engine) startAgenticLoop(ctx context.Context) error {
-	registry := agentictools.NewExecutorRegistry()
-	if err := persona.RegisterTools(registry, e.content, e.graph); err != nil {
-		return err
-	}
-	authority, err := companion.NewAuthority(e.graph)
-	if err != nil {
-		return err
-	}
-	scope, err := e.epistemicScope()
-	if err != nil {
-		return err
-	}
-	assembler, err := scene.NewAssembler(e.graph)
-	if err != nil {
-		return err
-	}
-	projector, err := epistemic.NewProjector(
-		assembler, e.graph, scope, epistemic.WithCompanionBondValidator(authority))
-	if err != nil {
-		return err
-	}
-	companionExecutor, err := companion.NewExecutor(e.content, e.graph, authority, projector)
-	if err != nil {
-		return err
-	}
-	if err := registry.RegisterExecutor(companionExecutor); err != nil {
-		return fmt.Errorf("register the %s tool: %w", persona.CompanionDecisionToolName, err)
-	}
-	e.companionExhaust = companionExecutor
-	e.tools = registry
-
-	// The tool executor, bound before anything can publish a call for it.
-	//
-	// From upstream's defaults, with two positions left EMPTY on purpose and
-	// stated so they read as decisions rather than omissions. ApprovalRequired is
-	// empty because a persona tool routed through the approval path loses the
-	// engine-injected identity (see below), and AllowedTools is empty — which
-	// upstream reads as "allow all" — because the per-TASK allowlist is where this
-	// engine closes the exit vocabulary: each spawn carries exactly one tool, and
-	// a deployment-wide list would be a second, weaker statement of the same rule.
-	tools := agentictools.DefaultConfig()
-	tools.StreamName = stage.TaskStream
-	tools.ApprovalRequired = nil
-	tools.AllowedTools = nil
-	toolsCfg, err := json.Marshal(tools)
-	if err != nil {
-		return fmt.Errorf("encode the agentic-tools configuration: %w", err)
-	}
-	if err := e.startComponent(ctx, "agentic-tools", agentictools.NewComponent, toolsCfg); err != nil {
-		return err
-	}
-
-	// The model bridge, bound before anything can publish a request for it.
-	//
-	// Its defaults are upstream's, with only the stream named: the retry curve, the
-	// per-request timeout and the rate-limit backoff are provider-facing policy this
-	// engine has no better opinion about than the component that owns the client.
-	// The endpoint itself is never named here — it is resolved per request from the
-	// model registry by the capability the persona spec declares, which is what
-	// makes "a live model is a config retarget, never a code change" true.
-	models := agenticmodel.DefaultConfig()
-	models.StreamName = stage.TaskStream
-	modelsCfg, err := json.Marshal(models)
-	if err != nil {
-		return fmt.Errorf("encode the agentic-model configuration: %w", err)
-	}
-	if err := e.startComponent(ctx, "agentic-model", agenticmodel.NewComponent, modelsCfg); err != nil {
-		return err
-	}
-
-	// Built FROM upstream's defaults and overridden field by field, rather than
-	// composed from a zero value. A zero Config marshals its nested consumer and
-	// context blocks as zeroes, and "the defaults are repaired afterwards" is a
-	// property of the current NewComponent rather than a contract — inheriting
-	// them makes the overrides below the complete list of decisions this engine
-	// is making about the loop.
-	loop := agenticloop.DefaultConfig()
-	// The component-wide ceiling. Each persona's spec narrows to
-	// min(spec, ceiling), so this can only be a bound and never a widening — and
-	// it is DERIVED from the specs rather than picked, so a persona asking for
-	// more than the engine allows is impossible rather than merely unlikely.
-	loop.MaxIterations = maxPersonaIterations()
-	loop.Timeout = maxPersonaTimeout().String()
-	loop.StreamName = stage.TaskStream
-	// Disabled, and stated rather than defaulted. Upstream's approval
-	// re-dispatch rebuilds a bare tool call and propagates only a closed
-	// framework metadata list, so a persona tool routed through it loses the
-	// engine-injected identity — and identity is exactly what this engine refuses
-	// to ask the model for. Every exit would fail as an internal error. Writing
-	// the mode here puts the reason next to the switch.
-	loop.ToolCallGovernance = agenticloop.ToolCallGovernanceConfig{
-		Mode: agenticloop.ToolCallGovernanceModeDisabled,
-	}
-	// Left false deliberately. The synthesised terminal is a `decide` call, and
-	// this engine does not register that tool: a synthesised exit would dispatch
-	// a tool nothing answers to. The engine's answer to a persona that never
-	// exits is the iteration cap plus the loop-failure watcher, which ends the
-	// turn with a closed reason instead of inventing one.
-	loop.SynthesizeTerminalOnCompletion = false
-
-	cfg, err := json.Marshal(loop)
-	if err != nil {
-		return fmt.Errorf("encode the agentic-loop configuration: %w", err)
-	}
-	return e.startComponent(ctx, "agentic-loop", agenticloop.NewComponent, cfg)
+	return e.startManager(ctx, "agentic", e.agenticManager)
 }
 
 // maxPersonaIterations is the widest budget any persona declares.
@@ -838,19 +710,10 @@ func maxPersonaTimeout() time.Duration {
 // missing rules file would present as a game that accepts actions and never
 // adjudicates them.
 func (e *Engine) startRules(ctx context.Context) error {
-	raw, err := e.ruleProcessorConfig()
-	if err != nil {
-		return fmt.Errorf("build the rule processor configuration: %w", err)
-	}
-	// Cleared BEFORE Start, so the readback that follows asks "did the processor
-	// write a status after this boot deleted the old one?" — a question whose
-	// answer no earlier process and no clock can supply. Comparing timestamps
-	// instead reads correctly and rests on wall clocks either side of a restart;
-	// see checkRuleProcessorStarted.
-	if err := e.clearRuleProcessorStatus(ctx); err != nil {
+	if err := e.captureRuleStatusBaseline(ctx); err != nil {
 		return err
 	}
-	return e.startComponent(ctx, "rule-processor", rule.CreateRuleProcessor, raw)
+	return e.startManager(ctx, "rule", e.ruleManager)
 }
 
 func (e *Engine) startKnowledge(ctx context.Context) error {
@@ -966,7 +829,7 @@ func (e *Engine) reconcileStrandedTurns(ctx context.Context) error {
 
 	report, err := reconciler.Reconcile(ctx)
 	e.log().Info("stranded-turn pass complete",
-		"scanned", report.Scanned, "unborn", report.Unborn, "resolved", report.Resolved,
+		"scanned", report.Scanned, "resolved", report.Resolved,
 		"queued", report.Queued, "retriggered", report.StageRetriggered,
 		"unadvanceable", report.Unadvanceable, "abandoned", report.Abandoned)
 	if err != nil {

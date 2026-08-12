@@ -1,9 +1,14 @@
+//go:build e2e
+
 package e2e_test
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -18,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
@@ -58,8 +64,6 @@ const (
 	starterLantern   = "lantern"
 	starterRations   = "rations"
 	testCredential   = "e2e-test-credential"
-	playerLocalID    = "one"
-	templateID       = "starter"
 )
 
 // turnBudget bounds how long one turn may take end to end.
@@ -85,21 +89,12 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "register semmachina predicates: %v\n", err)
 		os.Exit(1)
 	}
-	client, err := startBroker()
 	broker.mu.Lock()
-	broker.client, broker.err = client, err
+	broker.err = errors.New("no end-to-end acceptance has started its broker")
 	broker.mu.Unlock()
-	if err != nil && testinfra.Skipped() {
-		fmt.Fprintf(os.Stderr,
-			"\n================================================================\n"+
-				" END-TO-END TURN TESTS SKIPPED BY %s\n reason: %v\n"+
-				" NO TURN WAS RUN IN THIS RUN.\n"+
-				"================================================================\n\n",
-			testinfra.SkipEnv, err)
-	}
 	code := m.Run()
 	broker.mu.Lock()
-	client = broker.client
+	client := broker.client
 	broker.client = nil
 	broker.mu.Unlock()
 	if client != nil {
@@ -125,7 +120,10 @@ func startBroker() (*natsclient.TestClient, error) {
 	}
 	// A bare broker. Every stream, bucket and consumer a turn needs is one the
 	// engine creates, which is part of what these tests are checking.
-	return natsclient.NewSharedTestClient(natsclient.WithJetStream())
+	return natsclient.NewSharedTestClient(
+		natsclient.WithJetStream(),
+		natsclient.WithNATSVersion("2.14.4"),
+	)
 }
 
 func requireBroker(t *testing.T) *natsclient.TestClient {
@@ -148,29 +146,34 @@ func requireBroker(t *testing.T) *natsclient.TestClient {
 }
 
 // replaceBrokerWithFresh gives a state-sensitive acceptance test a bare NATS
-// server while keeping the package's TestMain ownership model intact. It is
-// serial-only: no E2E test may call t.Parallel, and no world may be active while
-// the broker rotates. It deliberately does not register a test cleanup because
-// TestMain must terminate whichever client is current after later tests use it.
+// server. The first call starts the package's first broker lazily; later calls
+// replace the previous acceptance's broker. It is serial-only: no E2E test may
+// call t.Parallel, and no world may be active while the broker rotates. It
+// deliberately does not register a test cleanup because TestMain must terminate
+// whichever client is current after later tests use it.
 func replaceBrokerWithFresh(t *testing.T) {
 	t.Helper()
-	current := requireBroker(t)
-
 	broker.mu.Lock()
-	defer broker.mu.Unlock()
-	if broker.client != current {
-		t.Fatal("replace the end-to-end NATS broker: current client changed during a serial-only rotation")
-	}
-	if err := current.Terminate(); err != nil {
-		t.Fatalf("replace the end-to-end NATS broker: terminate current client: %v", err)
-	}
+	current := broker.client
 	broker.client = nil
-	broker.err = fmt.Errorf("the previous end-to-end NATS broker was terminated for a clean acceptance boundary")
+	broker.err = errors.New("the previous end-to-end NATS broker is being replaced")
+	broker.mu.Unlock()
 
+	if current != nil {
+		if err := current.Terminate(); err != nil {
+			t.Fatalf("replace the end-to-end NATS broker: terminate current client: %v", err)
+		}
+	}
 	client, err := startBroker()
+	broker.mu.Lock()
 	broker.client, broker.err = client, err
+	broker.mu.Unlock()
 	if err != nil {
-		t.Fatalf("replace the end-to-end NATS broker: start fresh bare broker: %v", err)
+		// Keep the module's one exact real-infrastructure skip site in
+		// requireBroker. It reports the stored start error as either an explicit
+		// developer opt-out or a hard infrastructure failure.
+		_ = requireBroker(t)
+		return
 	}
 	if client == nil {
 		t.Fatal("replace the end-to-end NATS broker: startBroker returned a nil client without an error")
@@ -829,7 +832,7 @@ func awaitTerminal(t *testing.T, turnEntityID string) vocabulary.TurnPhase {
 	last := vocabulary.TurnPhase("")
 	for {
 		state, err := graphStore(t).GetEntity(t.Context(), turnEntityID)
-		if err == nil && !state.IsStub() {
+		if err == nil && state != nil {
 			last = vocabulary.TurnPhase(stringObject(t, state, vocabulary.TurnPhaseCurrent))
 			if last == vocabulary.PhaseComplete || last == vocabulary.PhaseFailed {
 				return last
@@ -854,7 +857,7 @@ func awaitFact(t *testing.T, entityID string, predicate vocabulary.Predicate, bu
 	deadline := time.Now().Add(budget)
 	for {
 		state, err := graphStore(t).GetEntity(t.Context(), entityID)
-		if err == nil && !state.IsStub() {
+		if err == nil && state != nil {
 			if value := stringObject(t, state, predicate); value != "" {
 				return value
 			}
@@ -1213,20 +1216,93 @@ func awaitManifest(t *testing.T, turnID string) *payload.TurnManifest {
 
 // retrieval ------------------------------------------------------------------
 
-// contentStore opens this world's artifact store the way the engine opens it.
+// contentStore borrows this world's manager-owned logical objectstore facade.
+// Opening the physical bucket directly would create a backend whose instance
+// name is the bucket (E2E_*), which cannot resolve obj://objectstore references.
 func (w *world) contentStore(t *testing.T) *content.Store {
 	t.Helper()
-	backend, err := content.NewObjectStore(
-		t.Context(), requireBroker(t).Client, content.WithBucket(w.cfg.ContentBucket))
-	if err != nil {
-		t.Fatalf("open the content bucket: %v", err)
+	if w.engine == nil {
+		t.Fatal("borrow content store from a stopped engine")
 	}
-	t.Cleanup(func() { _ = backend.Close() })
-	store, err := content.NewStore(backend)
+	store, err := w.engine.BorrowContentStore()
 	if err != nil {
-		t.Fatalf("content.NewStore: %v", err)
+		t.Fatalf("borrow the managed content store: %v", err)
 	}
 	return store
+}
+
+// requireTrajectoryEvidenceStored proves the production agentic loop resolved
+// its logical objectstore provider to this world's physical content bucket.
+// The immutable KV fact is the public audit record; reading its referenced bytes
+// from the configured bucket closes both halves of the storage contract.
+func (w *world) requireTrajectoryEvidenceStored(t *testing.T) {
+	t.Helper()
+	js := jetStream(t)
+	facts, err := js.KeyValue(t.Context(), agentic.TrajectoryBucketName)
+	if err != nil {
+		t.Fatalf("open %s: %v", agentic.TrajectoryBucketName, err)
+	}
+	objects, err := js.ObjectStore(t.Context(), w.cfg.ContentBucket)
+	if err != nil {
+		t.Fatalf("open trajectory evidence bucket %s: %v", w.cfg.ContentBucket, err)
+	}
+
+	deadline := time.Now().Add(30 * time.Second)
+	var lastErr error
+	for {
+		keys, keysErr := facts.Keys(t.Context())
+		if keysErr != nil {
+			lastErr = keysErr
+		} else {
+			stored := 0
+			for _, key := range keys {
+				entry, getErr := facts.Get(t.Context(), key)
+				if getErr != nil {
+					lastErr = getErr
+					continue
+				}
+				var fact agentic.TrajectoryFactV1
+				if decodeErr := json.Unmarshal(entry.Value(), &fact); decodeErr != nil {
+					t.Fatalf("decode trajectory fact %s: %v", key, decodeErr)
+				}
+				if fact.EvidenceCapture == agentic.TrajectoryEvidenceMissing {
+					t.Fatalf("trajectory fact %s reports missing evidence (%s)", key, fact.EvidenceFailure)
+				}
+				if fact.EvidenceCapture != agentic.TrajectoryEvidenceStored {
+					continue
+				}
+				if fact.Evidence == nil || fact.Evidence.StorageInstance != content.ManagedStorageInstance {
+					t.Fatalf("trajectory fact %s resolved storage as %+v, want logical instance %q",
+						key, fact.Evidence, content.ManagedStorageInstance)
+				}
+				body, readErr := objects.GetBytes(t.Context(), fact.Evidence.Key)
+				if readErr != nil {
+					t.Fatalf("read trajectory evidence %s from physical bucket %s: %v",
+						fact.Evidence.Key, w.cfg.ContentBucket, readErr)
+				}
+				digest := sha256.Sum256(body)
+				if got := hex.EncodeToString(digest[:]); got != fact.EvidenceDigest {
+					t.Fatalf("trajectory evidence %s digest = %s, want %s", fact.Evidence.Key, got, fact.EvidenceDigest)
+				}
+				if uint64(len(body)) != fact.EvidenceSize {
+					t.Fatalf("trajectory evidence %s size = %d, want %d", fact.Evidence.Key, len(body), fact.EvidenceSize)
+				}
+				stored++
+			}
+			if stored > 0 {
+				return
+			}
+			lastErr = errors.New("no trajectory fact carries stored evidence")
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("trajectory evidence did not become readable within 30s: %v", lastErr)
+		}
+		select {
+		case <-t.Context().Done():
+			t.Fatalf("test context ended while awaiting trajectory evidence: %v", t.Context().Err())
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 // replayReader builds the campaign archive's replay reader over this world.

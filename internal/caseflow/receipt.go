@@ -10,6 +10,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 
 	"github.com/c360studio/semmachina/internal/graphio"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/vocabulary"
 )
 
@@ -20,7 +21,7 @@ const ReceiptSource = "caseflow-receipt"
 // update containing all four receipt predicates.
 type Store interface {
 	GetEntity(context.Context, string) (*graph.EntityState, error)
-	MergeTriples(context.Context, string, []message.Triple, ...graphio.MergeOption) (*graph.EntityState, error)
+	Reconcile(context.Context, projectioncontract.Target, string, []message.Triple) (*graph.EntityState, error)
 }
 
 var _ Store = (*graphio.Store)(nil)
@@ -120,7 +121,7 @@ func (r *Recorder) Record(ctx context.Context, request TransitionRequest) (Recei
 		receiptTriple(request.CaseEntityID, vocabulary.CaseLifecycleFromPhase, string(from), at),
 		receiptTriple(request.CaseEntityID, vocabulary.CaseLifecycleToPhase, string(to), at),
 	}
-	if _, err := r.store.MergeTriples(ctx, request.CaseEntityID, triples); err != nil {
+	if _, err := r.store.Reconcile(ctx, projectioncontract.CaseLifecycleReceipt, request.CaseEntityID, triples); err != nil {
 		return ReceiptOutcome{}, fmt.Errorf("record case event %s on %s: %w",
 			request.EventID, request.CaseEntityID, err)
 	}

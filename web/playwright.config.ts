@@ -5,9 +5,18 @@ import {
 	REAL_BROWSER_TEST_IGNORE
 } from './tests/bellweather-surface-contract.mjs';
 
+const runningInCI = Boolean(process.env.CI);
+
 export default defineConfig({
+	outputDir: 'test-results',
+	preserveOutput: 'failures-only',
+	reporter: runningInCI
+		? [['line'], ['html', { open: 'never', outputFolder: 'playwright-report' }]]
+		: 'line',
 	use: {
-		ignoreHTTPSErrors: true
+		ignoreHTTPSErrors: true,
+		screenshot: runningInCI ? 'only-on-failure' : 'off',
+		trace: runningInCI ? 'retain-on-failure' : 'off'
 	},
 	webServer: [
 		{ command: 'node tests/player-upstream.mjs', url: 'http://127.0.0.1:4180/health' },

@@ -35,13 +35,6 @@ func Compose(turnID string, state *graph.EntityState, campaignID string) (*paylo
 	if state == nil {
 		return nil, fmt.Errorf("cannot archive turn %s: the graph returned nothing", turnID)
 	}
-	// A referential stub is queryable and carries none of the entity's own
-	// facts, so every predicate below would read as absent and the manifest
-	// would archive an empty turn as if that were the record.
-	if state.IsStub() {
-		return nil, fmt.Errorf(
-			"turn entity %s is a referential stub: it holds no facts, so there is nothing to archive", state.ID)
-	}
 	// turn_id and the entity id are one turn wearing two shapes. The writer
 	// reads the entity BY the id the resolved event named, so a mismatch here
 	// means the graph answered with a different turn than the one asked about.

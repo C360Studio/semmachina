@@ -15,6 +15,7 @@ import (
 	"github.com/c360studio/semmachina/internal/content"
 	"github.com/c360studio/semmachina/internal/graphio"
 	"github.com/c360studio/semmachina/internal/payload"
+	"github.com/c360studio/semmachina/internal/projectioncontract"
 	"github.com/c360studio/semmachina/internal/resume"
 	"github.com/c360studio/semmachina/internal/rulepack"
 	"github.com/c360studio/semmachina/internal/turn"
@@ -89,9 +90,12 @@ func (f *fakeTurns) EntitiesWithPrefix(
 	return page, nil
 }
 
-func (f *fakeTurns) MergeTriples(
-	_ context.Context, entityID string, triples []message.Triple, _ ...graphio.MergeOption,
+func (f *fakeTurns) Reconcile(
+	_ context.Context, target projectioncontract.Target, entityID string, triples []message.Triple,
 ) (*graph.EntityState, error) {
+	if target != projectioncontract.TurnResume {
+		return nil, errors.New("unexpected turn resume projection target")
+	}
 	if f.mergeFn != nil {
 		if err := f.mergeFn(entityID); err != nil {
 			return nil, err
@@ -653,21 +657,18 @@ func TestReconcile_EndsAnUnadvanceableTurnOnceItsBudgetIsGone(t *testing.T) {
 	}
 }
 
-// A turn that has ended owes nobody a stage, and a stub is not yet a turn.
-func TestReconcile_LeavesResolvedTurnsAndUnbornStubsAlone(t *testing.T) {
-	stub := graph.EntityState{ID: turnEntityID("turn-act-stub"), MessageType: graph.StubMessageType}
+func TestReconcile_LeavesResolvedTurnsAlone(t *testing.T) {
 	h := newHarness(t, []graph.EntityState{
 		parked("turn-act-done", vocabulary.PhaseComplete),
 		parked("turn-act-dead", vocabulary.PhaseFailed),
-		stub,
 	})
 
 	report, err := h.pass.Reconcile(t.Context())
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if report.Resolved != 2 || report.Unborn != 1 || report.Scanned != 3 {
-		t.Fatalf("report = %+v; want 2 resolved, 1 unborn, 3 scanned", report)
+	if report.Resolved != 2 || report.Scanned != 2 {
+		t.Fatalf("report = %+v; want 2 resolved and 2 scanned", report)
 	}
 	if len(h.publisher.sent) != 0 || len(h.turns.merges) != 0 || len(h.failer.failures) != 0 {
 		t.Fatal("the pass acted on a turn that owed nothing")

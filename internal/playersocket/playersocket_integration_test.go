@@ -1,3 +1,5 @@
+//go:build integration
+
 package playersocket_test
 
 import (
@@ -5,11 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/nats-io/nats.go/jetstream"
 
@@ -22,6 +24,7 @@ import (
 	"github.com/c360studio/semmachina/internal/testinfra"
 	"github.com/c360studio/semmachina/internal/turn"
 	"github.com/c360studio/semmachina/internal/vocabulary"
+	"github.com/c360studio/semmachina/internal/world"
 )
 
 // The two claims this transport makes that only real infrastructure can settle:
@@ -192,23 +195,16 @@ func (l *liveSocket) bornPlayers(t *testing.T) {
 	t.Helper()
 	at := time.Now().UTC()
 	for _, id := range []string{l.playerOne, l.playerTwo} {
-		if _, err := l.graph.CreateEntity(t.Context(), &graph.EntityState{
-			ID: id,
-			MessageType: message.Type{
-				Domain: payload.Domain, Category: payload.CategoryWorldEntity, Version: payload.SchemaVersion,
-			},
-			Version:   1,
-			UpdatedAt: at,
-			Triples: []message.Triple{{
-				Subject:    id,
-				Predicate:  vocabulary.WorldEntityKind.String(),
-				Object:     string(vocabulary.EntityKindPlayer),
-				Source:     "integration-world-import",
-				Timestamp:  at,
-				Confidence: 1.0,
-			}},
-		}); err != nil {
-			t.Fatalf("create player %s: %v", id, err)
+		parts := strings.Split(id, ".")
+		entity := &payload.WorldEntity{ID: id, Kind: vocabulary.EntityKindPlayer,
+			Template: payload.TemplateRef{ID: parts[3], Version: "test", LocalID: parts[5]},
+			Facts:    []payload.WorldFact{{Predicate: vocabulary.WorldEntityName, Object: parts[5]}}, RecordedAt: at}
+		wire, err := json.Marshal(message.NewBaseMessage(entity.Schema(), entity, "integration-world-import", message.WithTime(at)))
+		if err != nil {
+			t.Fatalf("encode player %s: %v", id, err)
+		}
+		if _, err := l.harness.Client.PublishToStreamWithAck(t.Context(), world.DefaultImportSubject, wire); err != nil {
+			t.Fatalf("publish player %s: %v", id, err)
 		}
 		l.harness.AwaitEntity(t, id)
 	}

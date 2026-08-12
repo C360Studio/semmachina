@@ -236,7 +236,11 @@ async function handleGraphQL(request, response) {
 			}
 		]);
 		json(response, 200, {
-			data: { entitiesByPrefix: [green, location(MAZE_ID, 'Bellweather Maze')] }
+			data: {
+				entitiesByPrefix: {
+					entities: [green, location(MAZE_ID, 'Bellweather Maze')]
+				}
+			}
 		});
 		return;
 	}
