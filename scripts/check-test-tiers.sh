@@ -67,6 +67,16 @@ is_classified() {
 	awk -F '\t' -v file="$1" '$2 == file { found = 1 } END { exit !found }' "$entries"
 }
 
+# test_files_matching prints test files whose contents match one extended
+# regular expression. find supplies the recursive file selection and batches
+# paths into portable grep invocations, avoiding a dependency on ripgrep being
+# installed on minimal CI images.
+test_files_matching() {
+	local pattern=$1
+	find "$root" -path "$root/.git" -prune -o -type f -name '*_test.go' \
+		-exec grep -E -l "$pattern" {} +
+}
+
 check_manifest() {
 	read_manifest
 
@@ -134,15 +144,15 @@ check_manifest() {
 		if ! is_classified "$rel"; then
 			error "Docker-starting test file is omitted from the manifest: $rel"
 		fi
-	done < <(rg -l --glob '*_test.go' "$docker_pattern" "$root" || true)
+	done < <(test_files_matching "$docker_pattern" || true)
 
 	while IFS= read -r path; do
 		[[ -z "$path" ]] && continue
 		rel=${path#"$root"/}
-		if ! is_classified "$rel" && rg -q "$docker_pattern|startBroker[[:space:]]*\(" "$path"; then
+		if ! is_classified "$rel" && grep -E -q "$docker_pattern|startBroker[[:space:]]*\(" "$path"; then
 			error "untagged TestMain can start Docker: $rel"
 		fi
-	done < <(rg -l --glob '*_test.go' 'func TestMain[[:space:]]*\(' "$root" || true)
+	done < <(test_files_matching 'func[[:space:]]+TestMain[[:space:]]*\(' || true)
 
 	if [[ -s "$errors" ]]; then
 		LC_ALL=C sort -u "$errors" >&2

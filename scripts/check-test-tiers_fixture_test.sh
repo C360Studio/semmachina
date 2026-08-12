@@ -6,6 +6,20 @@ checker=$script_dir/check-test-tiers.sh
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/semmachina-test-tier-fixtures.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
+# Exercise the checker with only its declared portable POSIX-ish toolchain.
+# Constructing this PATH explicitly proves the fixtures do not accidentally
+# inherit a developer-installed rg (or any other undeclared scanner).
+portable_bin=$tmp/portable-bin
+mkdir -p "$portable_bin"
+for tool in bash awk cut sort uniq sed find grep wc tr mktemp rm dirname; do
+	target=$(command -v "$tool")
+	ln -s "$target" "$portable_bin/$tool"
+done
+if PATH=$portable_bin command -v rg >/dev/null 2>&1; then
+	printf 'FAIL: portable checker PATH unexpectedly contains rg\n' >&2
+	exit 1
+fi
+
 make_fixture() {
 	local root=$1
 	mkdir -p "$root/internal/focused" "$root/internal/pipeline" "$root/internal/boot" "$root/internal/e2e" "$root/scripts"
@@ -20,7 +34,8 @@ make_fixture() {
 run_checker() {
 	local root=$1
 	shift
-	TEST_TIERS_ROOT=$root TEST_TIERS_MANIFEST=$root/scripts/test-tiers.tsv bash "$checker" "$@"
+	PATH=$portable_bin TEST_TIERS_ROOT=$root TEST_TIERS_MANIFEST=$root/scripts/test-tiers.tsv \
+		"$portable_bin/bash" "$checker" "$@"
 }
 
 expect_failure() {
@@ -91,4 +106,4 @@ make_fixture "$testmain"
 printf 'package focused_test\n\nfunc TestMain(m *testing.M) { startBroker() }\n' >"$testmain/internal/focused/main_test.go"
 expect_failure testmain 'untagged TestMain can start Docker' "$testmain"
 
-printf 'OK: test-tier validator fixtures exercise every omission and exactness guard\n'
+printf 'OK: test-tier validator fixtures exercise every omission and exactness guard without rg\n'
